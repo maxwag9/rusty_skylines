@@ -92,20 +92,23 @@
 
 use crate::data::Settings;
 use crate::helpers::positions::{LocalPos, WorldPos};
+use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::resources::Time;
 use crate::ui::variables::Variables;
-use crate::world::buildings::buildings::Buildings;
-use crate::world::buildings::zoning::{DistrictId, ParkingSpot, TilePos, ZoningStorage};
+use crate::world::buildings::buildings::{Building, Buildings};
+use crate::world::buildings::zoning::{DistrictId, Lot, LotEntrance, LotLayout, ParkingSpot, ParkingSpotLotInfo, TilePos, ZoningStorage};
 use crate::world::cars::car_player::sanitize_quat;
 use crate::world::cars::car_render::CarChange;
 use crate::world::cars::car_simulation::{CarTrajectory, CarTrajectoryPoint};
 use crate::world::cars::car_structs::{Car, CarId, CarMode, CarStorage, SimTime};
-use crate::world::cars::partitions::PartitionId;
+use crate::world::cars::parking::ParkingStorage;
+use crate::world::cars::partitions::{Destination, PartitionId};
 use crate::world::roads::road_structs::{LaneId, NodeId, NodeLaneId, SegmentId};
-use crate::world::roads::roads::{Arm, EMA, LaneRef, Node, RoadStorage};
-use glam::{Quat, Vec3, bool};
+use crate::world::roads::roads::{Arm, LaneRef, Node, RoadStorage, Segment, EMA};
+use glam::{bool, Quat, Vec3};
 use rand::distr::weighted::WeightedIndex;
 use rand::rngs::ThreadRng;
+use rand::RngExt;
 use rand_distr::Distribution;
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
@@ -174,29 +177,49 @@ pub fn make_new_trajectory(
     road_storage: &RoadStorage,
     buildings: &Buildings,
     zoning: &ZoningStorage,
-    sf_options: &SignFindingOptions,
-) -> Result<
-    (
-        Option<CarSignfindingTrajectory>,
-        Option<CarTrajectory>,
-        Option<RoadPathCallback>,
-    ),
-    MakeNewTrajectoryError,
-> {
+    parking_storage: &ParkingStorage,
+    sf_options: &SignFindingOptions
+) -> Result<(Option<CarSignfindingTrajectory>, Option<CarTrajectory>, TrajectoryCallback), MakeNewTrajectoryError> {
     let origin = WorldPos::new(car.pos.chunk, LocalPos::zero());
     let now = time.sim_time();
 
     let Some(building) = buildings.storage.get(
-        car.destination_addr
-            .as_ref()
-            .and_then(|addr| addr.destination.as_building_id()),
+        car.mode.destination().and_then(|destination| destination.as_building_id())
     ) else {
-        return Err(MakeNewTrajectoryError::Parking);
+        return Err(MakeNewTrajectoryError::CarModeIsParked);
     };
     let Some(lot) = zoning.get_lot(building.lot_id) else {
-        return Err(MakeNewTrajectoryError::Parking);
+        return Err(MakeNewTrajectoryError::LotDoesntExist);
+    };
+    let mut callback = TrajectoryCallback {
+        is_last_turn: false,
+        car_changes: vec![]
     };
     let entrance = lot.entrance;
+    let mut car_mode = car.mode.clone();
+    if let Some(lot_layout) = lot.layout.as_ref() {
+        let closest = lot_layout.driveway_entrances.iter()
+            .map(|entrance| {
+                let distance_squared = entrance.pos.distance_squared(car.pos);
+                (distance_squared, entrance)
+            })
+            .min_by(|(a, _), (b, _)| a.total_cmp(b));
+
+        if let Some((distance_squared, driveway_entrance)) = closest {
+            if distance_squared < 20.0 * 20.0 {
+                let car_segment = car.current_lane
+                    .and_then(|l| l.as_lane())
+                    .map(|(lane_id, _)| road_storage.segment_of_lane(lane_id))
+                    .map(|seg_id| road_storage.segment(seg_id));
+                let parking_spot = get_parking_spots(parking_storage, lot.layout.as_ref(), car_segment);
+
+                if let Some(parking_spot) = parking_spot {
+                    car_mode = CarMode::Driving(Destination::ParkingSpot(*driveway_entrance, parking_spot.id, building.id));
+                    callback.car_changes.push(CarChange::CarMode(car_mode.clone()));
+                }
+            }
+        }
+    }
     // let within_parking_range = car.pos.distance_squared(entrance.pos) < 50.0 * 50.0;
     //
     //
@@ -214,82 +237,91 @@ pub fn make_new_trajectory(
     //     }
     // };
 
-    match &car.mode {
-        CarMode::Driving => {
-            // Signfinding Mode, normal driving
+    match car_mode {
+        CarMode::Driving(destination) => {
+            // Car does any form of driving.
+            match destination {
+                Destination::Building(district_id, partition_id, segment_id, building_id) => {
+                    // Signfinding Mode, normal driving
+                    let mut owned_sf_traj: Option<CarSignfindingTrajectory> = None;
+                    let sf_traj: &CarSignfindingTrajectory = if let Some(t) = &car.signfinding_trajectory {
+                        t
+                    } else {
+                        let rng = &mut ThreadRng::default();
+                        let t = make_new_signfinding_traj(
+                            car,
+                            road_storage,
+                            buildings,
+                            zoning,
+                            rng,
+                            sf_options,
+                        ).map_err(MakeNewTrajectoryError::Signfinding)?;
+                        owned_sf_traj = Some(t);
+                        owned_sf_traj.as_ref().unwrap()
+                    };
 
-            let mut owned_sf_traj: Option<CarSignfindingTrajectory> = None;
-            let sf_traj: &CarSignfindingTrajectory = if let Some(t) = &car.signfinding_trajectory {
-                t
-            } else {
-                let rng = &mut ThreadRng::default();
-                let t = make_new_signfinding_traj(
-                    car,
-                    road_storage,
-                    buildings,
-                    zoning,
-                    rng,
-                    sf_options,
-                )
-                .map_err(MakeNewTrajectoryError::Signfinding)?;
-                owned_sf_traj = Some(t);
-                owned_sf_traj.as_ref().unwrap()
-            };
+                    let path = build_road_path(car, sf_traj, road_storage, buildings, zoning, &mut callback)
+                        .map_err(MakeNewTrajectoryError::RoadPath)?;
 
-            let path = build_road_path(car, sf_traj, road_storage, buildings, zoning)
-                .map_err(MakeNewTrajectoryError::RoadPath)?;
+                    // if path.pts.len() < 2 {
+                    //     return Err(MakeNewTrajectoryError::RoadPath(
+                    //         RoadPathBuildError::DegeneratePath {
+                    //             reason: "road path had fewer than 2 points",
+                    //         },
+                    //     ));
+                    // }
 
-            // if path.pts.len() < 2 {
-            //     return Err(MakeNewTrajectoryError::RoadPath(
-            //         RoadPathBuildError::DegeneratePath {
-            //             reason: "road path had fewer than 2 points",
-            //         },
-            //     ));
-            // }
+                    let front = snapshot_front_car(car, car_storage, road_storage);
 
-            let front = snapshot_front_car(car, car_storage, road_storage);
+                    let traj = simulate_path_follow(car, &path, front.as_ref(), origin, now, sf_options, &callback);
+                    Ok((owned_sf_traj, Some(traj), callback))
+                }
+                Destination::ParkingSpot(entrance, parking_spot_id, building_id) => {
+                    let gizmo = &mut Gizmo::new_empty();
+                    let Some(parking_spot) = parking_storage.get(parking_spot_id) else { return Err(MakeNewTrajectoryError::ParkingSpotDoesntExist) };
+                    let parking_points = make_path_to_parking_spot(road_storage, zoning, building, buildings, &parking_spot, car, sf_options, &mut callback, gizmo).map_err(|err| MakeNewTrajectoryError::ParkingPath(err))?;
 
-            let traj = simulate_path_follow(car, &path, front.as_ref(), origin, now, sf_options);
+                    let traj = simulate_point_path_follow(car, parking_points.as_slice(), origin, now, sf_options);
 
-            Ok((owned_sf_traj, Some(traj), path.callback))
+                    Ok((None, Some(traj), callback))
+                }
+            }
         }
-        CarMode::Parking { path } => {
-            // let mut callback = RoadPathCallback {
-            //     last_turn: None,
-            //     last_lane_id: None,
-            //     is_last_turn: false,
-            //     car_changes: vec![],
+
+
+        // let Some(idx) = path
+        //     .iter()
+        //     .enumerate()
+        //     .min_by(|(_, a), (_, b)| {
+        //         let da = a.distance_squared(car.pos);
+        //         let db = b.distance_squared(car.pos);
+        //         da.partial_cmp(&db).unwrap()
+        //     })
+        //     .map(|(idx, _)| idx)
+        // else {
+        //     return Err(MakeNewTrajectoryError::ParkingDone);
             // };
+        //
+        // let parking_points = &path[idx + 1..];
+        //
+        // let traj = simulate_point_path_follow(car, parking_points, origin, now, sf_options);
 
-            let Some(idx) = path
-                .iter()
-                .enumerate()
-                .min_by(|(_, a), (_, b)| {
-                    let da = a.distance_squared(car.pos);
-                    let db = b.distance_squared(car.pos);
-                    da.partial_cmp(&db).unwrap()
-                })
-                .map(|(idx, _)| idx)
-            else {
-                return Err(MakeNewTrajectoryError::ParkingDone);
-            };
-
-            let parking_points = &path[idx + 1..];
-
-            let traj = simulate_point_path_follow(car, parking_points, origin, now, sf_options);
-
-            Ok((None, Some(traj), None))
-        }
-        CarMode::Parked => Err(MakeNewTrajectoryError::Parked),
+        CarMode::Parked => Err(MakeNewTrajectoryError::CarModeIsParked),
     }
 }
+
 pub fn make_path_to_parking_spot(
     road_storage: &RoadStorage,
     zoning_storage: &ZoningStorage,
+    building: &Building,
+    buildings: &Buildings,
     parking_spot: &ParkingSpot,
     car: &Car,
+    sf_options: &SignFindingOptions,
+    callback: &mut TrajectoryCallback,
+    gizmo: &mut Gizmo
 ) -> Result<Vec<WorldPos>, ParkingPathError> {
-    match parking_spot.lot_info.as_ref() {
+    let path = match parking_spot.lot_info.as_ref() {
         Some(lot_info) => {
             // Parking on a lot (building)
             let Some(lot) = zoning_storage.get_lot(lot_info.lot_id) else {
@@ -298,76 +330,221 @@ pub fn make_path_to_parking_spot(
             let Some(layout) = lot.layout.as_ref() else {
                 return Err(ParkingPathError::LotLayoutDoesntExist);
             };
-            let Some(entrance) = layout.driveway_entrances.first() else {
+            let Some(driveway_entrance) = layout.driveway_entrances.first() else {
                 return Err(ParkingPathError::NoDriveWayEntrance);
             };
-            let start = layout.get_tilepos_for_pos(entrance.pos, lot.entrance);
-            let parking_tiles = lot_info.tiles; // [TilePos; 8]
-
-            let mut queue = VecDeque::new();
-            let mut came_from: HashMap<TilePos, TilePos> = HashMap::new();
-
-            queue.push_back(start);
-            came_from.insert(start, start);
-
-            let mut goal = None;
-
-            while let Some(current) = queue.pop_front() {
-                if parking_tiles.contains(&current) {
-                    goal = Some(current);
-                    break;
-                }
-
-                for neighbor in current.get_neighbors_plus() {
-                    if came_from.contains_key(&neighbor) {
-                        continue;
+            let car_in_lot = car.pos.in_polygon(lot.bounds.as_slice());
+            if car_in_lot || car.pos.distance_squared(driveway_entrance.pos) < 2.0 { // If the car is inside the lot already, or within 2 meters of the driveway entrance, then do the car-to-final-tile parking thingie!
+                // Do the car-to-final-tile parking
+                car_to_final_tile_parking(lot, gizmo, sf_options, layout, lot_info, driveway_entrance)
+            } else {
+                // Car is not at the driveway yet, and not in the lot, get him there!
+                let car_lane_ref = car.current_lane.or_else(|| road_storage.lane_ref_closest_to_pos(car.pos));
+                let Some(car_lane_ref) = car_lane_ref else {
+                    return Err(ParkingPathError::NoCurrentCarLaneAndNoLaneIn3x3Chunks)
+                };
+                let (car_lane_id, car_poly_idx) = match car_lane_ref {
+                    LaneRef::Lane(lane_id, poly_idx) => {
+                        (lane_id, poly_idx)
                     }
+                    LaneRef::NodeLane(node_id, nodelane_id, _) => {
+                        // if let Some(node) = road_storage.node_safe(node_id) {
+                        //     if let Some(nodelane) = node.node_lane(nodelane_id) {
+                        //         nodelane.
+                        //     }
+                        // }
+                        return Err(ParkingPathError::DespawnTheCar)
+                    }
+                };
 
-                    let Some(tile) = layout.tiles.get(&neighbor) else {
-                        continue;
+                let Some(car_lane) = road_storage.lane_safe(car_lane_id) else { return Err(ParkingPathError::LaneIdDoesntExistInStorage) };
+                let (closest_driveway_point, closest_distance_driveway_to_lane, tangent, driveway_poly_idx) = car_lane.geometry().closest_point_to(driveway_entrance.pos);
+                if driveway_poly_idx + 4 < car_poly_idx { // If car is past the drive way point...
+                    let Some(partition_id) = buildings.storage.get_partition_of_building(building.id) else {
+                        return Err(ParkingPathError::DespawnTheCar)
                     };
 
-                    // if !tile.get_tile_type().is_drivable() {
-                    //     continue;
-                    // }
+                    let destination = Destination::Building(
+                        lot.district_id,
+                        partition_id,
+                        lot.segment_id,
+                        building.id,
+                    );
+                    callback.car_changes.push(CarChange::CarMode(CarMode::Driving(destination)));
+                    return Err(ParkingPathError::CarDrovePastDriveWay)
+                };
+                let Some(points_car_to_closest_driveway_point) = car_lane.polyline().get((car_poly_idx as usize)..(driveway_poly_idx as usize)).clone() else { return Err(ParkingPathError::InvalidCarToDriveWayPoints) };
 
-                    came_from.insert(neighbor, current);
-                    queue.push_back(neighbor);
-                }
+                //let middle_point = driveway_entrance.pos.add_vec3(driveway_entrance.dir.as_vec3()*-5.0);
+                let mut path = vec![];
+                path.extend(points_car_to_closest_driveway_point);
+                path.push(driveway_entrance.pos);
+                gizmo.polyline(
+                    path.as_slice(),
+                    [0.2, 0.0, 0.0, 1.0], // OMG such a fucking idiot! I set the Alpha to 0.0, accidentally! And then wondered why the crap wasn't rendering! I even set the thickness to 05.05m!
+                    3.0,
+                    false,
+                    0.05,
+                    sf_options.physical_traj_duration,
+                );
+
+                // WTF am I doing
+                //println!("This actually happens"); I know!!!
+                Ok(path)
             }
-
-            let Some(goal) = goal else {
-                return Err(ParkingPathError::NoPath);
-            };
-
-            // Reconstruct path
-            let mut tile_path = Vec::new();
-            let mut current = goal;
-
-            while current != start {
-                tile_path.push(current);
-                current = came_from[&current];
-            }
-
-            tile_path.push(start);
-            if tile_path.len() < 2 {
-                return Err(ParkingPathError::ParkingSpotReached);
-            }
-            tile_path.reverse();
-
-            let path: Vec<WorldPos> = tile_path
-                .into_iter()
-                .map(|tile| layout.get_pos_for_tilepos(tile, lot.entrance))
-                .collect();
-
-            println!("Parking path length: {}", path.len());
-            Ok(path)
         }
         None => {
+            gizmo.arrow(
+                car.pos,
+                parking_spot.pos,
+                [1.0, 1.0, 0.0, 0.0],
+                false,
+                true,
+                0.05,
+                sf_options.physical_traj_duration,
+            );
             // Parking on road
             Ok(vec![car.pos, parking_spot.pos]) // TODO: One unified function for both lot parking and road parking that is called when the correct distance and orientation is reached to amke a proper parking maneuver, not teleport.
         }
+    };
+    if let Ok(path) = path.as_ref() {
+        //println!("Parking path length: {}", path.len());
     }
+
+    path
+}
+
+fn car_to_final_tile_parking(lot: &Lot, gizmo: &mut Gizmo, sf_options: &SignFindingOptions, layout: &LotLayout, lot_info: &ParkingSpotLotInfo, driveway_entrance: &LotEntrance) -> Result<Vec<WorldPos>, ParkingPathError> {
+    let dir = lot.entrance.dir.as_vec3();
+    // Draw the driveway entrance
+    gizmo.circle(
+        driveway_entrance.pos,
+        1.0,
+        [1.0, 1.0, 1.0, 1.0],
+        0.1,
+        sf_options.physical_traj_duration,
+    );
+
+    let start = layout.get_tilepos_for_pos(driveway_entrance.pos, lot.entrance);
+    let parking_tiles = lot_info.tiles; // [TilePos; 8]
+    for tile in parking_tiles {
+        let pos = layout.get_pos_for_tilepos(tile, lot.entrance);
+
+        gizmo.tile(
+            pos,
+            dir,
+            0.8, 0.8,
+            [1.0, 0.0, 0.0, 1.0],
+            0.05,
+            sf_options.physical_traj_duration,
+        );
+    }
+    let mut queue = VecDeque::new();
+    let mut came_from: HashMap<TilePos, TilePos> = HashMap::new();
+
+    queue.push_back(start);
+    came_from.insert(start, start);
+
+    // Start tile
+    gizmo.tile(
+        layout.get_pos_for_tilepos(start, lot.entrance),
+        dir,
+        0.8, 0.8,
+        [0.0, 1.0, 0.0, 1.0],
+        0.05,
+        sf_options.physical_traj_duration,
+    );
+
+    let mut goal = None;
+
+    while let Some(current) = queue.pop_front() {
+        let current_pos = layout.get_pos_for_tilepos(current, lot.entrance);
+        // Show BFS flood fill
+        gizmo.tile(
+            current_pos,
+            dir,
+            1.0,
+            1.0,
+            [0.0, 1.0, 1.0, 1.0],
+            0.05,
+            sf_options.physical_traj_duration,
+        );
+
+        if parking_tiles.contains(&current) {
+            goal = Some(current);
+            gizmo.circle(
+                current_pos,
+                1.5,
+                [1.0, 0.0, 1.0, 1.0],
+                0.1,
+                sf_options.physical_traj_duration,
+            );
+            break;
+        }
+
+        for neighbor in current.get_neighbors_plus() {
+            if came_from.contains_key(&neighbor) {
+                continue;
+            }
+
+            let Some(tile) = layout.tiles.get(&neighbor) else {
+                // Outside layout
+                gizmo.tile(
+                    layout.get_pos_for_tilepos(
+                        neighbor,
+                        lot.entrance,
+                    ),
+                    dir,
+                    0.8, 0.8,
+                    [0.3, 0.0, 0.0, 1.0],
+                    0.05,
+                    sf_options.physical_traj_duration,
+                );
+                continue;
+            };
+
+            // if !tile.get_tile_type().is_drivable() {
+            //     continue;
+            // }
+
+            came_from.insert(neighbor, current);
+            queue.push_back(neighbor);
+        }
+    }
+
+    let Some(goal) = goal else {
+        return Err(ParkingPathError::NoPath);
+    };
+
+    // Reconstruct path
+    let mut tile_path = Vec::new();
+    let mut current = goal;
+
+    while current != start {
+        tile_path.push(current);
+        current = came_from[&current];
+    }
+
+    tile_path.push(start);
+    if tile_path.len() < 2 {
+        return Err(ParkingPathError::PathAlreadyAtDestination);
+    }
+    tile_path.reverse();
+
+    let path: Vec<WorldPos> = tile_path
+        .into_iter()
+        .map(|tile| layout.get_pos_for_tilepos(tile, lot.entrance))
+        .collect();
+    // Draw final path
+    gizmo.polyline(
+        path.as_slice(),
+        [0.0, 0.0, 1.0, 1.0],
+        0.3,
+        false,
+        0.05,
+        sf_options.physical_traj_duration,
+    );
+    Ok(path)
 }
 #[derive(Debug)]
 pub enum ParkingPathError {
@@ -376,7 +553,11 @@ pub enum ParkingPathError {
     NoPath,
     DespawnTheCar,
     NoDriveWayEntrance,
-    ParkingSpotReached,
+    PathAlreadyAtDestination,
+    NoCurrentCarLaneAndNoLaneIn3x3Chunks,
+    LaneIdDoesntExistInStorage,
+    CarDrovePastDriveWay,
+    InvalidCarToDriveWayPoints,
 }
 pub fn make_new_signfinding_traj(
     car: &Car,
@@ -389,11 +570,11 @@ pub fn make_new_signfinding_traj(
     use SignfindingError::*;
     const MAX_TURNS: usize = 6; // Max turns per sf trajectory
     let mut turns: Vec<SFTurnIdentification> = Vec::with_capacity(MAX_TURNS);
-    let Some(address) = &car.destination_addr else {
-        return Err(NoAddress("Car destination Address is None".to_string()));
+    let Some(destination) = car.mode.destination() else {
+        return Err(NoAddress("Car destination is None".to_string()));
     };
     let (driveway_entrances, building_pos, building_segment_id) =
-        if let Some(building) = buildings.storage.get(address.destination.as_building_id()) {
+        if let Some(building) = buildings.storage.get(destination.as_building_id()) {
             if let Some(lot) = zoning.get_lot(building.lot_id) {
                 if let Some(layout) = lot.layout.as_ref() {
                     (&layout.driveway_entrances, building.pos, lot.segment_id)
@@ -431,7 +612,7 @@ pub fn make_new_signfinding_traj(
 
                 let next_node_id = if let Some(lane) = possible_lanes
                     .first()
-                    .and_then(|&lane_id| road_storage.lane_safe(lane_id))
+                    .map(|&lane_id| road_storage.lane(lane_id))
                 {
                     lane.to_node()
                 } else {
@@ -446,10 +627,7 @@ pub fn make_new_signfinding_traj(
                     };
                     match lane_ref {
                         LaneRef::Lane(lane_id, _) => {
-                            let Some(lane) = road_storage.lane_safe(lane_id) else {
-                                return Err(LaneDoesntExist("Last turn was SegmentLanes, trying to get next NodeId, last turn had NO possible lanes, which is concerning, OR the first lane in possible lanes doesn't exist in the road network. \
-                                Then tried getting the current lane of the car instead, matched the laneref and got LaneRef::Lane, where this error occurred, because the lane from the lane_id doesn't exist.".to_string()));
-                            };
+                            let lane = road_storage.lane(lane_id);
                             //let segment_id = lane.segment();
 
                             lane.to_node()
@@ -457,7 +635,7 @@ pub fn make_new_signfinding_traj(
                         LaneRef::NodeLane(node_id, _nl_id, _) => {
                             // We're in a NodeLane (inside an intersection)
                             // Find which outgoing segment leads closest to destination
-                            let Some(node) = road_storage.node(node_id) else {
+                            let Some(node) = road_storage.node_safe(node_id) else {
                                 return Err(NodeDoesntExist("Last turn was SegmentLanes, trying to get next NodeId, last turn had NO possible lanes, which is concerning, OR the first lane in possible lanes doesn't exist in the road network. \
                                 Then tried getting the current lane of the car instead, matched the laneref and got LaneRef::NodeLane, where this error occurred, because the node from the node_id doesn't exist.".to_string()));
                             };
@@ -468,14 +646,14 @@ pub fn make_new_signfinding_traj(
                 }; // NEXT node
                 // Signfinding: Get the next intersection to turn to.
 
-                let Some(node) = road_storage.node(next_node_id) else {
+                let Some(node) = road_storage.node_safe(next_node_id) else {
                     return Err(NodeDoesntExist(format!(
                         "Last turn was SegmentLanes, got the next node id {:?} and tried getting it from road storage, but got None. ",
                         next_node_id
                     )));
                 }; // NEXT node
                 let mut best_arms: Vec<(&Arm, f32)> =
-                    node.ranked_arms_for_address(buildings, zoning, address.destination); // TO//DO: allow U-turns and Roundabouts
+                    node.ranked_arms_for_address(buildings, zoning, *destination); // TO//DO: allow U-turns and Roundabouts
                 // if best_arms.len() > 1 {
                 //     // If the node has one more arm that is not the previous segment, then I can filter out the previous segment to avoid pathfinding back and forth. Stupid idea, I should just rank better based on the compass in the initial phase like I wanted to!!
                 //     best_arms.retain(|(arm, _)| arm.segment() != *previous_segment_id);
@@ -525,7 +703,7 @@ pub fn make_new_signfinding_traj(
                 to_segment_id,
             } => {
                 // If I just came out of an intersection, I don't need a new arm turn, I only need to give the lanes in front of me, SegmentLanes().
-                let possible_lanes = if let Some(node) = road_storage.node(*node_id) {
+                let possible_lanes = if let Some(node) = road_storage.node_safe(*node_id) {
                     if let Some(arm) = node.arm_for_segment(*to_segment_id) {
                         arm.outgoing_lanes().to_vec()
                     } else {
@@ -592,9 +770,7 @@ pub fn get_last_turn(
         match lane_ref {
             LaneRef::Lane(lane_id, _) => {
                 //if let Some(last_lane_id) = car.last_lane_id {lane_id=last_lane_id};
-                let Some(lane) = road_storage.lane_safe(lane_id) else {
-                    return Err(GetLastTurnError::LaneDoesntExist);
-                };
+                let lane = road_storage.lane(lane_id);
                 let segment_id = lane.segment();
 
                 Ok(SFTurnIdentification {
@@ -608,7 +784,7 @@ pub fn get_last_turn(
             LaneRef::NodeLane(node_id, _nl_id, _) => {
                 // We're in a NodeLane (inside an intersection)
                 // Find which outgoing segment leads closest to destination
-                let Some(node) = road_storage.node(node_id) else {
+                let Some(node) = road_storage.node_safe(node_id) else {
                     return Err(GetLastTurnError::NodeDoesntExist);
                 };
 
@@ -617,18 +793,14 @@ pub fn get_last_turn(
                 //println!("Arms count: {}", node.arms().len());
                 for arm in node.arms() {
                     let seg_id = arm.segment();
-                    let Some(segment) = road_storage.segment_safe(seg_id) else {
-                        continue;
-                    };
+                    let segment = road_storage.segment(seg_id);
 
                     // Find the far endpoint of this segment (opposite from current node)
                     let Some(far_node_id) = segment.other_node(node_id) else {
                         continue;
                     };
 
-                    let Some(far_node) = road_storage.node(far_node_id) else {
-                        continue;
-                    };
+                    let far_node = road_storage.node(far_node_id);
                     let dist_sq = far_node.pos().delta_to(building_pos).length_squared();
 
                     if dist_sq < best_dist_sq {
@@ -909,16 +1081,17 @@ fn build_road_path(
     road_storage: &RoadStorage,
     buildings: &Buildings,
     zoning_storage: &ZoningStorage,
+    callback: &mut TrajectoryCallback
 ) -> Result<RoadPath, RoadPathBuildError> {
     let mut pts: Vec<WorldPos> = Vec::new();
     let mut limits: Vec<f32> = Vec::new();
     let mut is_last_pts: Vec<bool> = Vec::new();
 
-    let Some(address) = &car.destination_addr else {
-        return Err(RoadPathBuildError::NoAddress);
+    let Some(destination) = car.mode.destination() else {
+        return Err(RoadPathBuildError::NoDestination);
     };
     let (driveway_entrances, building_pos, building_segment_id) =
-        if let Some(building) = buildings.storage.get(address.destination.as_building_id()) {
+        if let Some(building) = buildings.storage.get(destination.as_building_id()) {
             if let Some(lot) = zoning_storage.get_lot(building.lot_id) {
                 if let Some(layout) = lot.layout.as_ref() {
                     (&layout.driveway_entrances, building.pos, lot.segment_id)
@@ -941,10 +1114,7 @@ fn build_road_path(
         Ok(ok) => ok,
         Err(e) => return Err(RoadPathBuildError::GetLastTurnError(e)),
     };
-    let mut callback = RoadPathCallback {
-        is_last_turn: false,
-        car_changes: vec![],
-    };
+
     let current_lane = match car.current_lane {
         None => {
             println!("Car.current_lane was None");
@@ -957,18 +1127,13 @@ fn build_road_path(
             // This is the lane that the car is currently on. IT COULD HAVE BEEN FINISHED! So check.
             let is_finished = match lane_ref {
                 LaneRef::Lane(lane_id, poly_idx) => {
-                    let Some(lane) = road_storage.lane_safe(lane_id) else {
-                        return Err(RoadPathBuildError::LaneDoesntExist {
-                            lane_id,
-                            context: "",
-                        });
-                    };
+                    let lane = road_storage.lane(lane_id);
                     let poly_idx = poly_idx as usize;
                     let is_last_point = poly_idx == lane.geometry().points.len().saturating_sub(1);
                     is_last_point
                 }
                 LaneRef::NodeLane(node_id, nodelane_id, poly_idx) => {
-                    let Some(node) = road_storage.node(node_id) else {
+                    let Some(node) = road_storage.node_safe(node_id) else {
                         return Err(RoadPathBuildError::NodeDoesntExist {
                             node_id,
                             context: "",
@@ -1002,12 +1167,7 @@ fn build_road_path(
                     match lane_ref {
                         LaneRef::Lane(lane_id, poly_idx) => {
                             // It's a lane, so next up is an intersection. Get the next nodelane.
-                            let Some(lane) = road_storage.lane_safe(lane_id) else {
-                                return Err(RoadPathBuildError::LaneDoesntExist {
-                                    lane_id,
-                                    context: "",
-                                });
-                            };
+                            let lane = road_storage.lane(lane_id);
                             match &next_turn.turn_type {
                                 SFTurnType::SegmentLanes {
                                     segment_id,
@@ -1045,7 +1205,7 @@ fn build_road_path(
                             }
                         }
                         LaneRef::NodeLane(node_id, nodelane_id, poly_idx) => {
-                            let Some(node) = road_storage.node(node_id) else {
+                            let Some(node) = road_storage.node_safe(node_id) else {
                                 return Err(RoadPathBuildError::NodeDoesntExist {
                                     node_id,
                                     context: "",
@@ -1157,12 +1317,7 @@ fn build_road_path(
     let end_speed: f32;
     match current_lane {
         LaneRef::Lane(lane_id, poly_idx) => {
-            let Some(lane) = road_storage.lane_safe(lane_id) else {
-                return Err(RoadPathBuildError::LaneDoesntExist {
-                    lane_id,
-                    context: "",
-                });
-            };
+            let lane = road_storage.lane(lane_id);
             let poly_idx = poly_idx as usize;
             for (i, &p) in lane.geometry().points.iter().enumerate() {
                 if i >= poly_idx {
@@ -1184,7 +1339,7 @@ fn build_road_path(
             end_speed = lane.speed_limit() * INTER_SPEED;
         }
         LaneRef::NodeLane(node_id, nodelane_id, poly_idx) => {
-            let Some(node) = road_storage.node(node_id) else {
+            let Some(node) = road_storage.node_safe(node_id) else {
                 return Err(RoadPathBuildError::NodeDoesntExist {
                     node_id,
                     context: "",
@@ -1227,13 +1382,11 @@ fn build_road_path(
     // Calculate the arc-length where the current lane ends
     // (The length of the lane geometry minus the starting poly_idx)
     let lane_end_s = match current_lane {
-        LaneRef::Lane(lane_id, poly_idx) => road_storage
-            .lane_safe(lane_id)
-            .map(|l| l.geometry().points.len().saturating_sub(1) - poly_idx as usize)
-            .unwrap_or(0) as f64,
+        LaneRef::Lane(lane_id, poly_idx) => {
+            (road_storage.lane(lane_id).geometry().points.len().saturating_sub(1) - poly_idx as usize) as f64
+        },
         LaneRef::NodeLane(node_id, nodelane_id, poly_idx) => road_storage
-            .node(node_id)
-            .and_then(|n| n.node_lane(nodelane_id))
+            .node(node_id).node_lane(nodelane_id)
             .map(|nl| nl.geometry().points.len().saturating_sub(1) - poly_idx as usize)
             .unwrap_or(0) as f64,
     };
@@ -1242,7 +1395,6 @@ fn build_road_path(
         pts,
         limits,
         Some(current_lane),
-        Some(callback),
         end_speed,
         lane_end_s as f32,
     ))
@@ -1265,9 +1417,10 @@ fn get_next_turn<'a>(
     (turns.get(0), false)
 }
 
-pub struct RoadPathCallback {
+#[derive(Default)]
+pub struct TrajectoryCallback {
     pub is_last_turn: bool,
-    pub car_changes: Vec<CarChange>,
+    pub car_changes: Vec<CarChange>
 }
 
 /// Push a waypoint with its associated lane, silently dropping near-duplicates.
@@ -1318,6 +1471,7 @@ fn simulate_path_follow(
     origin: WorldPos,
     start_t: SimTime,
     sf_options: &SignFindingOptions,
+    callback: &TrajectoryCallback
 ) -> CarTrajectory {
     let duration = sf_options.physical_traj_duration;
     let n_steps = (duration / SIM_DT).ceil() as u32;
@@ -1379,7 +1533,7 @@ fn simulate_path_follow(
                 // Kinematic cap: maximum speed from which we can brake to `end_speed`
                 // within the remaining distance using comfort deceleration.
                 // Derived from: v_target² = v² - 2·a·d  →  v_max = √(v_target² + 2·a·d)
-                let dist_to_end = (path_total_len - arc_s).max(0.0) as f32;
+                let dist_to_end = (path_total_len - arc_s).max(0.0);
                 let v_kinematic =
                     (path.end_speed * path.end_speed + 2.0 * IDM_BRAKE * dist_to_end).sqrt();
                 v_limit.min(v_kinematic)
@@ -1468,7 +1622,7 @@ fn simulate_path_follow(
             lane_ref,
         });
     }
-    let is_last_turn = path.callback.as_ref().is_some_and(|cb| cb.is_last_turn);
+    let is_last_turn = callback.is_last_turn;
     CarTrajectory {
         car_id: car.id,
         origin,
@@ -1487,7 +1641,8 @@ fn simulate_point_path_follow(
     start_t: SimTime,
     sf_options: &SignFindingOptions,
 ) -> CarTrajectory {
-    let n_steps = (sf_options.physical_traj_duration / SIM_DT).ceil() as u32;
+    let duration = sf_options.physical_traj_duration;
+    let n_steps = (duration / SIM_DT).ceil() as u32;
     let mut pts = Vec::with_capacity((n_steps / SIM_SAMPLE + 2) as usize);
 
     let mut pos = car.pos;
@@ -1506,60 +1661,143 @@ fn simulate_point_path_follow(
         lane_ref: car.current_lane,
     });
 
-    for step in 1..=n_steps {
-        t += SIM_DT as f64;
+    if sf_options.simple_following {
+        // Simple point following:
+        // move directly from point to point at parking speed and
+        // snap the car's position/orientation onto the point path.
+        speed = speed.min(5.0);
 
-        if idx >= points.len() {
-            break;
+        for step in 1..=n_steps {
+            t += SIM_DT as f64;
+
+            if idx >= points.len() {
+                break;
+            }
+
+            let target = points[idx];
+            let to_target = pos.delta_to(target);
+            let dist = to_target.length();
+
+            if dist <= 0.5 {
+                pos = target;
+                idx += 1;
+
+                if idx >= points.len() {
+                    break;
+                }
+            }
+
+            let target = points[idx];
+            let to_target = pos.delta_to(target);
+
+            if to_target.length_squared() > 1e-6 {
+                let target_dir = to_target.normalize();
+                quat = sanitize_quat(
+                    Quat::from_rotation_arc(Vec3::Z, target_dir)
+                );
+            }
+
+            r = 0.0;
+
+            let remaining = pos.delta_to(target).length();
+            let travel = speed * SIM_DT;
+
+            if travel >= remaining {
+                pos = target;
+                idx += 1;
+            } else {
+                pos = pos.add_vec3((quat * Vec3::Z) * travel);
+            }
+
+            let reached_end = idx >= points.len();
+
+            if step % SIM_SAMPLE == 0 || reached_end {
+                pts.push(CarTrajectoryPoint {
+                    time: t,
+                    pos: origin.delta_to(pos),
+                    quat,
+                    velocity: (quat * Vec3::Z) * speed,
+                    lane_ref: car.current_lane,
+                });
+            }
+
+            if reached_end {
+                break;
+            }
         }
+    } else {
+        for step in 1..=n_steps {
+            t += SIM_DT as f64;
 
-        let target = points[idx];
+            if idx >= points.len() {
+                break;
+            }
 
-        let to_target = pos.delta_to(target);
-        let dist = to_target.length();
+            let target = points[idx];
+            let to_target = pos.delta_to(target);
+            let dist = to_target.length();
 
-        // Move to next point if close enough
-        if dist < 0.5 {
-            idx += 1;
-            continue;
+            if dist < 0.5 {
+                idx += 1;
+
+                if idx >= points.len() {
+                    break;
+                }
+
+                continue;
+            }
+
+            let target_dir = to_target.normalize();
+
+            // Simple steering
+            let fwd = quat * Vec3::Z;
+            let cross_y = fwd.cross(target_dir).y;
+
+            let desired_r = if speed > 0.2 {
+                2.0 * speed * cross_y / LOOKAHEAD_M
+            } else {
+                0.0
+            };
+
+            const R_TC: f32 = 0.12;
+            const MAX_YAW_RATE: f32 = 3.5;
+
+            r += (desired_r - r) * (SIM_DT / R_TC).min(1.0);
+            r = r.clamp(-MAX_YAW_RATE, MAX_YAW_RATE);
+
+            if r.abs() > 1e-5 {
+                quat = sanitize_quat(
+                    Quat::from_axis_angle(Vec3::Y, r * SIM_DT) * quat
+                );
+            }
+
+            speed = speed.min(5.0);
+
+            let vel = (quat * Vec3::Z) * speed;
+            pos = pos.add_vec3(vel * SIM_DT);
+
+            if step % SIM_SAMPLE == 0 {
+                pts.push(CarTrajectoryPoint {
+                    time: t,
+                    pos: origin.delta_to(pos),
+                    quat,
+                    velocity: vel,
+                    lane_ref: car.current_lane,
+                });
+            }
         }
+    }
 
-        let target_dir = to_target.normalize();
+    let vel_end = (quat * Vec3::Z) * speed;
 
-        // Simple steering
-        let fwd = quat * Vec3::Z;
-        let cross_y = fwd.cross(target_dir).y;
-
-        let desired_r = if speed > 0.2 {
-            2.0 * speed * cross_y / LOOKAHEAD_M
-        } else {
-            0.0
-        };
-
-        const R_TC: f32 = 0.12;
-        const MAX_YAW_RATE: f32 = 3.5;
-
-        r += (desired_r - r) * (SIM_DT / R_TC).min(1.0);
-        r = r.clamp(-MAX_YAW_RATE, MAX_YAW_RATE);
-
-        if r.abs() > 1e-5 {
-            quat = sanitize_quat(Quat::from_axis_angle(Vec3::Y, r * SIM_DT) * quat);
-        }
-
-        speed = speed.min(5.0); // parking speed limit
-
-        let vel = (quat * Vec3::Z) * speed;
-        pos = pos.add_vec3(vel * SIM_DT);
-
-        if step % SIM_SAMPLE == 0 {
-            pts.push(CarTrajectoryPoint {
-                time: t,
-                pos: origin.delta_to(pos),
-                quat,
-                velocity: vel,
-                lane_ref: car.current_lane,
-            });
-        }
+    if pts.last().map_or(true, |p| p.time < t - 1e-9) {
+        pts.push(CarTrajectoryPoint {
+            time: t,
+            pos: origin.delta_to(pos),
+            quat,
+            velocity: vel_end,
+            lane_ref: car.current_lane,
+        });
     }
 
     CarTrajectory {
@@ -1597,7 +1835,7 @@ struct RoadPath {
     arc: Vec<f32>,    // cumulative arc length (m) per waypoint
     lane_ref: Option<LaneRef>,
     end_speed: f32,
-    callback: Option<RoadPathCallback>, // To give back to the car. A physical trajectory can only have one turn.
+    // To give back to the car. A physical trajectory can only have one turn.
     lane_end_s: f32,
 }
 
@@ -1606,9 +1844,8 @@ impl RoadPath {
         pts: Vec<WorldPos>,
         limits: Vec<f32>,
         lane_ref: Option<LaneRef>,
-        callback: Option<RoadPathCallback>,
         end_speed: f32,
-        lane_end_s: f32,
+        lane_end_s: f32
     ) -> Self {
         let mut arc = Vec::with_capacity(pts.len());
         let mut cum = 0.0f32;
@@ -1623,8 +1860,7 @@ impl RoadPath {
             arc,
             lane_ref,
             end_speed,
-            callback,
-            lane_end_s,
+            lane_end_s
         }
     }
 
@@ -1743,9 +1979,11 @@ impl std::fmt::Display for NodeLaneSearchError {
 pub enum MakeNewTrajectoryError {
     Signfinding(SignfindingError),
     RoadPath(RoadPathBuildError),
-    Parking,
-    Parked,
+    CarModeIsParked,
     ParkingDone,
+    LotDoesntExist,
+    ParkingSpotDoesntExist,
+    ParkingPath(ParkingPathError),
 }
 
 #[derive(Debug)]
@@ -1775,7 +2013,7 @@ pub enum RoadPathBuildError {
     },
     StaleNavigationState {
         turn: SFTurnIdentification,
-        current_lane_ref: Option<LaneRef>,
+        current_lane_ref: Option<LaneRef>
     },
     TurnIndexOutOfBounds {
         turn_idx: usize,
@@ -1786,7 +2024,7 @@ pub enum RoadPathBuildError {
     DegeneratePath {
         reason: &'static str,
     },
-    NoAddress,
+    NoDestination,
     LotDoesntExist,
     LotLayoutDoesntExist,
     BuildingDoesntExist,
@@ -1825,4 +2063,47 @@ pub enum GetLastTurnError {
     NodeDoesntExist,
     NoAvailableArms,
     ArmDoesntExist,
+}
+// Oh my god now i realize how stupid that is! Of course it says parking spot reached for no reason, because it doesn't check whether the car actually is here! Fuck!
+
+fn get_parking_spots(
+    parking_storage: &ParkingStorage,
+    lot_layout: Option<&LotLayout>,
+    segment: Option<&Segment>,
+) -> Option<ParkingSpot> {
+    // 2 Parking spot possibilities:
+    // Inside a lot
+    // Beside the curb
+    //
+    // I guess a building needs to define parking spaces?
+    // Yes all Parking Spots will be tracked in ParkingStorage
+
+    let spot: Option<ParkingSpot>;
+    let rng = &mut ThreadRng::default();
+    let parking_spot_id = lot_layout
+        .map(|layout| {
+            layout
+                .unoccupied_parking_spots
+                .get(rng.random_range(0..layout.unoccupied_parking_spots.len()))
+        })
+        .flatten()
+        .cloned();
+    if let Some(spot) = parking_storage.get(parking_spot_id).cloned() {
+        return Some(spot);
+    }
+
+    let parking_spot_id = segment.map(|s| s.parking_spots.iter());
+
+    //spot
+    None
+
+    // match car.current_lane.and_then(|l|l.as_lane()) {
+    //     Some((lane_id, poly_idx)) => {
+    //         let Some(segment) = road_storage.lane_safe(lane_id).and_then(|l|road_storage.segment_safe(l.segment())) else { return Err(ParkingPathError::DespawnTheCar) };
+    //
+    //
+    //         Ok(Path)
+    //     }
+    //     None => {return Err(ParkingPathError::DespawnTheCar)}
+    // }
 }

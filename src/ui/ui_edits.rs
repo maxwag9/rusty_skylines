@@ -99,7 +99,7 @@ pub fn set_element_position(
 #[derive(Clone, Debug, PartialEq)]
 pub enum SizeProperty {
     Radius(f32),
-    Pt(f32),
+    Text([f32; 2], f32),
     Width(f32),
     Height(f32),
     Rect([f32; 2]),
@@ -115,13 +115,14 @@ impl SizeProperty {
     }
     pub fn pt(&self) -> Option<f32> {
         match self {
-            SizeProperty::Pt(pt) => Some(*pt),
+            SizeProperty::Text(_, pt) => Some(*pt),
             _ => None,
         }
     }
     pub fn size2(&self) -> Option<[f32; 2]> {
         match self {
             SizeProperty::Rect(size) => Some(*size),
+            SizeProperty::Text(size, _) => Some(*size),
             _ => None,
         }
     }
@@ -142,7 +143,7 @@ impl SizeProperty {
             SizeProperty::Radius(r) => {
                 *r *= scale;
             }
-            SizeProperty::Pt(pt) => {
+            SizeProperty::Text(_, pt) => {
                 *pt *= scale;
             }
             SizeProperty::Width(w) => {
@@ -204,7 +205,7 @@ pub fn set_element_size(
                 if element_ref.kind == ElementKind::Text && t.id == element_ref.id =>
             {
                 match size {
-                    SizeProperty::Pt(pt) => {
+                    SizeProperty::Text(_, pt) => {
                         t.pt = pt.max(4.0);
                     }
                     _ => {}
@@ -344,10 +345,18 @@ pub fn set_element_color(
                 .filter_map(UiElement::as_rect_mut)
                 .find(|r| r.id == element_ref.id)
             {
-                if matches!(property, ColorComponent::Fill) {
-                    previous_color = Some(r.color);
-                    r.color = color;
-                    layer.dirty.mark_rects();
+                match property {
+                    ColorComponent::Fill => {
+                        previous_color = Some(r.color);
+                        r.color = color;
+                        layer.dirty.mark_rects();
+                    }
+                    ColorComponent::Border => {
+                        previous_color = Some(r.border_color);
+                        r.border_color = color;
+                        layer.dirty.mark_rects();
+                    }
+                    _ => {}
                 }
             }
         }

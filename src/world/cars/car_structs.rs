@@ -1,7 +1,7 @@
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 use crate::world::cars::car_simulation::CarTrajectory;
 use crate::world::cars::car_subsystem::make_random_car;
-use crate::world::cars::partitions::{Address, DestinationType};
+use crate::world::cars::partitions::{Destination};
 use crate::world::cars::signfinding::{
     CarSignfindingTrajectory, SFTurnIdentification, SignFindingTrip,
 };
@@ -396,10 +396,9 @@ impl CarStorage {
         // Segment index – register immediately if the car starts on a segment.
         if let Some(car) = self.get(id) {
             if let Some(LaneRef::Lane(lane_id, _)) = car.current_lane {
-                if let Some(seg_id) = road_storage.segment_of_lane(lane_id) {
-                    self.car_lane_index.insert(id, seg_id);
-                    self.segment_car_index.entry(seg_id).or_default().push(id);
-                }
+                let seg_id = road_storage.segment_of_lane(lane_id);
+                self.car_lane_index.insert(id, seg_id);
+                self.segment_car_index.entry(seg_id).or_default().push(id);
             }
         }
 
@@ -507,10 +506,7 @@ impl CarStorage {
             return Vec::new();
         };
 
-        let segment_id = match road_storage.segment_of_lane(lane_id) {
-            Some(id) => id,
-            None => return Vec::new(),
-        };
+        let segment_id = road_storage.segment_of_lane(lane_id);
 
         let candidates = self.cars_on_segment(segment_id);
         if candidates.len() <= 1 {
@@ -567,13 +563,12 @@ impl CarStorage {
 
         // 3. Insert into new segment (only for segment lanes, not intersections).
         if let Some(LaneRef::Lane(lane_id, _)) = new_lane {
-            if let Some(seg_id) = road_storage.segment_of_lane(lane_id) {
-                self.car_lane_index.insert(car_id, seg_id);
-                self.segment_car_index
-                    .entry(seg_id)
-                    .or_default()
-                    .push(car_id);
-            }
+            let seg_id = road_storage.segment_of_lane(lane_id);
+            self.car_lane_index.insert(car_id, seg_id);
+            self.segment_car_index
+                .entry(seg_id)
+                .or_default()
+                .push(car_id);
         }
         // If NodeLane: car_lane_index has no entry → segment_car_index not
         // touched → perfectly consistent.
@@ -954,20 +949,26 @@ pub struct Car {
 
     pub current_lane: Option<LaneRef>, // current lane
     //pub next_lane: Option<LaneRef>, // next lane if known
-    pub destination_addr: Option<Address>,
     pub trip: Option<SignFindingTrip>,
     pub last_turn: Option<SFTurnIdentification>,
 
     pub spawn_time: SimTime,
 
     pub driver_profile: DriverProfile,
-    pub mode: CarMode,
+    pub mode: CarMode
 }
 #[derive(Debug, Clone)]
 pub enum CarMode {
-    Driving,
-    Parking { path: Vec<WorldPos> },
-    Parked,
+    Driving(Destination),
+    Parked
+}
+impl CarMode {
+    pub fn destination(&self) -> Option<&Destination> {
+        match self {
+            CarMode::Driving(destination) => { Some(destination) }
+            CarMode::Parked => { None }
+        }
+    }
 }
 impl Default for Car {
     fn default() -> Car {
@@ -993,16 +994,13 @@ impl Default for Car {
             throttle: 0.0,
             brake: 0.0,
             current_lane: None,
-            destination_addr: Some(Address {
-                destination: DestinationType::Building(0, 0, SegmentId(0), 0), // TODO: Should be None?
-            }),
             trip: None,
             last_turn: None,
             spawn_time: 0.0,
             driver_profile: DriverProfile::Normal,
             gear: 0,
             wheel_radius: 0.34,
-            mode: CarMode::Driving,
+            mode: CarMode::Driving(Destination::Building(0, 0, SegmentId(0), 0)) // TODO: Should be Parked?
         }
     }
 }

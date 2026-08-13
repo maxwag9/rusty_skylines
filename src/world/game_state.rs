@@ -1,7 +1,9 @@
+use crate::data::Settings;
 use crate::helpers::paths::saves_dir;
-use crate::helpers::positions::{chunk_size, set_chunk_size, ChunkSize, WorldPos};
+use crate::helpers::positions::{ChunkSize, WorldPos, chunk_size, set_chunk_size};
 use crate::renderer::props::{Props, SavedProps};
 use crate::ui::parser::Value;
+use crate::ui::variables::Variables;
 use crate::world::buildings::buildings::BuildingStorage;
 use crate::world::buildings::zoning::ZoningStorage;
 use crate::world::cars::partitions::PartitionManager;
@@ -13,24 +15,24 @@ use revision::revisioned;
 use sanitize_filename::sanitize;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::io::{Error, Write};
+use std::io::Write;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs, mem};
 use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter, EnumString};
 
-#[derive(Display, Debug)]
+#[derive(Display, Debug, Clone)]
 pub enum LoadResult {
     Success(SaveVersion),
     FileNotFound(PathBuf),
     WrongExtension(PathBuf),
-    PathError(Error),
+    PathError(String),
     FileNonExistent(String),
     CantGetExtension,
-    CantGetData(Error),
-    CantDecompress(Error),
-    CantDecodeData(revision::Error),
+    CantGetData(String),
+    CantDecompress(String),
+    CantDecodeData(String),
     EmptyName,
     CantCreateSave(SaveResult),
 }
@@ -83,19 +85,20 @@ pub enum LoadResult {
 //         }
 //     }
 // }
-#[derive(Display, Debug)]
+#[derive(Display, Debug, Clone)]
 pub enum SaveResult {
     Success,
     NotAFile,
 
-    CantWriteFile(Error),
-    CantCreateDir(Error),
-    CantCompress(Error),
-    CantEncodeData(revision::Error),
+    CantWriteFile(String),
+    CantCreateDir(String),
+    CantCompress(String),
+    CantEncodeData(String),
     CantGetExtension(String),
     WrongExtension(String),
     EmptySaveName,
     DowngradeError(String),
+    TriedToSaveEmptySave,
 }
 
 // impl fmt::Display for SaveResult {
@@ -199,7 +202,7 @@ fn sanitize_header_value(s: &str) -> String {
         .collect()
 }
 
-fn build_save_header(save: &SaveState) -> String {
+fn build_save_header(save: &SaveInfo) -> String {
     format!(
         "{magic}\n\
 name={name}\n\
@@ -212,9 +215,9 @@ all_of_this_crap_is_for_your_enjoyment\n\
 \n",
         magic = SAVE_MAGIC,
         name = sanitize_header_value(&save.name),
-        version = sanitize_header_value(&save.version.to_string()),
+        version = sanitize_header_value(&save.load_result.to_string()),
         timestamp = save.timestamp_unix,
-        chunk_size = save.chunk_size,
+        chunk_size = save.chunk_size
     )
 }
 
@@ -227,25 +230,26 @@ fn find_header_end(data: &[u8]) -> Option<usize> {
     }
     None
 }
+
+#[derive(Default)]
 pub struct GameState {
-    pub current_save: SaveState,
-    pub inside_save: bool
+    pub current_save_info: Option<SaveInfo>
 }
 impl GameState {
     pub fn new() -> Self {
         Self {
-            current_save: SaveState::default(),
-            inside_save: false
+            current_save_info: None
         }
     }
 
-    pub fn load(&mut self, save_name: &str, world: &mut World, props: &mut Props) -> LoadResult {
-        let safe_name = sanitize(save_name);
-        if safe_name.is_empty() {
+    pub fn load(&mut self, save_name: &str, world: &mut World, props: &mut Props, settings: &Settings, variables: &mut Variables) -> LoadResult {
+        let save_name = make_safe_save_name(save_name);
+        if save_name.is_empty() {
             return LoadResult::EmptyName;
         }
-        let path = saves_dir().join(format!("{}.rss", safe_name));
+        let path = saves_dir().join(format!("{}.rss", save_name));
         let detected_version: SaveVersion;
+        let mut load_save: SaveState;
         match path.try_exists() {
             Ok(true) => {
                 if let Some(ext) = path.extension() {
@@ -258,7 +262,7 @@ impl GameState {
 
                 let data = match fs::read(&path) {
                     Ok(d) => d,
-                    Err(e) => return LoadResult::CantGetData(e),
+                    Err(e) => return LoadResult::CantGetData(e.to_string()),
                 };
 
                 let (header_bytes, payload) = if let Some(end) = find_header_end(&data) {
@@ -272,41 +276,51 @@ impl GameState {
 
                 let decompressed = match zstd::decode_all(payload) {
                     Ok(d) => d,
-                    Err(e) => return LoadResult::CantDecompress(e),
+                    Err(e) => return LoadResult::CantDecompress(e.to_string())
                 };
                 let save_state = match revision::from_slice::<SaveState>(&decompressed) {
                     Ok(s) => s,
-                    Err(e) => return LoadResult::CantDecodeData(e),
+                    Err(e) => return LoadResult::CantDecodeData(e.to_string())
                 };
 
-                self.current_save = save_state;
-                self.current_save.name = save_name.to_string();
+                load_save = save_state;
+                load_save.name = save_name.to_string();
             }
             Ok(false) => {
-                self.current_save = SaveState::default();
-                self.current_save.name = save_name.to_string();
+                self.current_save_info = Some(SaveInfo::default());
+                self.current_save_info.as_mut().map(|s| s.name = save_name.to_string());
 
-                match self.save(world, props) {
+                match self.save(world, props, settings, variables, false) {
                     SaveResult::Success => {
                         // Load the save I just created.
-                        self.inside_save = true;
-                        return self.load(save_name, world, props);
+                        return self.load(save_name.as_str(), world, props, settings, variables);
                     }
                     e => {
+                        self.current_save_info = None;
                         return LoadResult::CantCreateSave(e);
                     }
                 }
             }
-            Err(e) => return LoadResult::PathError(e),
+            Err(e) => return LoadResult::PathError(e.to_string()),
         }
 
-        self.current_save.load(world, props);
-        self.inside_save = true;
-        LoadResult::Success(detected_version)
+        load_save.load(world, props);
+
+        let success = LoadResult::Success(detected_version);
+        self.current_save_info = Some(SaveInfo {
+            name: load_save.name.clone(),
+            load_result: success.clone(),
+            timestamp_unix: load_save.timestamp_unix,
+            chunk_size: load_save.chunk_size,
+        });
+        success
     }
 
-    pub fn save(&mut self, world: &World, props: &Props) -> SaveResult {
-        let safe_name = sanitize(&self.current_save.name).to_string();
+    pub fn save(&mut self, world: &mut World, props: &Props, settings: &Settings, variables: &mut Variables, and_exit: bool) -> SaveResult {
+        let Some(current_save_info) = self.current_save_info.as_ref() else {
+            return SaveResult::TriedToSaveEmptySave
+        };
+        let safe_name = make_safe_save_name(current_save_info.name.as_str());
         if safe_name.is_empty() {
             return SaveResult::EmptySaveName;
         }
@@ -348,48 +362,56 @@ impl GameState {
                 path.to_str().unwrap_or("unknown path").to_string(),
             );
         }
+        let mut save_save = SaveState::default();
+        save_save.save(world, props);
 
-        self.current_save.save(world, props);
-
-        let serialized = match revision::to_vec(&self.current_save) {
+        let serialized = match revision::to_vec(&save_save) {
             Ok(d) => d,
-            Err(e) => return SaveResult::CantEncodeData(e),
+            Err(e) => return SaveResult::CantEncodeData(e.to_string()),
         };
 
         let compressed = match zstd::encode_all(&serialized[..], 10) {
             Ok(d) => d,
-            Err(e) => return SaveResult::CantCompress(e),
+            Err(e) => return SaveResult::CantCompress(e.to_string()),
         };
 
         if let Some(parent) = path.parent() {
             if let Err(e) = fs::create_dir_all(parent) {
-                return SaveResult::CantCreateDir(e);
+                return SaveResult::CantCreateDir(e.to_string());
             }
         }
 
         let mut file = match File::create(path) {
             Ok(f) => f,
-            Err(e) => return SaveResult::CantWriteFile(e),
+            Err(e) => return SaveResult::CantWriteFile(e.to_string()),
         };
 
-        let header = build_save_header(&self.current_save);
+        let header = build_save_header(self.current_save_info.as_ref().unwrap());
         if let Err(e) = file.write_all(header.as_bytes()) {
-            return SaveResult::CantWriteFile(e);
+            return SaveResult::CantWriteFile(e.to_string());
         }
         if let Err(e) = file.write_all(&compressed) {
-            return SaveResult::CantWriteFile(e);
+            return SaveResult::CantWriteFile(e.to_string());
         }
-
+        if and_exit {
+            self.current_save_info = None;
+            world.recreate(settings, props);
+        }
+        // If exiting the save after saving, set to false, if not exiting after saving, then set to true, because The player is inside the save of course!
         SaveResult::Success
     }
 }
 
-impl Default for GameState {
-    fn default() -> Self {
-        let mut save = Self::new();
-        save.current_save = SaveState::new();
-        save
-    }
+pub fn make_safe_save_name(name: &str) -> String {
+    let cleaned = sanitize(name.trim());
+
+    cleaned
+        .chars()
+        .filter(|&c| !matches!(c, '{' | '}' | '.'))
+        .collect::<String>()
+        .trim()
+        .trim_matches('.')
+        .to_string()
 }
 
 #[derive(
@@ -404,7 +426,8 @@ impl Default for GameState {
     PartialEq,
     Eq,
     Clone,
-    Debug,
+    Copy,
+    Debug
 )]
 #[revisioned(revision = 1)]
 pub enum SaveVersion {
@@ -460,9 +483,7 @@ impl SaveState {
         camera_controller.target_yaw = self.player_yaw;
         camera_controller.target_pitch = self.player_pitch;
 
-        terrain
-            .terrain_editor
-            .load_edits_from_vec(mem::take(&mut self.terrain_edits));
+        terrain.terrain_editor.load_edits_from_vec(mem::take(&mut self.terrain_edits));
 
         roads.road_manager.roads = mem::take(&mut self.roads);
 
@@ -511,11 +532,12 @@ fn default_chunk_size() -> ChunkSize {
     128
 }
 
+#[derive(Clone)]
 pub struct SaveInfo {
     pub name: String,
     pub load_result: LoadResult,
     pub timestamp_unix: u128,
-    pub chunk_size: ChunkSize,
+    pub chunk_size: ChunkSize
 }
 impl SaveInfo {
     pub fn to_values(self) -> Vec<Value> {
@@ -525,6 +547,16 @@ impl SaveInfo {
             Value::I64(self.timestamp_unix as i64),
             Value::I64(self.chunk_size as i64),
         ]
+    }
+}
+impl Default for SaveInfo {
+    fn default() -> Self {
+        SaveInfo {
+            name: "Default Save".to_string(),
+            load_result: LoadResult::Success(SaveVersion::current()),
+            timestamp_unix: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0),
+            chunk_size: default_chunk_size(),
+        }
     }
 }
 pub fn get_available_saves() -> Vec<SaveInfo> {
@@ -556,7 +588,7 @@ pub fn get_available_saves() -> Vec<SaveInfo> {
             Err(e) => {
                 saves.push(SaveInfo {
                     name: fallback_name,
-                    load_result: LoadResult::CantGetData(e),
+                    load_result: LoadResult::CantGetData(e.to_string()),
                     timestamp_unix: Default::default(),
                     chunk_size: Default::default(),
                 });
@@ -587,17 +619,17 @@ pub fn get_available_saves() -> Vec<SaveInfo> {
             Ok(decoded) => {
                 match revision::from_slice::<SaveState>(&decoded) {
                     Ok(_) => LoadResult::Success(version.clone()),
-                    Err(e) => LoadResult::CantDecodeData(e),
+                    Err(e) => LoadResult::CantDecodeData(e.to_string()),
                 }
             }
-            Err(e) => LoadResult::CantDecompress(e),
+            Err(e) => LoadResult::CantDecompress(e.to_string()),
         };
 
         saves.push(SaveInfo {
             name: save_name,
             load_result: result,
             timestamp_unix: timestamp,
-            chunk_size: header.chunk_size,
+            chunk_size: header.chunk_size
         });
     }
 

@@ -213,19 +213,19 @@ pub fn drive_car(
     const MAX_SPEED: f32 = 90.0;
     const MAX_YAW_RATE: f32 = 4.0;
 
-    let throttle = if input.gameplay_down("Fly Camera Forward") {
+    let throttle = if input.action_down("Fly Camera Forward") {
         1.0_f32
     } else {
         0.0
     };
-    let brake = if input.gameplay_down("Fly Camera Backward") {
+    let brake = if input.action_down("Fly Camera Backward") {
         1.0_f32
     } else {
         0.0
     };
-    let steer_left = input.gameplay_down("Fly Camera Left");
-    let steer_right = input.gameplay_down("Fly Camera Right");
-    let handbrake_engaged = input.gameplay_down("Handbrake");
+    let steer_left = input.action_down("Fly Camera Left");
+    let steer_right = input.action_down("Fly Camera Right");
+    let handbrake_engaged = input.action_down("Handbrake");
     let steer_input: f32 =
         (if steer_left { 1.0 } else { 0.0 }) - (if steer_right { 1.0 } else { 0.0 });
 

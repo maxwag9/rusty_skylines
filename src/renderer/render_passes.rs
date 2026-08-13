@@ -760,7 +760,7 @@ pub fn render_instance_ids<'a>(
     car_renderer: &mut CarRenderSubsystem,
     settings: &Settings,
     camera: &'a Camera,
-    props: &'a Props,
+    props: &'a mut Props,
     terrain: &'a Terrain,
 ) {
     let shader_path = shader_dir().join("car_instance_id.wgsl");

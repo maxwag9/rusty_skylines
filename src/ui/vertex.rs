@@ -3,18 +3,18 @@ use crate::helpers::positions::WorldPos;
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::renderer::ui_text_rendering::Anchor;
 use crate::ui::helper::ensure_ccw;
+use crate::ui::parser::Value;
 use crate::ui::ui_edit_manager::ColorComponent;
 use crate::ui::ui_edits::SizeProperty;
 use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::variables::Variables;
+use glyphon::Metrics;
 use serde::de::Visitor;
 use serde::{de, Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::mem::size_of;
 use wgpu::{vertex_attr_array, *};
-use wgpu_text::glyph_brush::ab_glyph::Rect;
-use wgpu_text::glyph_brush::OwnedSection;
 use winit::dpi::PhysicalSize;
 
 const SCALING_EPSILON: f32 = 0.1; // pixels, 0.1 is good because You probably won't move an element by just 0.1 pixels willingly, impossible.
@@ -105,7 +105,6 @@ pub struct LayerGpu {
     pub rect_ssbo: Option<Buffer>,
     pub rect_count: u32,
 
-    pub text_sections: Vec<OwnedSection>,
     pub text_misc_vbo: Option<Buffer>,
     pub text_misc_vertex_count: u32,
 }
@@ -127,7 +126,6 @@ impl Default for LayerGpu {
             rect_ssbo: None,
             rect_count: 0,
 
-            text_sections: vec![],
             text_misc_vbo: None,
             text_misc_vertex_count: 0,
         }
@@ -141,128 +139,6 @@ pub enum TouchState {
     Idle,
 }
 
-#[derive(Debug, Clone)]
-pub enum UiElementCache {
-    Circle(CircleParams),
-    Handle(HandleParams),
-    Polygon(Vec<UiVertexPoly>),
-    Text(TextParams),
-    Outline(OutlineParams),
-    Rect(RectGpu),
-    Advanced, // Just a useless filler to simply and efficiently stop the cache from rebuilding each frame when APs are present... Because APs don't need to be cached, but still count toward the element amount in the layers' element list, and we are checking if the element count changed to grow or shrink the cache, and we are comparing against the cache element list length, and the AP is not inside, there is a mismatch every frame.
-}
-
-#[derive(Debug, Clone)]
-pub struct LayerCache {
-    pub elements: Vec<UiElementCache>,
-    pub outline_poly_vertices: Vec<[f32; 2]>,
-}
-
-impl UiElementCache {
-    // non-mutable
-    pub fn as_circle(&self) -> Option<&CircleParams> {
-        match self {
-            UiElementCache::Circle(c) => Some(c),
-            _ => None,
-        }
-    }
-
-    pub fn as_handle(&self) -> Option<&HandleParams> {
-        match self {
-            UiElementCache::Handle(h) => Some(h),
-            _ => None,
-        }
-    }
-
-    pub fn as_polygon(&self) -> Option<&Vec<UiVertexPoly>> {
-        match self {
-            UiElementCache::Polygon(p) => Some(p),
-            _ => None,
-        }
-    }
-
-    pub fn as_text(&self) -> Option<&TextParams> {
-        match self {
-            UiElementCache::Text(t) => Some(t),
-            _ => None,
-        }
-    }
-
-    pub fn as_outline(&self) -> Option<&OutlineParams> {
-        match self {
-            UiElementCache::Outline(o) => Some(o),
-            _ => None,
-        }
-    }
-
-    // mutable
-    pub fn as_circle_mut(&mut self) -> Option<&mut CircleParams> {
-        match self {
-            UiElementCache::Circle(c) => Some(c),
-            _ => None,
-        }
-    }
-
-    pub fn as_handle_mut(&mut self) -> Option<&mut HandleParams> {
-        match self {
-            UiElementCache::Handle(h) => Some(h),
-            _ => None,
-        }
-    }
-
-    pub fn as_polygon_mut(&mut self) -> Option<&mut Vec<UiVertexPoly>> {
-        match self {
-            UiElementCache::Polygon(p) => Some(p),
-            _ => None,
-        }
-    }
-
-    pub fn as_text_mut(&mut self) -> Option<&mut TextParams> {
-        match self {
-            UiElementCache::Text(t) => Some(t),
-            _ => None,
-        }
-    }
-
-    pub fn as_outline_mut(&mut self) -> Option<&mut OutlineParams> {
-        match self {
-            UiElementCache::Outline(o) => Some(o),
-            _ => None,
-        }
-    }
-}
-
-impl LayerCache {
-    // non-mutable iterators
-    pub fn iter_circles(&self) -> impl Iterator<Item = &CircleParams> {
-        self.elements.iter().filter_map(UiElementCache::as_circle)
-    }
-
-    pub fn iter_handles(&self) -> impl Iterator<Item = &HandleParams> {
-        self.elements.iter().filter_map(UiElementCache::as_handle)
-    }
-
-    pub fn iter_polygons(&self) -> impl Iterator<Item = &Vec<UiVertexPoly>> {
-        self.elements.iter().filter_map(UiElementCache::as_polygon)
-    }
-
-    pub fn iter_texts(&self) -> impl Iterator<Item = &TextParams> {
-        self.elements.iter().filter_map(UiElementCache::as_text)
-    }
-
-    pub fn iter_outlines(&self) -> impl Iterator<Item = &OutlineParams> {
-        self.elements.iter().filter_map(UiElementCache::as_outline)
-    }
-}
-
-impl Default for LayerCache {
-    fn default() -> Self {
-        Self {
-            elements: vec![],
-            outline_poly_vertices: vec![],
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct LayerDirty {
@@ -395,8 +271,8 @@ pub struct AdvancedPrimitiveYaml {
     #[serde(default)]
     pub scale: f32,
     pub misc: MiscButtonSettingsYaml,
-    #[serde(default)]
-    pub editing_tool: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub editing_tool: bool
 }
 #[derive(Debug, Clone)]
 pub struct AdvancedPrimitive {
@@ -455,6 +331,7 @@ impl AdvancedPrimitive {
     pub fn to_layer(
         self,
         settings: &Settings,
+        variables: &Variables,
         advanced_primitives: &HashMap<String, UiLayerYaml>,
         order: u32,
         window_size: PhysicalSize<u32>
@@ -471,7 +348,7 @@ impl AdvancedPrimitive {
                     el.scale_by(self.scale * y_scale);
                     el.translate(x, y);
                     el.set_editable(&self.misc.editable);
-                    el.set_aps(self.ap_vars.as_slice());
+                    el.set_aps(settings, variables, self.ap_vars.as_slice());
                     el
                 })
                 .collect()
@@ -487,12 +364,12 @@ impl AdvancedPrimitive {
             elements,
             active: self.misc.active,
             ap_vars: self.ap_vars,
-            cache: Default::default(),
             dirty: LayerDirty::all(),
             gpu: Default::default(),
             opaque: false,
             saveable: false,
-            editing_tool: self.editing_tool
+            editing_tool: self.editing_tool,
+            outline_poly_vertices: vec![],
         }
     }
 
@@ -571,6 +448,7 @@ pub struct UiButtonRect {
     pub glow_misc: GlowMisc,
     pub misc: MiscButtonSettings,
     pub yaml_element: Option<UiButtonRectYaml>,
+    pub cache: Option<RectParams>
 }
 
 impl UiButtonRect {
@@ -608,6 +486,7 @@ impl UiButtonRect {
                 editable: Editability::from_bool(e.misc.editable),
             },
             yaml_element,
+            cache: None,
         }
     }
 
@@ -911,6 +790,23 @@ impl UiElement {
         }
     }
 
+    pub fn set_text(&mut self, text: String) {
+        match self {
+            UiElement::Text(e) => {
+                e.text = text;
+            }
+            _ => {}
+        }
+    }
+    pub fn set_template(&mut self, template: String) {
+        match self {
+            UiElement::Text(e) => {
+                e.template = template;
+            }
+            _ => {}
+        }
+    }
+
     pub fn set_active(&mut self, active: bool) {
         match self {
             UiElement::Text(e) => {
@@ -948,9 +844,21 @@ impl UiElement {
             UiElement::Advanced(ap) => [ap.x, ap.y],
         }
     }
+    pub fn text(&self) -> Option<String> {
+        match self {
+            UiElement::Text(t) => Some(t.text.clone()),
+            _ => None
+        }
+    }
+    pub fn template(&self) -> Option<String> {
+        match self {
+            UiElement::Text(t) => Some(t.template.clone()),
+            _ => None
+        }
+    }
     pub fn size(&self) -> SizeProperty {
         match self {
-            UiElement::Text(t) => SizeProperty::Pt(t.pt),
+            UiElement::Text(t) => SizeProperty::Text([t.width, t.height], t.pt),
             UiElement::Circle(c) => SizeProperty::Radius(c.radius),
             UiElement::Handle(h) => SizeProperty::Radius(h.radius),
             UiElement::Outline(o) => SizeProperty::Radius(o.shape_data.radius),
@@ -1135,7 +1043,9 @@ impl UiElement {
         }
     }
 
-    pub fn set_aps(&mut self, ap_vars: &[String]) {
+    pub fn set_aps(&mut self, settings: &Settings, variables: &Variables, ap_vars: &[String]) { // TODO: from_str() the Strings! For text, use the ap_vars values and convert them into_string(), for actions do the same
+        let ap_vars = ap_vars.iter().map(|var| Value::from_str(settings, variables, var, true, true).into_string()).collect::<Vec<String>>();
+        let ap_vars = ap_vars.as_slice();
         match self {
             UiElement::Circle(e) => Self::replace_actions(&mut e.actions, ap_vars),
             UiElement::Handle(e) => {}
@@ -1174,7 +1084,7 @@ impl UiElement {
                 break;
             };
 
-            text.replace_range(start..end, &ap_vars[idx]);
+            text.replace_range(start..end, ap_vars.get(idx).unwrap_or(&"None".to_string()));
         }
     }
     fn replace_actions(actions: &mut Vec<String>, ap_vars: &[String]) {
@@ -1364,6 +1274,8 @@ pub struct UiVertexPoly {
     pub data: [f32; 2], // [roundness_px, polygon_index]
     pub color: [f32; 4],
     pub misc: [f32; 4], // active, touched_time, is_touched, hash
+    pub depth: f32,
+    pub _pad0: [f32; 3],
 }
 
 impl UiVertexPoly {
@@ -1392,6 +1304,11 @@ impl UiVertexPoly {
                     format: VertexFormat::Float32x4,
                     offset: 32,
                 },
+                VertexAttribute {
+                    shader_location: 4,
+                    format: VertexFormat::Float32,
+                    offset: 48,
+                },
             ],
         }
     }
@@ -1411,9 +1328,9 @@ pub struct PolygonEdgeGpu {
     pub p0: [f32; 2],
     pub p1: [f32; 2],
 }
-#[repr(C)]
+#[repr(C, align(16))]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct RectGpu {
+pub struct RectParams {
     pub center: [f32; 2],    // center position
     pub half_size: [f32; 2], // width, height
     pub color: [f32; 4],     // RGBA
@@ -1426,15 +1343,19 @@ pub struct RectGpu {
     pub glow_misc: [f32; 4], // glow_size, glow_speed, glow_intensity
     pub misc: [f32; 4],      // active, touched_time, is_down, hash
     pub blur: f32,
-    pub _pad0: [f32; 3],
+    pub depth: f32,
+    pub _pad0: [f32; 2],
 }
-// For text — pos + uv + color
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug)]
 pub struct UiVertexText {
     pub pos: [f32; 2],
     pub color: [f32; 4],
+    pub depth: f32,
+    pub _pad0: [f32; 3],
 }
+
 impl UiVertexText {
     pub fn desc() -> VertexBufferLayout<'static> {
         VertexBufferLayout {
@@ -1451,28 +1372,14 @@ impl UiVertexText {
                     shader_location: 1,
                     format: VertexFormat::Float32x4,
                 },
+                VertexAttribute {
+                    offset: (size_of::<[f32; 2]>() + size_of::<[f32; 4]>()) as _,
+                    shader_location: 2,
+                    format: VertexFormat::Float32,
+                },
             ],
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeLayer {
-    pub name: String,
-    pub ap_name: Option<String>,
-    pub order: u32,
-    pub actions: Vec<String>,
-    pub elements: Vec<UiElement>,
-    pub active: bool,
-    pub ap_vars: Vec<String>,
-    // NEW: cached GPU data!!!
-    pub cache: LayerCache,
-
-    pub dirty: LayerDirty, // set true when anything changes or the screen will be dirty asf!
-    pub gpu: LayerGpu,
-    pub opaque: bool,
-    pub saveable: bool,
-    pub editing_tool: bool,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -1521,6 +1428,25 @@ impl ElementKind {
         }
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct RuntimeLayer {
+    pub name: String,
+    pub ap_name: Option<String>,
+    pub order: u32,
+    pub actions: Vec<String>,
+    pub elements: Vec<UiElement>,
+    pub active: bool,
+    pub ap_vars: Vec<String>,
+
+    pub dirty: LayerDirty, // set true when anything changes or the screen will be dirty asf!
+    pub gpu: LayerGpu,
+    pub opaque: bool,
+    pub saveable: bool,
+    pub editing_tool: bool,
+    pub outline_poly_vertices: Vec<[f32; 2]>,
+}
+
 impl RuntimeLayer {
     pub fn bump_element_z(&mut self, id: &str, delta: i32) {
         let len = self.elements.len();
@@ -1952,12 +1878,13 @@ pub struct UiButtonText {
     pub sel_start: usize, // selection start index
     pub sel_end: usize,   // selection end index
     pub has_selection: bool,
-    pub glyph_bounds: Vec<Rect>,
-    pub char_spans: Vec<std::ops::Range<usize>>, // byte range per logical glyph
 
+    pub buffer: glyphon::Buffer,
     pub input_box: bool,
     pub anchor: Option<Anchor>,
     pub yaml_element: Option<UiButtonTextYaml>,
+
+    pub cache: Option<TextParams>
 }
 
 #[derive(Debug, Clone)]
@@ -1974,6 +1901,8 @@ pub struct UiButtonPolygon {
     pub misc: MiscButtonSettings,
     pub tri_count: u32,
     pub yaml_element: Option<UiButtonPolygonYaml>,
+
+    pub cache: Option<Vec<UiVertexPoly>>
 }
 
 #[derive(Debug, Clone)]
@@ -1995,6 +1924,8 @@ pub struct UiButtonCircle {
     pub glow_misc: GlowMisc,
     pub misc: MiscButtonSettings,
     pub yaml_element: Option<UiButtonCircleYaml>,
+
+    pub cache: Option<CircleParams>
 }
 
 #[derive(Debug, Clone)]
@@ -2015,6 +1946,7 @@ pub struct UiButtonOutline {
 
     pub misc: MiscButtonSettings,
     pub yaml_element: Option<UiButtonOutlineYaml>,
+    pub cache: Option<OutlineParams>
 }
 
 #[derive(Debug, Clone)]
@@ -2030,6 +1962,8 @@ pub struct UiButtonHandle {
     pub misc: MiscButtonSettings,
     pub parent: Option<ElementRef>,
     pub yaml_element: Option<UiButtonHandleYaml>,
+
+    pub cache: Option<HandleParams>
 }
 
 impl UiButtonText {
@@ -2068,11 +2002,11 @@ impl UiButtonText {
             sel_start: 0,
             sel_end: 0,
             has_selection: false,
-            glyph_bounds: vec![],
-            char_spans: vec![],
             input_box: e.input_box,
             anchor: e.anchor,
             yaml_element,
+            cache: None,
+            buffer: glyphon::Buffer::new_empty(Metrics::new(pt, 20.0)),
         }
     }
 
@@ -2145,6 +2079,7 @@ impl UiButtonCircle {
                 editable: Editability::from_bool(e.misc.editable),
             },
             yaml_element,
+            cache: None,
         }
     }
 
@@ -2214,6 +2149,7 @@ impl UiButtonHandle {
                 editable: Editability::from_bool(e.misc.editable),
             },
             yaml_element,
+            cache: None,
         }
     }
 
@@ -2284,6 +2220,7 @@ impl UiButtonOutline {
                 editable: Editability::from_bool(e.misc.editable),
             },
             yaml_element,
+            cache: None,
         }
     }
 
@@ -2364,6 +2301,7 @@ impl UiButtonPolygon {
             },
             tri_count: 0,
             yaml_element,
+            cache: None,
         };
         polygon.update_scaled_vertices();
         polygon
@@ -2485,11 +2423,11 @@ impl Default for UiButtonText {
             sel_start: 0,
             sel_end: 0,
             has_selection: false,
-            glyph_bounds: vec![],
-            char_spans: vec![],
             input_box: false,
             anchor: None,
             yaml_element: None,
+            cache: None,
+            buffer: glyphon::Buffer::new_empty(Metrics::new(14.0, 20.0))
         }
     }
 }
@@ -2540,6 +2478,7 @@ impl Default for UiButtonPolygon {
             misc: MiscButtonSettings::default(),
             tri_count: 0,
             yaml_element: None,
+            cache: None,
         }
     }
 }
@@ -2564,6 +2503,7 @@ impl Default for UiButtonCircle {
             glow_misc: GlowMisc::default(),
             misc: MiscButtonSettings::default(),
             yaml_element: None,
+            cache: None,
         }
     }
 }
@@ -2583,6 +2523,7 @@ impl Default for UiButtonOutline {
             sub_dash_misc: DashMisc::default(),
             misc: MiscButtonSettings::default(),
             yaml_element: None,
+            cache: None,
         }
     }
 }
@@ -2601,6 +2542,7 @@ impl Default for UiButtonHandle {
             misc: MiscButtonSettings::default(),
             parent: None,
             yaml_element: None,
+            cache: None,
         }
     }
 }
@@ -2626,6 +2568,7 @@ impl Default for UiButtonRect {
             glow_misc: GlowMisc::default(),
             misc: MiscButtonSettings::default(),
             yaml_element: None,
+            cache: None
         }
     }
 }
@@ -2972,6 +2915,10 @@ impl Default for UiButtonPolygonYaml {
 // Checks if a standard type matches its default (e.g., false for bool, 0 for u32)
 fn is_default<T: Default + PartialEq>(t: &T) -> bool {
     t == &T::default()
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 // Checks if a boolean is true (useful for things like 'active' where default is true)

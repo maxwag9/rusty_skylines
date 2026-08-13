@@ -7,6 +7,7 @@ use crate::ui::ui_touch_manager::{EditorTouchExtension, ElementRef};
 use crate::ui::vertex::{ElementKind, LayerDirty, UiButtonText, UiElement};
 use std::collections::HashMap;
 use std::ops::Range;
+use unicode_segmentation::UnicodeSegmentation;
 use winit::keyboard::NamedKey;
 
 #[derive(Clone, Copy)]
@@ -28,12 +29,6 @@ impl MouseSnapshot {
             scroll: mouse.scroll_delta.y,
         }
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct HitResult {
-    pub element: ElementRef,
-    pub actions: Vec<String>
 }
 
 // TEXT EDITING
@@ -280,7 +275,11 @@ fn handle_clipboard_commands(
     }
 }
 
-fn handle_backspace(input: &mut Input, text: &mut UiButtonText, dirty: &mut LayerDirty) -> bool {
+fn handle_backspace(
+    input: &mut Input,
+    text: &mut UiButtonText,
+    dirty: &mut LayerDirty,
+) -> bool {
     if !input.action_repeat("Backspace") {
         return false;
     }
@@ -289,8 +288,9 @@ fn handle_backspace(input: &mut Input, text: &mut UiButtonText, dirty: &mut Laye
 
     if text.has_selection {
         let (l, r) = text.selection_range();
-        let byte_start = logical_to_byte(&text.char_spans, l);
-        let byte_end = logical_to_byte(&text.char_spans, r);
+
+        let byte_start = caret_to_byte(&text.text, l);
+        let byte_end = caret_to_byte(&text.text, r);
 
         if is_template_mode {
             text.template.replace_range(byte_start..byte_end, "");
@@ -298,20 +298,24 @@ fn handle_backspace(input: &mut Input, text: &mut UiButtonText, dirty: &mut Laye
         } else {
             text.text.replace_range(byte_start..byte_end, "");
         }
+
         text.caret = l;
         text.clear_selection();
         dirty.mark_texts();
         return true;
     }
 
-    if text.caret > 0 && text.caret <= text.char_spans.len() {
-        let span = text.char_spans[text.caret - 1].clone();
+    if text.caret > 0 {
+        let byte_start = caret_to_byte(&text.text, text.caret - 1);
+        let byte_end = caret_to_byte(&text.text, text.caret);
+
         if is_template_mode {
-            text.template.replace_range(span.clone(), "");
+            text.template.replace_range(byte_start..byte_end, "");
             text.text = text.template.clone();
         } else {
-            text.text.replace_range(span, "");
+            text.text.replace_range(byte_start..byte_end, "");
         }
+
         text.caret -= 1;
         dirty.mark_texts();
     }
@@ -324,12 +328,24 @@ fn handle_character_input(
     text: &mut UiButtonText,
     dirty: &mut LayerDirty,
 ) -> bool {
-    if !input.repeat("char_repeat", !input.text_chars.is_empty())
-        && !input.named_just_pressed(NamedKey::Enter)
-        && !input.named_just_pressed(NamedKey::Tab)
-    {
+    let has_text = input
+        .text_input
+        .iter()
+        .any(|s| s.chars().any(|c| !c.is_control()));
+
+    let enter = input.named_just_pressed(NamedKey::Enter);
+    let tab = input.named_just_pressed(NamedKey::Tab);
+
+    if !has_text && !enter && !tab {
         return false;
     }
+
+    // if !input.repeat("char_repeat", has_text)
+    //     && !enter
+    //     && !tab
+    // {
+    //     return false;
+    // }
 
     let is_template_mode = !text.input_box; // or override mode!!
 
@@ -361,7 +377,11 @@ fn delete_selection(text: &mut UiButtonText, is_template_mode: bool) {
     text.clear_selection();
 }
 
-fn insert_characters(text: &mut UiButtonText, input: &mut Input, is_template_mode: bool) {
+fn insert_characters(
+    text: &mut UiButtonText,
+    input: &mut Input,
+    is_template_mode: bool,
+) {
     if input.named_just_pressed(NamedKey::Enter) {
         if is_template_mode {
             let bi = caret_to_byte(&text.template, text.caret);
@@ -371,10 +391,13 @@ fn insert_characters(text: &mut UiButtonText, input: &mut Input, is_template_mod
             let bi = caret_to_byte(&text.text, text.caret);
             text.text.insert_str(bi, "\n");
         }
+
         text.caret += 1;
     }
+
     if input.named_just_pressed(NamedKey::Tab) {
         let tab = "    "; // 4 Spaces
+
         if is_template_mode {
             let bi = caret_to_byte(&text.template, text.caret);
             text.template.insert_str(bi, tab);
@@ -383,23 +406,30 @@ fn insert_characters(text: &mut UiButtonText, input: &mut Input, is_template_mod
             let bi = caret_to_byte(&text.text, text.caret);
             text.text.insert_str(bi, tab);
         }
-        text.caret += tab.len();
+
+        text.caret += tab.graphemes(true).count();
     }
-    for s in input.text_chars.iter() {
-        if s.is_empty() {
+
+    for s in &input.text_input {
+        let filtered: String = s
+            .chars()
+            .filter(|c| !c.is_control())
+            .collect();
+
+        if filtered.is_empty() {
             continue;
         }
 
         if is_template_mode {
             let bi = caret_to_byte(&text.template, text.caret);
-            text.template.insert_str(bi, s);
+            text.template.insert_str(bi, &filtered);
             text.text = text.template.clone();
         } else {
             let bi = caret_to_byte(&text.text, text.caret);
-            text.text.insert_str(bi, s);
+            text.text.insert_str(bi, &filtered);
         }
 
-        text.caret += s.chars().count();
+        text.caret += filtered.graphemes(true).count();
     }
 }
 
@@ -414,7 +444,8 @@ fn handle_arrow_navigation(input: &mut Input, text: &mut UiButtonText, dirty: &m
         dirty.mark_texts();
     }
 
-    if input.action_repeat("Move Cursor Right") && text.caret < text.glyph_bounds.len() {
+    let grapheme_count = text.text.graphemes(true).count();
+    if input.action_repeat("Move Cursor Right") && text.caret < grapheme_count {
         text.caret += 1;
         dirty.mark_texts();
     }
@@ -434,99 +465,178 @@ fn handle_arrow_navigation(input: &mut Input, text: &mut UiButtonText, dirty: &m
     }
 }
 
+pub fn text_top_left(text: &UiButtonText) -> (f32, f32, f32, f32) {
+    let (width, height) = text
+        .cache
+        .as_ref()
+        .map(|c| (c.width.max(1.0), c.height.max(1.0)))
+        .unwrap_or((text.width.max(1.0), text.height.max(1.0)));
+
+    let top_left = anchor_to(text.anchor.unwrap_or_default(), [text.x, text.y], width, height);
+    (top_left[0], top_left[1], width, height)
+}
+
+pub fn line_start_grapheme_index(text: &str, line_i: usize) -> usize {
+    text.split('\n')
+        .take(line_i)
+        .map(|line| line.graphemes(true).count() + 1)
+        .sum()
+}
+
 fn navigate_vertical(text: &UiButtonText, up: bool) -> Option<usize> {
-    if text.glyph_bounds.is_empty() {
+    let (caret_x, caret_y) = get_caret_position(text);
+    let (_, _, _, _) = text_top_left(text);
+
+    let mut lines: Vec<(usize, f32, f32)> = Vec::new(); // (line_i, absolute_top, line_height)
+
+    let (text_left, text_top, _, _) = text_top_left(text);
+    for run in text.buffer.layout_runs() {
+        lines.push((run.line_i, text_top + run.line_top, run.line_height));
+    }
+
+    if lines.is_empty() {
         return None;
     }
 
-    let (caret_x, caret_y) = get_caret_position(text);
+    let current_idx = lines
+        .iter()
+        .enumerate()
+        .find(|(_, (_, top, height))| caret_y >= *top && caret_y <= *top + *height)
+        .map(|(i, _)| i)
+        .or_else(|| {
+            lines
+                .iter()
+                .enumerate()
+                .min_by(|a, b| {
+                    let a_center = a.1.1 + a.1.2 * 0.5;
+                    let b_center = b.1.1 + b.1.2 * 0.5;
+                    (caret_y - a_center)
+                        .abs()
+                        .partial_cmp(&(caret_y - b_center).abs())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(i, _)| i)
+        })?;
 
-    // Collect unique line Y values
-    let mut line_ys: Vec<f32> = Vec::new();
-    for rect in &text.glyph_bounds {
-        let y = rect.min.y;
-        if !line_ys.iter().any(|&ly| (ly - y).abs() < 0.5) {
-            line_ys.push(y);
-        }
-    }
-    line_ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-    // Find current line index
-    let current_line = line_ys.iter().position(|&y| (y - caret_y).abs() < 0.5)?;
-
-    // Find target line index
-    let target_line = if up {
-        current_line.checked_sub(1)?
+    let target_idx = if up {
+        current_idx.checked_sub(1)?
     } else {
-        let next = current_line + 1;
-        if next >= line_ys.len() {
+        let next = current_idx + 1;
+        if next >= lines.len() {
             return None;
         }
         next
     };
 
-    let target_y = line_ys[target_line];
-
-    // Find the best caret position on target line at similar X
-    find_caret_at_x_on_line(text, caret_x, target_y)
+    let target_line_top = lines[target_idx].1;
+    find_caret_at_x_on_line(text, caret_x, target_line_top)
 }
 
-fn get_caret_position(t: &UiButtonText) -> (f32, f32) {
-    if t.glyph_bounds.is_empty() {
-        let pos = anchor_to(
-            t.anchor.unwrap_or(Anchor::Center),
-            [t.x, t.y],
-            t.width,
-            t.height,
-        );
-        return pos.into();
+pub fn get_caret_position(t: &UiButtonText) -> (f32, f32) {
+    let (text_left, text_top, _, _) = text_top_left(t);
+    let caret = t.caret;
+
+    let mut last_pos = (text_left, text_top);
+
+    for run in t.buffer.layout_runs() {
+        let line_start = line_start_grapheme_index(&t.text, run.line_i);
+        let line_grapheme_count = run.text.graphemes(true).count();
+        let line_end = line_start + line_grapheme_count;
+        let line_top = text_top + run.line_top;
+
+        let mut caret_x = run.line_w;
+
+        if caret <= line_end {
+            let caret_in_line = caret.saturating_sub(line_start).min(line_grapheme_count);
+
+            if run.glyphs.is_empty() {
+                caret_x = 0.0;
+            } else {
+                for glyph in run.glyphs {
+                    let cluster = &run.text[glyph.start..glyph.end];
+                    let cluster_start = run.text[..glyph.start].graphemes(true).count();
+                    let cluster_len = cluster.graphemes(true).count();
+                    let cluster_end = cluster_start + cluster_len;
+
+                    if caret_in_line <= cluster_start {
+                        caret_x = glyph.x;
+                        break;
+                    }
+
+                    if caret_in_line < cluster_end {
+                        let offset = caret_in_line - cluster_start;
+                        caret_x = glyph.x
+                            + glyph.w * (offset as f32 / cluster_len.max(1) as f32);
+                        break;
+                    }
+
+                    caret_x = glyph.x + glyph.w;
+                }
+            }
+
+            return (text_left + caret_x, line_top);
+        }
+
+        last_pos = (text_left + run.line_w, line_top);
     }
 
-    if t.caret == 0 {
-        let rect = &t.glyph_bounds[0];
-        return (rect.min.x, rect.min.y);
-    }
-
-    if t.caret >= t.glyph_bounds.len() {
-        let rect = t.glyph_bounds.last().unwrap();
-        return (rect.max.x, rect.min.y);
-    }
-
-    let rect = &t.glyph_bounds[t.caret];
-    (rect.min.x, rect.min.y)
+    last_pos
 }
 
-fn find_caret_at_x_on_line(text: &UiButtonText, target_x: f32, line_y: f32) -> Option<usize> {
-    let mut best_idx = 0;
-    let mut best_dist = f32::MAX;
-    let mut found = false;
+fn find_caret_at_x_on_line(
+    text: &UiButtonText,
+    target_x: f32,
+    line_y: f32,
+) -> Option<usize> {
+    let (text_left, text_top, _, _) = text_top_left(text);
+    let epsilon = 0.5f32;
 
-    for (i, rect) in text.glyph_bounds.iter().enumerate() {
-        if (rect.min.y - line_y).abs() > 0.5 {
+    for run in text.buffer.layout_runs() {
+        let abs_top = text_top + run.line_top;
+
+        if (abs_top - line_y).abs() > epsilon {
             continue;
         }
-        found = true;
 
-        // Check left edge (caret before this glyph)
-        let dist_left = (rect.min.x - target_x).abs();
-        if dist_left < best_dist {
-            best_dist = dist_left;
-            best_idx = i;
+        let line_start = line_start_grapheme_index(&text.text, run.line_i);
+        let line_len = run.text.graphemes(true).count();
+
+        if run.glyphs.is_empty() {
+            return Some(line_start);
         }
 
-        // Check right edge (caret after this glyph)
-        let dist_right = (rect.max.x - target_x).abs();
-        if dist_right < best_dist {
-            best_dist = dist_right;
-            best_idx = i + 1;
+        let mut best_idx = line_start;
+        let mut best_dist = f32::MAX;
+
+        for glyph in run.glyphs {
+            let cluster = &run.text[glyph.start..glyph.end];
+            let graphemes: Vec<_> = cluster.grapheme_indices(true).collect();
+
+            if graphemes.is_empty() {
+                continue;
+            }
+
+            let cluster_start = run.text[..glyph.start].graphemes(true).count();
+            let cluster_len = graphemes.len();
+
+            for i in 0..=cluster_len {
+                let x = text_left
+                    + glyph.x
+                    + glyph.w * (i as f32 / cluster_len as f32);
+
+                let dist = (target_x - x).abs();
+
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_idx = line_start + cluster_start + i;
+                }
+            }
         }
+
+        return Some(best_idx.min(line_start + line_len));
     }
 
-    if found {
-        Some(best_idx.min(text.glyph_bounds.len()))
-    } else {
-        None
-    }
+    None
 }
 
 fn handle_selection_collapse(input: &mut Input, text: &mut UiButtonText, dirty: &mut LayerDirty) {
@@ -546,48 +656,41 @@ fn handle_selection_collapse(input: &mut Input, text: &mut UiButtonText, dirty: 
 }
 
 fn pick_caret(text: &UiButtonText, mx: f32, my: f32) -> usize {
-    if text.glyph_bounds.is_empty() {
-        return 0;
-    }
+    let (text_left, text_top, _, _) = text_top_left(text);
 
-    let mut best_idx = 0;
+    let mut best_line_top: Option<f32> = None;
     let mut best_dist = f32::MAX;
 
-    for (i, rect) in text.glyph_bounds.iter().enumerate() {
-        let line_top = rect.min.y;
-        let line_bottom = rect.max.y;
+    for run in text.buffer.layout_runs() {
+        let line_top = text_top + run.line_top;
+        let line_bottom = line_top + run.line_height;
 
-        if my >= line_top && my < line_bottom {
-            let glyph_center_x = (rect.min.x + rect.max.x) * 0.5;
-            if mx < glyph_center_x {
-                return i;
-            }
-            best_idx = i + 1;
+        if my >= line_top && my <= line_bottom {
+            best_line_top = Some(line_top);
+            break;
         }
 
-        let center_y = (rect.min.y + rect.max.y) * 0.5;
+        let center_y = line_top + run.line_height * 0.5;
         let dist = (my - center_y).abs();
         if dist < best_dist {
             best_dist = dist;
-            let glyph_center_x = (rect.min.x + rect.max.x) * 0.5;
-            if mx < glyph_center_x {
-                best_idx = i;
-            } else {
-                best_idx = i + 1;
-            }
+            best_line_top = Some(line_top);
         }
     }
 
-    best_idx.min(text.glyph_bounds.len())
+    let Some(line_top) = best_line_top else {
+        return 0;
+    };
+
+    find_caret_at_x_on_line(text, mx, line_top).unwrap_or(0)
 }
 
-fn caret_to_byte(text: &str, caret: usize) -> usize {
-    text.char_indices()
+fn caret_to_byte(s: &str, caret: usize) -> usize {
+    s.grapheme_indices(true)
         .nth(caret)
-        .map(|(i, _)| i)
-        .unwrap_or_else(|| text.len())
+        .map(|(index, _)| index)
+        .unwrap_or(s.len())
 }
-
 fn logical_to_byte(char_spans: &[Range<usize>], logical: usize) -> usize {
     if logical == 0 || char_spans.is_empty() {
         0

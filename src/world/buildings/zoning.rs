@@ -12,10 +12,10 @@ use crate::world::buildings::buildings::{
     GarageParams, MiscBuildingParams, RoofMaterial, RoofType, WallMaterial,
 };
 use crate::world::camera::Camera;
-use crate::world::cars::car_structs::{Car, CarId, CarStorage, SimTime};
+use crate::world::cars::car_structs::{Car, CarId, CarMode, CarStorage, SimTime};
 use crate::world::cars::car_subsystem::make_random_car;
 use crate::world::cars::parking::{PARK_L, PARK_W, ParkingSpotId, ParkingStorage};
-use crate::world::cars::partitions::{Address, DestinationType};
+use crate::world::cars::partitions::{Destination};
 use crate::world::roads::road_mesh_manager::{
     ChunkId, Edges, RoadEdgeStorage, RoadEdges, RoadMeshManager, chunk_id_to_coord,
     world_pos_chunk_to_id,
@@ -138,14 +138,15 @@ impl District {
                     let up = Vec3::Y;
 
                     car.quat = Quat::from_rotation_arc(forward, up);
-                    car.destination_addr = zoning.zoning_storage.get_work_place_address(
+                    if let Some(destination) = zoning.zoning_storage.get_work_place_destination(
                         &buildings.storage,
                         car.pos,
                         car_trip_type,
-                        rng,
-                    );
-
-                    callback.new_cars.push((lot_id, Some(car)));
+                        rng
+                    ) {
+                        car.mode = CarMode::Driving(destination);
+                        callback.new_cars.push((lot_id, Some(car)));
+                    }
                 };
 
                 let Some(lot) = zoning
@@ -944,7 +945,7 @@ impl ZoningType {
             _ => ZoningType::None,
         }
     }
-    pub fn is_workplace(&self) -> bool {
+    pub fn is_workplace(&self) -> bool { // TODO: Too black and white for later... Later, I want buildings with multiple zoning types in percentages stored in the building (Or rather, lot layout?). So a Residential building with small shops on the ground floor can work, like in Baltimor, California. (New Hampshire)
         match self {
             ZoningType::None => false,
             ZoningType::Residential => false,
@@ -2665,7 +2666,7 @@ impl LotLayout {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 #[revisioned(revision = 1)]
 pub struct LotEntrance {
     pub pos: WorldPos,
@@ -2717,13 +2718,13 @@ pub struct ZoningStorage {
 }
 
 impl ZoningStorage {
-    pub fn get_work_place_address(
+    pub fn get_work_place_destination(
         &self,
         buildings: &BuildingStorage,
         pos: WorldPos,
         car_trip_type: CarTripType,
         rng: &mut impl Rng,
-    ) -> Option<Address> {
+    ) -> Option<Destination> {
         const MAX_COMMUTE_DISTANCE: f64 = 1500.0;
         const MAX_DIST2: f64 = MAX_COMMUTE_DISTANCE * MAX_COMMUTE_DISTANCE;
         const EPS: f64 = 1.0;
@@ -2735,6 +2736,7 @@ impl ZoningStorage {
 
         for lot_id in lot_ids_to_consider {
             let lot = self.get_lot(lot_id)?;
+            if lot.layout.is_none() { continue; };
             if !lot.zoning_type.is_workplace() {
                 continue;
             }
@@ -2771,14 +2773,12 @@ impl ZoningStorage {
         let building = buildings.get(building_id)?;
         let partition_id = buildings.get_partition_of_building(building_id)?;
 
-        Some(Address {
-            destination: DestinationType::Building(
-                lot.district_id,
-                partition_id,
-                lot.segment_id,
-                building_id,
-            ),
-        })
+        Some(Destination::Building(
+            lot.district_id,
+            partition_id,
+            lot.segment_id,
+            building_id,
+        ))
     }
     pub fn get_work_place(
         &self,

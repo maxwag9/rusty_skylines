@@ -140,9 +140,7 @@ impl Simulation {
             &renderer.road_renderer.mesh_manager.road_edge_storage,
             camera.target,
         );
-        world
-            .city_state
-            .update(&world.time, &mut world.zoning, &world.buildings);
+        world.city_state.update(&world.time, &mut world.zoning, &world.buildings);
     }
 }
 

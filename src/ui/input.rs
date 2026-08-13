@@ -89,34 +89,6 @@ enum BindingKey {
     AnyAlt,
 }
 
-#[derive(Debug, Clone)]
-pub struct ParsedKeyCombo {
-    pub require_ctrl: bool,
-    pub require_shift: bool,
-    pub require_alt: bool,
-    pub require_mouse_left: bool,
-    pub require_mouse_right: bool,
-    pub require_mouse_middle: bool,
-    pub require_mouse_back: bool,
-    pub require_mouse_forward: bool,
-    pub key: BindingKey,
-}
-
-impl ParsedKeyCombo {
-    pub fn matches(&self, input: &Input) -> bool {
-        let modifiers_ok = (!self.require_ctrl || input.ctrl)
-            && (!self.require_shift || input.shift)
-            && (!self.require_alt || input.alt)
-            && (!self.require_mouse_left || input.mouse.is_button_down(MouseButton::Left))
-            && (!self.require_mouse_right || input.mouse.is_button_down(MouseButton::Right))
-            && (!self.require_mouse_middle || input.mouse.is_button_down(MouseButton::Middle))
-            && (!self.require_mouse_back || input.mouse.is_button_down(MouseButton::Back))
-            && (!self.require_mouse_forward || input.mouse.is_button_down(MouseButton::Forward));
-
-        modifiers_ok && input.key_active(&self.key)
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionBind {
     pub keys: Vec<String>,
@@ -241,7 +213,7 @@ impl Mouse {
 pub struct Input {
     pub physical: HashMap<PhysicalKey, bool>,
     pub logical: HashMap<NamedKey, bool>,
-    pub text_chars: HashSet<String>,
+    pub text_input: Vec<String>,
 
     pub shift: bool,
     pub ctrl: bool,
@@ -260,11 +232,9 @@ pub struct Input {
 
     generation: u64,
     action_cache: HashMap<String, CachedEdge>,
-    gameplay_cache: HashMap<String, CachedEdge>,
     combo_cache: HashMap<String, CachedEdge>,
 
     logical_just_pressed: HashSet<NamedKey>,
-    pub gameplay_repeat_timers: HashMap<String, RepeatTimer>,
     pub gamepad_buttons: HashMap<GamepadButton, bool>,
     pub left_stick: Vec2,
     pub right_stick: Vec2,
@@ -277,13 +247,18 @@ pub struct Input {
 
 impl Input {
     pub fn new() -> Self {
-        let keybinds = Keybinds::load(data_dir("keybinds.toml"), data_dir("default_keybinds.toml"));
+        let keybinds = Keybinds::load(
+            data_dir("keybinds.toml"),
+            data_dir("default_keybinds.toml"),
+        );
         let parsed = Self::parse_all(&keybinds);
-        let clipboard = Clipboard::new().expect("[Fatal] Clipboard creation failed in Input::new");
+        let clipboard = Clipboard::new()
+            .expect("[Fatal] Clipboard creation failed in Input::new");
+
         Self {
             physical: HashMap::new(),
             logical: HashMap::new(),
-            text_chars: HashSet::new(),
+            text_input: Vec::new(),
             shift: false,
             ctrl: false,
             alt: false,
@@ -293,19 +268,13 @@ impl Input {
             scroll_down_hit: false,
             scroll_left_hit: false,
             scroll_right_hit: false,
-
             parsed,
             warned_missing: HashSet::new(),
             repeat_timers: HashMap::new(),
-
             generation: 0,
             action_cache: HashMap::new(),
-            gameplay_cache: HashMap::new(),
             combo_cache: HashMap::new(),
-
             logical_just_pressed: HashSet::new(),
-            gameplay_repeat_timers: HashMap::new(),
-
             gamepad_buttons: HashMap::new(),
             left_stick: Vec2::ZERO,
             right_stick: Vec2::ZERO,
@@ -348,17 +317,19 @@ impl Input {
         self.scroll_right_hit = false;
 
         self.mouse.update_just_states();
-        self.text_chars.clear();
+        self.text_input.clear();
         self.logical_just_pressed.clear();
 
         self.mark_changed();
     }
+
+
     pub fn reset_all(&mut self, now: f64) {
         self.now = now;
 
         self.physical.clear();
         self.logical.clear();
-        self.text_chars.clear();
+        self.text_input.clear();
 
         self.shift = false;
         self.ctrl = false;
@@ -372,10 +343,9 @@ impl Input {
         self.scroll_right_hit = false;
 
         self.logical_just_pressed.clear();
-
         self.repeat_timers.clear();
-        self.gameplay_repeat_timers.clear();
     }
+
 
     pub fn handle_mouse_button(&mut self, button: MouseButton, state: ElementState) {
         let down = state == ElementState::Pressed;
@@ -411,6 +381,7 @@ impl Input {
         out
     }
 
+
     pub fn handle_gamepads(&mut self) {
         while let Some(Event { event, .. }) = self.gilrs.next_event() {
             match event {
@@ -430,27 +401,21 @@ impl Input {
                     Axis::LeftStickX => {
                         self.left_stick.x = apply_deadzone(value);
                     }
-
                     Axis::LeftStickY => {
                         self.left_stick.y = apply_deadzone(-value);
                     }
-
                     Axis::RightStickX => {
                         self.right_stick.x = apply_deadzone(value);
                     }
-
                     Axis::RightStickY => {
                         self.right_stick.y = apply_deadzone(-value);
                     }
-
                     Axis::LeftZ => {
                         self.left_trigger = value;
                     }
-
                     Axis::RightZ => {
                         self.right_trigger = value;
                     }
-
                     _ => {}
                 },
 
@@ -461,6 +426,7 @@ impl Input {
 
     pub fn set_physical(&mut self, key: PhysicalKey, down: bool) {
         let old = self.physical.get(&key).copied().unwrap_or(false);
+
         if old != down {
             self.physical.insert(key, down);
             self.mark_changed();
@@ -469,24 +435,20 @@ impl Input {
 
     pub fn set_logical(&mut self, key: NamedKey, down: bool) {
         let old = self.logical.get(&key).copied().unwrap_or(false);
+
         if old != down {
             if down {
                 self.logical_just_pressed.insert(key);
             }
+
             self.logical.insert(key, down);
             self.mark_changed();
         }
     }
 
-    pub fn set_character(&mut self, ch: &str, down: bool) {
-        let changed = if down {
-            self.text_chars.insert(ch.to_string())
-        } else {
-            self.text_chars.remove(ch)
-        };
-
-        if changed {
-            self.mark_changed();
+    pub fn add_text_input(&mut self, text: &str) {
+        if !text.is_empty() {
+            self.text_input.push(text.to_string());
         }
     }
 
@@ -568,14 +530,17 @@ impl Input {
 
     fn parse_all(keybinds: &Keybinds) -> HashMap<String, Vec<ParsedKeyCombo>> {
         let mut out = HashMap::new();
+
         for (name, bind) in &keybinds.binds {
             let combos = bind
                 .keys
                 .iter()
                 .filter_map(|s| parse_combo(s))
                 .collect::<Vec<_>>();
+
             out.insert(name.clone(), combos);
         }
+
         out
     }
 
@@ -664,7 +629,7 @@ impl Input {
         match key {
             BindingKey::Physical(p) => self.physical.get(p).copied().unwrap_or(false),
             BindingKey::Logical(l) => self.logical.get(l).copied().unwrap_or(false),
-            BindingKey::Character(c) => self.text_chars.contains(c.as_str()),
+            BindingKey::Character(c) => self.text_input.contains(c),
             BindingKey::Gamepad(g) => self.gamepad_buttons.get(g).copied().unwrap_or(false),
             BindingKey::Mouse(m) => self.mouse.is_button_down(*m),
             BindingKey::WheelUp => self.scroll_up_hit,
@@ -675,55 +640,6 @@ impl Input {
             BindingKey::AnyCtrl => self.ctrl,
             BindingKey::AnyAlt => self.alt,
         }
-    }
-
-    pub fn gameplay_down(&mut self, action: &str) -> bool {
-        if !self.ensure_known_action(action) {
-            return false;
-        }
-
-        if let Some(combos) = self.parsed.get(action) {
-            for combo in combos {
-                let modifiers_ok = (!combo.require_ctrl || self.ctrl)
-                    && (!combo.require_shift || self.shift)
-                    && (!combo.require_alt || self.alt);
-
-                if modifiers_ok && self.key_active(&combo.key) {
-                    return true;
-                }
-            }
-        }
-
-        false
-    }
-
-    pub fn gameplay_pressed_once(&mut self, action: &str) -> bool {
-        if !self.ensure_known_action(action) {
-            return false;
-        }
-
-        let now_down = self.gameplay_down(action);
-        let generation = self.generation;
-        Self::cached_edge_for(generation, &mut self.gameplay_cache, action, now_down).pressed_once
-    }
-
-    pub fn gameplay_released(&mut self, action: &str) -> bool {
-        if !self.ensure_known_action(action) {
-            return false;
-        }
-
-        let now_down = self.gameplay_down(action);
-        let generation = self.generation;
-        Self::cached_edge_for(generation, &mut self.gameplay_cache, action, now_down).released
-    }
-
-    pub fn gameplay_repeat(&mut self, action: &str) -> bool {
-        let down = self.gameplay_down(action);
-        let timer = self
-            .gameplay_repeat_timers
-            .entry(action.to_string())
-            .or_insert_with(RepeatTimer::new);
-        timer.tick(self.now, down)
     }
 
     pub fn named_just_pressed(&mut self, key: NamedKey) -> bool {
@@ -770,7 +686,123 @@ struct CachedEdge {
     pressed_once: bool,
     released: bool,
 }
+
+#[derive(Clone, Debug)]
+struct ParsedKeyCombo {
+    require_ctrl: bool,
+    require_shift: bool,
+    require_alt: bool,
+    require_mouse_left: bool,
+    require_mouse_right: bool,
+    require_mouse_middle: bool,
+    require_mouse_back: bool,
+    require_mouse_forward: bool,
+    strict: bool,
+    key: BindingKey,
+}
+
+impl ParsedKeyCombo {
+    fn matches(&self, input: &Input) -> bool {
+        if !input.key_active(&self.key) {
+            return false;
+        }
+
+        if self.require_ctrl && !input.ctrl {
+            return false;
+        }
+
+        if self.require_shift && !input.shift {
+            return false;
+        }
+
+        if self.require_alt && !input.alt {
+            return false;
+        }
+
+        if self.require_mouse_left && !input.mouse.is_button_down(MouseButton::Left) {
+            return false;
+        }
+
+        if self.require_mouse_right && !input.mouse.is_button_down(MouseButton::Right) {
+            return false;
+        }
+
+        if self.require_mouse_middle && !input.mouse.is_button_down(MouseButton::Middle) {
+            return false;
+        }
+
+        if self.require_mouse_back && !input.mouse.is_button_down(MouseButton::Back) {
+            return false;
+        }
+
+        if self.require_mouse_forward && !input.mouse.is_button_down(MouseButton::Forward) {
+            return false;
+        }
+
+        if !self.strict {
+            return true;
+        }
+
+        if input.ctrl != self.require_ctrl {
+            return false;
+        }
+
+        if input.shift != self.require_shift {
+            return false;
+        }
+
+        if input.alt != self.require_alt {
+            return false;
+        }
+
+        let mouse_left = input.mouse.is_button_down(MouseButton::Left);
+        let mouse_right = input.mouse.is_button_down(MouseButton::Right);
+        let mouse_middle = input.mouse.is_button_down(MouseButton::Middle);
+        let mouse_back = input.mouse.is_button_down(MouseButton::Back);
+        let mouse_forward = input.mouse.is_button_down(MouseButton::Forward);
+
+        if mouse_left != self.require_mouse_left {
+            return false;
+        }
+
+        if mouse_right != self.require_mouse_right {
+            return false;
+        }
+
+        if mouse_middle != self.require_mouse_middle {
+            return false;
+        }
+
+        if mouse_back != self.require_mouse_back {
+            return false;
+        }
+
+        if mouse_forward != self.require_mouse_forward {
+            return false;
+        }
+
+        true
+    }
+}
+
 fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
+    let trimmed = s.trim();
+
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let strict = !trimmed.ends_with('!');
+    let combo = if strict {
+        trimmed
+    } else {
+        trimmed[..trimmed.len() - 1].trim_end()
+    };
+
+    if combo.is_empty() {
+        return None;
+    }
+
     let mut require_ctrl = false;
     let mut require_shift = false;
     let mut require_alt = false;
@@ -781,7 +813,7 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
     let mut require_mouse_forward = false;
     let mut key_part: Option<BindingKey> = None;
 
-    for raw in s.split('+') {
+    for raw in combo.split('+') {
         let t = raw.trim();
 
         if t.eq_ignore_ascii_case("ctrl") || t.eq_ignore_ascii_case("control") {
@@ -791,7 +823,6 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
         } else if t.eq_ignore_ascii_case("alt") {
             require_alt = true;
         } else if let Some(m) = map_to_mouse(t) {
-            // Treat mouse buttons as modifiers
             match m {
                 MouseButton::Left => require_mouse_left = true,
                 MouseButton::Right => require_mouse_right = true,
@@ -800,7 +831,7 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
                 MouseButton::Forward => require_mouse_forward = true,
                 _ => {}
             }
-            // If no other key found yet, use this as the main key
+
             if key_part.is_none() {
                 key_part = Some(BindingKey::Mouse(m));
             }
@@ -823,7 +854,6 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
         }
     }
 
-    // If no key found, promote last modifier to be the key
     if key_part.is_none() {
         if require_shift {
             key_part = Some(BindingKey::AnyShift);
@@ -848,6 +878,7 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
         require_mouse_middle,
         require_mouse_back,
         require_mouse_forward,
+        strict,
         key,
     })
 }

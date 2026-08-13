@@ -641,7 +641,7 @@ impl PlannedNode {
     pub fn position(&self, storage: &RoadStorage) -> Option<WorldPos> {
         match self {
             PlannedNode::Existing(id) => {
-                let node = storage.node(*id)?;
+                let node = storage.node(*id);
                 Some(node.pos())
             }
             PlannedNode::New { pos } => Some(*pos),

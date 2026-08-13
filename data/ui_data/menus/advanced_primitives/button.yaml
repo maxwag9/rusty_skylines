@@ -1,0 +1,57 @@
+name: button
+elements:
+  # Outer border
+  - !Rect
+    id: Button_Background
+    actions:
+      - "in:any, as:[str:button_text], set(str:as.pt, {ap.1}); set(str:self.size, expr:{as.size}*1.4); call(str:{ap.2});"
+      - "in:any, set(str:x, expr:{self.center.x}/{screen.x}); set(str:y, expr:{self.center.y}/{screen.y}); set(str:corner, expr:exp(-8.0*({x}*{x} + {y}*{y}))); set(str:self.color.border, [corner, expr:1-{corner}, expr:1-{corner}, 1])"
+    x: 0
+    y: 0
+    w: 150
+    h: 40
+    color:
+      - 0.8
+      - 0.8
+      - 0.8
+      - 0.05
+    border_color:
+      - 0.0
+      - 1.0
+      - 1.0
+      - 1.0
+    roundness: 0.20
+    border_thickness_percentage: 0.04
+  # inner indicator
+  #  - !Rect
+  #    id: Checkbox Indicator
+  #    actions:
+  #      - on:release, toggle(str:{ap})
+  #      #- button:a show_interaction(self.color.fill) # buggy
+  #      - on:release on:activated button:a, ifvareq({ap}, bool:false, set_var(str:self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(str:self.color.fill, [0.0, 0.5, 0.0, 1.0]))
+  #    x: 0.0
+  #    y: 0.0
+  #    w: 40
+  #    h: 40
+  #    color:
+  #      - 0.00
+  #      - 0.50
+  #      - 0.0
+  #      - 1.0
+  #    roundness: 0.5
+  - !Text
+    id: button_text
+    x: 0
+    y: 0
+    pt: 25.0
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 0.9
+    text: '{{ap.0}}'
+    anchor: Center
+    misc:
+      active: true
+      touchable: false
+      editable: true

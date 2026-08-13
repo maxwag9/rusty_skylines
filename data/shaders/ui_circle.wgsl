@@ -23,7 +23,7 @@ struct CircleParams {
     fade: f32,
     style: u32,
     inside_border_thickness_percentage: f32,
-    _pad0: u32,
+    depth: f32
 };
 
 @group(1) @binding(0)
@@ -57,7 +57,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let x = (world.x / screen.size.x) * 2.0 - 1.0;
     let y = 1.0 - (world.y / screen.size.y) * 2.0;
 
-    out.pos = vec4<f32>(x, y, 0.0, 1.0);
+    out.pos = vec4<f32>(x, y, params.depth, 1.0);
     out.local_pos = world;
     out.circle_index = in.instance;
 

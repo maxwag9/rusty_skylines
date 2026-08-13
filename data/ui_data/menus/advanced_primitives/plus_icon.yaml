@@ -4,8 +4,8 @@ elements:
     id: east_west
     x: 0.0
     y: 0.0
-    w: 0.08
-    h: 0.01
+    w: 10
+    h: 2
     rotation: 0.0
     color:
       - 0.03
@@ -13,13 +13,13 @@ elements:
       - 0.03
       - 0.6
     border_color:
-      - 0.1
-      - 0.1
-      - 0.1
-      - 0.9
+      - 0.01
+      - 0.01
+      - 0.01
+      - 1.0
     texture: null
-    roundness: 0.4
-    border_thickness_percentage: 0.0
+      roundness: 0.7
+    border_thickness_percentage: 0.2
     fade: 0.0
     blur: 4.0
     glow_misc: { }
@@ -31,8 +31,8 @@ elements:
     id: north_south
     x: 0.0
     y: 0.0
-    w: 0.01
-    h: 0.1
+    w: 2
+    h: 10
     rotation: 0.0
     color:
       - 0.03
@@ -40,13 +40,13 @@ elements:
       - 0.93
       - 0.6
     border_color:
-      - 0.1
-      - 0.1
-      - 0.1
-      - 0.9
+      - 0.01
+      - 0.01
+      - 0.01
+      - 1.0
     texture: null
-    roundness: 0.4
-    border_thickness_percentage: 0.0
+    roundness: 0.7
+    border_thickness_percentage: 0.2
     fade: 0.0
     blur: 4.0
     glow_misc: { }

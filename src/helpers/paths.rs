@@ -120,7 +120,7 @@ pub fn next_screenshot_path() -> PathBuf {
     let dir = screenshots_dir();
 
     let now = chrono::Local::now();
-    let base = now.format("%Y-%m-%d__%Hh-%Mm-%Ss").to_string(); // "2026-10-13__13h-56m-03s"
+    let base = now.format("RS_%Y-%m-%d_%H.%M.%S").to_string(); // "RS_2026-10-13_13.56.03"
 
     // Try without suffix first
     let path = dir.join(format!("{}.png", base));
@@ -130,7 +130,7 @@ pub fn next_screenshot_path() -> PathBuf {
     }
 
     // If exists, append _2, _3, ...
-    for i in 2.. {
+    for i in 2..69 {
         let candidate = dir.join(format!("{}_{}.png", base, i));
         if !candidate.exists() {
             return candidate;

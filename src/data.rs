@@ -50,24 +50,21 @@ pub trait Cycle {
     fn cycle_options() -> Vec<Value>;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Display, EnumString)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, Display, EnumString, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum BendMode {
+    #[default]
     Strict,
     Bent,
     #[serde(other)]
     Unknown,
 }
-impl Default for BendMode {
-    fn default() -> Self {
-        BendMode::Strict
-    }
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize, Display, EnumString)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, Display, EnumString, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum PresentModeSetting {
     Immediate,
+    #[default]
     Mailbox,
     Fifo,
     #[serde(other)]
@@ -83,14 +80,10 @@ impl PresentModeSetting {
         }
     }
 }
-impl Default for PresentModeSetting {
-    fn default() -> Self {
-        PresentModeSetting::Mailbox
-    }
-}
 
-#[derive(Clone, Debug, Deserialize, Serialize, Display, EnumString)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Display, EnumString, Default)]
 pub enum DebugViewState {
+    #[default]
     Off,
     Normals,
     Depth,
@@ -100,44 +93,35 @@ pub enum DebugViewState {
     Motion,
     Texture,
 }
-impl Default for DebugViewState {
-    fn default() -> Self {
-        Self::Off
-    }
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Display, EnumString, Default)]
+pub enum FullScreenMode {
+    Windowed,
+    #[default]
+    Borderless,
+    Fullscreen
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Display, EnumString)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Display, EnumString, Default)]
 pub enum InternalMenu {
     None,
-    MainMenu,
-}
-impl Default for InternalMenu {
-    fn default() -> Self {
-        Self::MainMenu
-    }
+    #[default]
+    MainMenu
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Display, EnumString)]
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Display, EnumString, Default)]
 pub enum LodCenterType {
     Eye,
+    #[default]
     Target,
 }
-impl Default for LodCenterType {
-    fn default() -> Self {
-        Self::Target
-    }
-}
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Display, EnumString)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Display, EnumString, Default)]
 pub enum ShadowType {
     OFF,
+    #[default]
     CSM,
-    RT,
-}
-impl Default for ShadowType {
-    fn default() -> Self {
-        Self::CSM
-    }
+    RT
 }
 
 impl_cycle!(BendMode: BendMode::Strict, BendMode::Bent);
@@ -168,6 +152,8 @@ impl_cycle!(ShadowType: ShadowType::OFF, ShadowType::CSM, ShadowType::RT);
 impl_cycle!(ToneMappingState: ToneMappingState::Off, ToneMappingState::Cinematic, ToneMappingState::GoldenHour, ToneMappingState::Mexico, ToneMappingState::Night, ToneMappingState::Overcast, ToneMappingState::SunnyDay);
 
 impl_cycle!(ColorGradeState: ColorGradeState::Off, ColorGradeState::Mexico, ColorGradeState::Vintage, ColorGradeState::Cold, ColorGradeState::HighContrast);
+
+impl_cycle!(FullScreenMode: FullScreenMode::Borderless, FullScreenMode::Fullscreen, FullScreenMode::Windowed);
 
 // ============ Simplified SettingValue ============
 
@@ -524,7 +510,8 @@ impl_setting_convert_enum!(
     InternalMenu,
     LodCenterType,
     ToneMappingState,
-    ColorGradeState
+    ColorGradeState,
+    FullScreenMode
 );
 
 // ============ Settings Macros ============
@@ -742,6 +729,7 @@ macro_rules! define_settings {
 define_settings! {
     TargetFps => target_fps: f32 = 60.0; Val,
     TargetTps => target_tps: f32 = 60.0; Val,
+    FullScreenMode => fullscreen_mode: FullScreenMode = FullScreenMode::Borderless; Cycle,
     PresentMode => present_mode: PresentModeSetting = PresentModeSetting::Mailbox; Cycle,
     EditorMode => editor_mode: bool = false; Bool,
     OverrideMode => override_mode: bool = false; Bool,

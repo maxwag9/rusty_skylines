@@ -1,11 +1,12 @@
 use crate::helpers::positions::{ChunkCoord, WorldPos};
 use crate::world::buildings::buildings::{BuildingId, Buildings};
-use crate::world::buildings::zoning::DistrictId;
+use crate::world::buildings::zoning::{DistrictId, LotEntrance};
 use crate::world::roads::road_structs::{NodeId, SegmentId};
 use crate::world::roads::roads::{RoadRegionId, RoadStorage};
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use crate::world::cars::parking::ParkingSpotId;
 
 pub type PartitionId = u32;
 pub type LaneT = f32;
@@ -24,31 +25,62 @@ pub enum RouteStatus {
     Invalid,
 }
 
-#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Serialize, Deserialize)]
-pub enum DestinationType {
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
+pub enum Destination {
     // Node(NodeId),
     // Segment(LaneId, LaneT),
     Building(DistrictId, PartitionId, SegmentId, BuildingId),
+    ParkingSpot(LotEntrance, ParkingSpotId, BuildingId)
 }
-impl DestinationType {
+impl Destination {
     #[inline]
     pub fn as_building(&self) -> Option<(DistrictId, PartitionId, SegmentId, BuildingId)> {
         match *self {
-            DestinationType::Building(district_id, partition_id, segment_id, building_id) => {
+            Destination::Building(district_id, partition_id, segment_id, building_id) => {
                 Some((district_id, partition_id, segment_id, building_id))
             }
+            _ => None,
         }
     }
     #[inline]
     pub fn as_building_id(&self) -> Option<BuildingId> {
-        self.as_building().map(|(_, _, _, b_id)| b_id)
+        match self {
+            Destination::Building(.., building_id) => {
+                Some(*building_id)
+            }
+            Destination::ParkingSpot(_, _, building_id) => {
+                Some(*building_id)
+            }
+        }
+    }
+
+    #[inline]
+    pub fn as_parking_spot(&self) -> Option<(LotEntrance, ParkingSpotId, BuildingId)> {
+        match *self {
+            Destination::ParkingSpot(entrance, parking_spot_id, building_id) => {
+                Some((entrance, parking_spot_id, building_id))
+            }
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn kind(&self) -> DestinationKind {
+        match self {
+            Destination::Building(..) => {
+                DestinationKind::Building
+            }
+            Destination::ParkingSpot(..) => {
+                DestinationKind::ParkingSpot
+            }
+        }
     }
 }
-#[derive(Debug)]
-pub struct Address {
-    pub destination: DestinationType,
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
+pub enum DestinationKind {
+    Building,
+    ParkingSpot,
 }
-
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[revisioned(revision = 1)]
 pub struct Partition {
@@ -417,8 +449,8 @@ impl PartitionManager {
         from: NodeId,
         to: NodeId,
     ) -> RouteStatus {
-        let from_exists = road_storage.node(from).is_some();
-        let to_exists = road_storage.node(to).is_some();
+        let from_exists = road_storage.node_exists(from);
+        let to_exists = road_storage.node_exists(to);
 
         if !from_exists || !to_exists {
             return RouteStatus::Invalid;

@@ -10,7 +10,7 @@ elements:
       #- on:release button:left, print(Name in option:, strexpr:{split("{ap}", ".").0}_open))
       #- on:release button:left, print(Before:, {split("{ap}", ".").0}_open)
 
-      - on:release button:left, set(strexpr:{split("{ap}", ".").0}_open, false)
+      - on:release button:left, set(expr:split("{ap}", ".").0 + "_open", bool:false)
       #- on:release button:left, print({split("{ap}", ".").0}.options)
       #- on:release button:left, print({split("{ap}", ".").0}, {ap})
       #- on:release button:left, print(strexpr:dd_{split("{ap}", ".").0}_layer)
@@ -18,10 +18,10 @@ elements:
       #- on:release button:left, print({split("{ap}", ".").0}_open)
       #- on:release button:left, print(split("{ap}", ".").0)
       #- on:release button:left, print({ap})
-      - on:release button:left, set(strexpr:split("{ap}", ".").0, {ap})
-      - on:release button:left, ifvareq({split("{ap}", ".").0}_open, bool:false, forin({split("{ap}", ".").0}.options, del_ap(self.menu, strexpr:dd_{split("{ap}", ".").0}_layer, strexpr:{split("{ap}", ".").0}_Option_{idx})))
-      #- on:release button:left, print(After:, {split("{ap}", ".").0}_open)
-      - show_interaction([0.2, 0.2, 0.2, 1.0], false)
+      - on:release button:left, set(expr:split("{ap}", ".").0, {ap})
+      - on:release button:left, ifvareq(exprvar:split("{ap}", ".").0 + "_open", bool:false, forin(exprvar:split("{ap}", ".").0 + ".options", del_ap(self.menu, expr:"dd_" + split("{ap}", ".").0 +"_layer", expr:split("{ap}", ".").0 + "_Option_{idx}")))
+      #- on:release button:left, print(After:, {split("{ap}", ".").0}_open)Haha you got the rabbit hide and I got the rabbit meat
+      - show_interaction(None, false)
     x: 0
     y: 0
     w: 160
@@ -43,7 +43,7 @@ elements:
     id: Option Text
     x: 0
     y: 0
-    pt: 11.0
+    pt: 18.0
     color:
       - 1.0
       - 1.0

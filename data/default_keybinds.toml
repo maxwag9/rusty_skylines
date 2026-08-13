@@ -163,6 +163,6 @@ keys = ["Ctrl+F8"]
 keys = ["F2"]
 
 ["Leave Game"]
-keys = ["ESC"]
+keys = ["ESC", "MouseBack"]
 ["Exit to Main Menu"]
-keys = ["ESC"]
+keys = ["ESC", "MouseBack"]

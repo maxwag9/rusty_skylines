@@ -265,7 +265,7 @@ impl Cars {
         match terrain.cursor.mode {
             CursorMode::Cars => {
                 if let Some(picked) = &terrain.last_picked {
-                    if input.gameplay_repeat("Place Car") {
+                    if input.action_repeat("Place Car") {
                         let mut rng = rng();
                         let car = make_random_car(picked.pos, &mut rng);
                         self.car_storage.spawn(car, &road_manager.roads);
@@ -298,7 +298,7 @@ impl Cars {
         let dt = time_system.target_sim_dt;
         let mut to_remove: Vec<usize> = Vec::new();
         for (idx, spawning_node) in self.spawning_nodes.iter_mut().enumerate() {
-            let Some(node) = road_manager.roads.node(spawning_node.node_id) else {
+            let Some(node) = road_manager.roads.node_safe(spawning_node.node_id) else {
                 to_remove.push(idx);
                 continue;
             };

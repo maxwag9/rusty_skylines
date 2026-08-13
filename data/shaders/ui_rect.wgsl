@@ -20,7 +20,8 @@ struct RectGpu {
     glow_misc: vec4<f32>,
     misc: vec4<f32>, // active, touched_time, is_down, hash
     blur: f32,
-    //_pad0: vec3<f32>
+    depth: f32,
+    _pad0: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> screen: ScreenUniform;
@@ -66,7 +67,7 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instance: u32) -> VertexOut
     let ndc = (world_pos / screen.size) * 2.0 - 1.0;
 
     var out: VertexOutput;
-    out.clip_position = vec4<f32>(ndc.x, -ndc.y, 0.0, 1.0);
+    out.clip_position = vec4<f32>(ndc.x, -ndc.y, rect.depth, 1.0);
     out.local_pos = local;
     out.color = rect.color;
     out.border_color = rect.border_color;

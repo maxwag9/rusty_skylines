@@ -8,6 +8,7 @@ struct ScreenUniform {
 struct VertexInput {
     @location(0) pos: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) depth: f32
 };
 
 struct VertexOutput {
@@ -21,7 +22,7 @@ struct VertexOutput {
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     let ndc = (in.pos / screen.size) * 2.0 - vec2<f32>(1.0, 1.0);
-    out.clip_position = vec4<f32>(ndc.x, -ndc.y, 0.0, 1.0);
+    out.clip_position = vec4<f32>(ndc.x, -ndc.y, in.depth, 1.0);
     out.color = in.color;
     return out;
 }

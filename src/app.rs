@@ -1,3 +1,4 @@
+use crate::data::FullScreenMode;
 use crate::data::SettingKey;
 use crate::data::Cycle;
 use crate::resources::Resources;
@@ -20,9 +21,11 @@ use winit::cursor::CustomCursorSource;
 use winit::event::{ElementState, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, NamedKey};
+use winit::monitor::Fullscreen;
 use winit::window::{Window, WindowAttributes, WindowId};
 use crate::helpers::paths::data_dir;
 use crate::renderer::shadows::create_csm_shadow_texture;
+use crate::ui::parser::Value;
 
 const TIME_SPEED_BINDINGS: [(&str, f32); 7] = [
     ("Speed up Time 100x", 100.0),
@@ -77,26 +80,22 @@ impl ApplicationHandler for App {
     }
 
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
-        println!("[app] can_create_surfaces: start");
+        print!("[app] can_create_surfaces: start ");
         let window = Arc::new(
-            event_loop
-                .create_window(
+            event_loop.create_window(
                     WindowAttributes::default()
                         .with_title("Rusty Skylines")
                         .with_surface_size(winit::dpi::PhysicalSize::new(2560, 1400)),
                 )
                 .expect("Failed to create window"),
         );
-        print!("  [app] window created");
+        print!(" [app] window created");
         let mut resources = Resources::new(window.clone(), event_loop);
         let world = &mut resources.world;
         let time = &mut world.time;
         time.set_tps(resources.settings.target_tps.max(1.0));
         time.set_fps(resources.settings.target_fps.max(1.0));
-        resources
-            .ui
-            .variables
-            .set_string("cursor_mode", format!("{:#?}", world.terrain.cursor.mode));
+        resources.ui.variables.set_string("cursor_mode", format!("{:#?}", world.terrain.cursor.mode));
         resources.ui.variables.set_array("screen", vec![window.surface_size().width, window.surface_size().height]);
 
         let width = 32u16;
@@ -161,18 +160,14 @@ impl ApplicationHandler for App {
                         }
                     }
 
-                    Key::Character(ch) => {
-                        if !ch.is_empty() {
-                            input.set_character(ch, down);
-                        }
-                    }
-
                     _ => {}
                 }
-
-                // ---------------------------------------------------------------------
+                if down {
+                    if let Some(text) = event.text.as_deref() {
+                        input.add_text_input(text);
+                    }
+                }
                 // ENGINE ACTIONS (ALL action-based, no direct key checks)! factorial
-                // ---------------------------------------------------------------------
 
                 // MSAA cycle
                 if input.action_repeat("Cycle MSAA") {
@@ -369,9 +364,7 @@ impl ApplicationHandler for App {
             WindowEvent::SurfaceResized(size) => {
                 println!("[event] surface resized: {}x{}", size.width, size.height);
                 if let Some(resources) = self.resources.as_mut() {
-                    resources
-                        .render_core
-                        .resize(&resources.surface, size, &mut resources.ui);
+                    resources.render_core.resize(&resources.surface, size, &mut resources.ui);
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
@@ -460,9 +453,17 @@ impl ApplicationHandler for App {
                 }
                 // FPS cap
                 let elapsed = frame_start.elapsed();
-                let target =
-                    Duration::from_secs_f32(resources.world.time.target_frametime.max(0.0));
-                resources.world.time.end_frame();
+                let target = Duration::from_secs_f32(resources.world.time.target_frametime.max(0.0));
+                let cpu_frametime = resources.world.time.end_frame();
+                resources.ui.variables.set_f64("cpu_frametime", cpu_frametime.as_secs_f64());
+
+                if let Some(pending) = resources.pending_fullscreen_change.take() {
+                    set_fullscreen_mode(resources.window.clone(), resources.settings.fullscreen_mode);
+                }
+                if resources.pending_present_mode_change {
+                    resources.reconfigure_surface();
+                    resources.pending_present_mode_change = false;
+                }
                 if target > Duration::ZERO && elapsed < target {
                     thread::sleep(target - elapsed);
                 }
@@ -528,7 +529,7 @@ fn update_stuff(resources: &mut Resources) {
     } = world;
 
     settings.update_change_tracking();
-
+    //println!("{:#?}", crate::ui::parser::tokenize_expr("None.{index_of([1],2)}"));
     update_picked_pos(
         terrain,
         &world_state.camera,
@@ -659,20 +660,23 @@ fn update_stuff(resources: &mut Resources) {
             );
             ui.variables.set_i64(
                 "highly_educated_population",
-                district
-                    .zoning_demand
-                    .demography
-                    .education
-                    .highly_educated_population(district.zoning_demand.demography.population),
+                district.zoning_demand.demography.education.highly_educated_population(district.zoning_demand.demography.population)
             );
         }
-        let active_menus = ui
-            .menus
-            .iter()
+        let active_menus = ui.menus.iter()
             .filter(|(menu_name, menu)| menu.active == true)
             .map(|(menu_name, menu)| menu_name.clone())
             .collect::<Vec<String>>();
         ui.variables.set_array("active_menus", active_menus);
+
+        ui.variables.set_var("current_save", resources.game_state.current_save_info.clone().map(|save_info| Value::Array(save_info.to_values())).unwrap_or(Value::None));
+
+        ui.variables.set_i64("prop_count", render_core.props.prop_count() as i64);
+        ui.variables.set_i64("generated_prop_count", render_core.props.generated_prop_count() as i64);
+        ui.variables.set_i64("manual_prop_count", render_core.props.manual_prop_count() as i64);
+        ui.variables.set_i64("visible_prop_count", render_core.props.visible_prop_count() as i64);
+        ui.variables.set_i64("visible_generated_prop_count", render_core.props.visible_generated_prop_count() as i64);
+        ui.variables.set_i64("visible_manual_prop_count", render_core.props.visible_manual_prop_count() as i64);
     }
 }
 fn apply_settings(resources: &mut Resources) {
@@ -682,9 +686,61 @@ fn apply_settings(resources: &mut Resources) {
         match key {
             SettingKey::MsaaSamples => resources.render_core.update_msaa(&resources.settings),
 
-            SettingKey::ShadowMapSize => resources.render_core.pipelines.resources.csm_shadows = create_csm_shadow_texture(&resources.render_core.device, resources.settings.shadow_map_size, "Sun CSM"),
+            SettingKey::ShadowMapSize => {
+                resources.render_core.pipelines.resources.csm_shadows = create_csm_shadow_texture(&resources.render_core.device, resources.settings.shadow_map_size, "Sun CSM");
+                resources.render_core.render_manager.invalidate_bind_groups();
+            },
+
+            SettingKey::FullScreenMode => {
+                resources.pending_fullscreen_change = Some(resources.settings.fullscreen_mode);
+            }
+
+            SettingKey::PresentMode => {
+                resources.pending_present_mode_change = true;
+            }
+
+            SettingKey::TargetFps => {
+                resources.world.time.set_fps(resources.settings.target_fps.max(1.0));
+            }
+
+            SettingKey::TargetTps => {
+                resources.world.time.set_tps(resources.settings.target_tps.max(1.0));
+            }
 
             _ => {}
+        }
+    }
+}
+
+fn set_fullscreen_mode(window: Arc<Box<dyn Window>>, mode: FullScreenMode) {
+    match mode {
+        FullScreenMode::Windowed => {
+            window.set_fullscreen(None);
+            window.set_decorations(true);
+        }
+
+        FullScreenMode::Borderless => {
+            let monitor = window.current_monitor();
+
+            window.set_fullscreen(
+                Some(Fullscreen::Borderless(monitor))
+            );
+
+            window.set_decorations(false);
+        }
+
+        FullScreenMode::Fullscreen => {
+            let monitor = window.current_monitor();
+
+            if let Some(monitor) = monitor {
+                let video_mode = monitor
+                    .video_modes()
+                    .max_by_key(|m| m.size().width * m.size().height);
+
+                window.set_fullscreen(
+                    video_mode.map(|video_mode| Fullscreen::Exclusive(monitor, video_mode))
+                );
+            }
         }
     }
 }

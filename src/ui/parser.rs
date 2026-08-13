@@ -1,11 +1,14 @@
-use std::collections::HashSet;
 use crate::data::{SettingKey, Settings};
-use crate::helpers::hsv::{HSV, hsv_to_rgb};
-use crate::ui::variables::{Variables, initialize_value};
-use rand::RngExt;
+use crate::helpers::hsv::{hsv_to_rgb, HSV};
+use crate::ui::variables::Variables;
 use rand::rngs::ThreadRng;
+use rand::RngExt;
+use std::collections::HashSet;
 use std::fmt;
+use std::hash::{DefaultHasher, Hasher};
 use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
+use chrono::{DateTime, Utc};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -14,7 +17,7 @@ pub enum Value {
     I64(i64),
     Bool(bool),
     String(String),
-    Array(Vec<Value>),
+    Array(Vec<Value>)
 }
 
 impl fmt::Display for Value {
@@ -29,89 +32,16 @@ impl Value {
         variables: &Variables,
         s: &str,
         with_expr: bool,
-        with_post_expr: bool,
+        with_post_expr: bool
     ) -> Self {
-        let s = Self::replace_inline_variables(variables, settings, s);
+        //println!("Before Replace: '{}'", s);
+        //let s = Self::replace_inline_variables(variables, settings, s);
         //println!("After replace: '{}'", s);
         let s = s.trim();
         //println!("In from_str: {}", s);
         if s.is_empty() {
             return Value::String(String::new());
         }
-        // Explicit type prefix
-        if let Some((ty, value)) = s.split_once(':') {
-            match ty.to_ascii_lowercase().as_str() {
-                "int" => {
-                    if let Ok(i) = value.parse::<i64>() {
-                        return Value::I64(i);
-                    }
-                }
-                "float" | "f32" | "f64" => {
-                    if let Ok(f) = value.parse::<f64>() {
-                        return Value::F64(f);
-                    }
-                }
-                "bool" => match value.to_ascii_lowercase().as_str() {
-                    "true" | "1" | "yes" | "on" => return Value::Bool(true),
-                    "false" | "0" | "no" | "off" => return Value::Bool(false),
-                    _ => {}
-                },
-                "string" | "str" => {
-                    return Value::String(value.to_string());
-                }
-                "strexpr" => {
-                    //println!("strexpr was given: {}", value);
-                    let s = Value::String(
-                        Value::from_str(settings, variables, value, true, false).into_string(),
-                    );
-                    //println!("strexpr gave: {}", s);
-                    return s;
-                }
-                // "strexprvar" => {
-                //     println!("strexprvar was given: {}", value);
-                //     let s = Value::String(Value::from_str(settings, variables, value, true, true).into_string_value());
-                //     println!("strexprvar gave: {}", s);
-                //     return s;
-                // }
-                "setting" => {
-                    match value.split_once(".") {
-                        None => {
-                            let key = SettingKey::from_str(value);
-                            if let Some(key) = key {
-                                let value = settings.read_setting(key).to_value();
-                                //println!("{:?} {:?}", key, value);
-                                return value;
-                            }
-                        }
-                        Some((l, r)) => {
-                            let key = SettingKey::from_str(l);
-                            if let Some(key) = key {
-                                match r {
-                                    "options" => {
-                                        return key.options();
-                                    }
-                                    _ => {}
-                                }
-                                let value = settings.read_setting(key).to_value();
-                                //println!("{:?} {:?}", key, value);
-                                return value;
-                            }
-                        }
-                    }
-                }
-                "var" | "variable" => match Self::load_variable(variables, &s.to_string()) {
-                    Some(value) => return value,
-                    None => {}
-                },
-                "array" | "list" | "vec" | "slice" => {
-                    if let Some(arr) = Self::parse_array(settings, variables, value) {
-                        return Value::Array(arr);
-                    }
-                }
-                _ => {}
-            }
-        }
-
         // Auto-detect array (bracket notation)
         if s.starts_with('[') && s.ends_with(']') {
             if let Some(arr) = Self::parse_array(settings, variables, s) {
@@ -120,21 +50,119 @@ impl Value {
             }
         }
 
-        // Auto-detect bool
-        match s.to_ascii_lowercase().as_str() {
-            "true" | "yes" | "on" => return Value::Bool(true),
-            "false" | "no" | "off" => return Value::Bool(false),
-            _ => {}
+        // Auto-detect string
+        if let Some(stripped) = s.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+            return Value::String(stripped.to_string());
         }
-
-        // Auto-detect integer
-        if let Ok(i) = s.parse::<i64>() {
-            return Value::I64(i);
-        }
-
-        // Auto-detect float
-        if let Ok(f) = s.parse::<f64>() {
-            return Value::F64(f);
+        // Explicit type prefix
+        if let Some((ty, value)) = s.split_once(':') {
+            if !ty.contains(char::is_whitespace) {
+                match ty.to_ascii_lowercase().as_str() {
+                    "int" => {
+                        return if let Ok(i) = value.parse::<i64>() {
+                            Value::I64(i)
+                        } else { Value::String(format!("'{}' couldn't get converted to int!", s)) }
+                    }
+                    "float" | "f32" | "f64" => {
+                        return if let Ok(f) = value.parse::<f64>() {
+                            Value::F64(f)
+                        } else { Value::String(format!("'{}' couldn't get converted to float!", s)) }
+                    }
+                    "bool" => return match value.to_ascii_lowercase().as_str() {
+                        "true" | "1" | "yes" | "on" | "some" => Value::Bool(true),
+                        "false" | "0" | "no" | "off" | "none" | "null" => Value::Bool(false),
+                        _ => { Value::String(format!("'{}' couldn't get converted to boolean!", s)) }
+                    },
+                    "string" | "str" => {
+                        return Value::String(value.to_string());
+                    }
+                    // "strexpr" => {
+                    //     //println!("strexpr was given: {}", value);
+                    //     let s = Value::String(
+                    //         Value::from_str(settings, variables, value, true, false).into_string(),
+                    //     );
+                    //     //println!("strexpr gave: {}", s);
+                    //     return s;
+                    // }
+                    "expr" => {
+                        let expr_value = match eval_expr(value, variables, settings) {
+                            Some(value) => match value {
+                                Value::None => {
+                                    Value::String(value.to_string())
+                                }
+                                _ => {
+                                    value
+                                }
+                            },
+                            None => {
+                                Value::String(value.to_string())
+                            }
+                        };
+                        //println!("expr gets: '{value}' and returns: '{:?}'", expr_value);
+                        return expr_value;
+                    }
+                    "exprvar" => {
+                        let expr_value = match eval_expr(value, variables, settings) {
+                            Some(value) => match value {
+                                Value::None => {
+                                    Value::String(value.to_string())
+                                }
+                                _ => {
+                                    value
+                                }
+                            },
+                            None => {
+                                Value::String(value.to_string())
+                            }
+                        };
+                        let expr_value = expr_value.into_string();
+                        let post_value = Value::from_str(settings, variables, expr_value.as_str(), true, false);
+                        println!("exprvar gets: '{value}' and returns: '{expr_value}', then returns '{:?}'", post_value);
+                        return post_value;
+                    }
+                    "setting" => {
+                        match value.split_once(".") {
+                            None => {
+                                let key = SettingKey::from_str(value);
+                                if let Some(key) = key {
+                                    let value = settings.read_setting(key).to_value();
+                                    //println!("{:?} {:?}", key, value);
+                                    return value;
+                                }
+                            }
+                            Some((l, r)) => {
+                                let key = SettingKey::from_str(l);
+                                if let Some(key) = key {
+                                    match r {
+                                        "options" => {
+                                            return key.options();
+                                        }
+                                        _ => {}
+                                    }
+                                    let value = settings.read_setting(key).to_value();
+                                    //println!("{:?} {:?}", key, value);
+                                    return value;
+                                }
+                            }
+                        }
+                    }
+                    "var" | "variable" => return match Self::load_variable(variables, &value.to_string()) {
+                        Some(value) => value,
+                        None => { Value::String(format!("'{}' variable doesn't exist yet!", s)) }
+                    },
+                    "array" | "list" | "vec" | "slice" => {
+                        if let Some(arr) = Self::parse_array(settings, variables, value) {
+                            return Value::Array(arr);
+                        }
+                    }
+                    "none" => {
+                        return Value::None;
+                    }
+                    _ => {
+                        return Value::String(format!("'{}', the type '{}' doesn't exist. Use 'expr:xyz' for Expressions.", s, ty));
+                    }
+                }
+            }
         }
 
         // Might be setting key?
@@ -184,39 +212,17 @@ impl Value {
             None => {}
         };
 
-        //println!("In from_str() Evaluating Expression... Input: {} ", s);
-        if with_expr {
-            let expr_value = match eval_expr(s, variables, settings) {
-                Some(value) => match value {
-                    Value::None => {
-                        //println!("Input: {}, Output: Null!!!", s);
-                        Value::String(s.to_string())
-                    }
-                    _ => {
-                        //println!("Input: {}, Output: {}({})", s, value.type_name(), value);
-                        value
-                    }
-                },
-                None => {
-                    //println!("NONE!! in from_str() NONE!!: {}", s);
-                    Value::String(s.to_string())
-                }
-            };
-            if with_post_expr {
-                match expr_value {
-                    Value::String(s) => {
-                        //println!("{s}");
-                        Value::from_str(settings, variables, &s, false, false)
-                    }
-                    _ => expr_value,
-                }
-            } else {
-                expr_value
-            }
-            //expr_value
-        } else {
-            Value::String(s.to_string())
+        // Auto-detect integer
+        if let Ok(i) = s.parse::<i64>() {
+            return Value::I64(i);
         }
+
+        // Auto-detect float
+        if let Ok(f) = s.parse::<f64>() {
+            return Value::F64(f);
+        }
+
+        Value::String(s.to_string())
     }
     pub fn from_vec<I, T>(iter: I) -> Self
     where
@@ -386,7 +392,7 @@ impl Value {
                 let items: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
                 format!("[{}]", items.join(", "))
             }
-            Value::None => "null".to_string(),
+            Value::None => "None".to_string(),
         }
     }
 
@@ -400,11 +406,11 @@ impl Value {
                 let items: Vec<String> = arr.into_iter().map(|v| v.into_string()).collect();
                 format!("[{}]", items.join(", "))
             }
-            Value::None => "null".to_string(),
+            Value::None => "none".to_string(),
         }
     }
 
-    pub fn is_null(&self) -> bool {
+    pub fn is_none(&self) -> bool {
         matches!(self, Value::None)
     }
 
@@ -415,7 +421,7 @@ impl Value {
             Value::String(_) => "string",
             Value::Bool(_) => "bool",
             Value::Array(_) => "array",
-            Value::None => "null",
+            Value::None => "none",
         }
     }
 
@@ -598,104 +604,292 @@ impl From<&str> for Value {
     }
 }
 
-// Built-in functions registry
-type BuiltinFn = fn(Vec<Value>) -> Option<Value>;
+#[derive(Debug, Clone)]
+pub enum FunctionError {
+    MissingArgument { index: usize, function: &'static str },
+    InvalidType { expected: &'static str, got: &'static str, function: &'static str },
+    InvalidValue { message: String, function: &'static str },
+    InvalidArgumentCount { expected: usize, got: usize, function: &'static str },
+    ConversionFailed { from: &'static str, to: &'static str, function: &'static str },
+    IndexOutOfBounds { index: usize, len: usize, function: &'static str },
+    EmptyInput { function: &'static str },
+    Other { message: String, function: &'static str },
+}
 
-fn get_builtin(name: &str) -> Option<BuiltinFn> {
+fn get_arg<'a>(args: &'a [Value], idx: usize, func: &'static str) -> Result<&'a Value, FunctionError> {
+    args.get(idx).ok_or(FunctionError::MissingArgument { index: idx, function: func })
+}
+
+fn arg_f64(args: &[Value], idx: usize, func: &'static str) -> Result<f64, FunctionError> {
+    let v = get_arg(args, idx, func)?;
+    v.as_f64().ok_or(FunctionError::ConversionFailed { from: v.type_name(), to: "f64", function: func })
+}
+fn arg_bool(args: &[Value], idx: usize, func: &'static str) -> Result<bool, FunctionError> {
+    let v = get_arg(args, idx, func)?;
+    Ok(v.is_truthy()) //.ok_or(FunctionError::ConversionFailed { from: v.type_name(), to: "bool", function: func })
+}
+fn arg_i64(args: &[Value], idx: usize, func: &'static str) -> Result<i64, FunctionError> {
+    let v = get_arg(args, idx, func)?;
+    v.as_i64().ok_or(FunctionError::ConversionFailed { from: v.type_name(), to: "i64", function: func })
+}
+
+fn arg_time_seconds(
+    args: &[Value],
+    idx: usize,
+    func: &'static str,
+) -> Result<f64, FunctionError> {
+    let mut value = arg_f64(args, idx, func)?;
+    let from_millis = arg_bool(args, idx + 1, func)?;
+
+    if from_millis {
+        value /= 1000.0;
+    }
+
+    Ok(value)
+}
+fn format_duration(secs: f64) -> String {
+    let negative = secs < 0.0;
+    let secs = secs.abs();
+
+    let hours = (secs / 3600.0).floor() as i64;
+    let mins = ((secs % 3600.0) / 60.0).floor() as i64;
+    let seconds = (secs % 60.0).floor() as i64;
+
+    let result = if hours > 0 {
+        format!("{hours}:{mins:02}:{seconds:02}")
+    } else {
+        format!("{mins}:{seconds:02}")
+    };
+
+    if negative {
+        format!("-{result}")
+    } else {
+        result
+    }
+}
+fn format_elapsed(secs: f64) -> String {
+    let secs = secs.abs();
+
+    if secs < 60.0 {
+        let n = secs.round();
+        format!("{n:.0} second{}", if n == 1.0 { "" } else { "s" })
+    } else if secs < 3600.0 {
+        let n = (secs / 60.0).round();
+        format!("{n:.0} minute{}", if n == 1.0 { "" } else { "s" })
+    } else if secs < 86400.0 {
+        let n = secs / 3600.0;
+        format!("{n:.1} hours")
+    } else if secs < 604800.0 {
+        let n = secs / 86400.0;
+        format!("{n:.1} days")
+    } else if secs < 2_592_000.0 {
+        let n = secs / 604800.0;
+        format!("{n:.1} weeks")
+    } else if secs < 31_536_000.0 {
+        let n = secs / 2_592_000.0;
+        format!("{n:.1} months")
+    } else {
+        let n = secs / 31_536_000.0;
+        format!("{n:.1} years")
+    }
+}
+fn format_custom_time(secs: f64, day_seconds: f64) -> String {
+    if day_seconds <= 0.0 {
+        return "invalid day length".to_string();
+    }
+
+    let negative = secs < 0.0;
+    let mut secs = secs.abs();
+
+    let minute = 60.0;
+    let hour = 60.0 * minute;
+    let day = day_seconds;
+    let week = 7.0 * day;
+    let month = 30.0 * day;
+    let year = 12.0 * month;
+    let decade = 10.0 * year;
+    let century = 10.0 * decade;
+
+    let units = [
+        ("century", century),
+        ("decade", decade),
+        ("year", year),
+        ("month", month),
+        ("week", week),
+        ("day", day),
+        ("hour", hour),
+        ("minute", minute),
+        ("second", 1.0),
+    ];
+
+    let mut parts = Vec::new();
+
+    for (name, unit) in units {
+        if secs >= unit {
+            let amount = (secs / unit).floor() as i64;
+            secs -= amount as f64 * unit;
+
+            let name = if amount == 1 {
+                name.to_string()
+            } else {
+                format!("{name}s")
+            };
+
+            parts.push(format!("{amount} {name}"));
+        }
+    }
+
+    if parts.is_empty() {
+        parts.push("0 seconds".to_string());
+    }
+
+    let result = parts.join(", ");
+
+    if negative {
+        format!("-{result}")
+    } else {
+        result
+    }
+}
+type BuiltinFn = fn(Vec<Value>) -> Result<Value, FunctionError>;
+
+pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
     Some(match name {
         "fix" => |args| {
-            let val = args.first()?;
-            let n = val.as_f64()?;
-            //println!("'{}'", n);
-            // defaults
+            let val = get_arg(&args, 0, "fix")?;
+            let n = val.as_f64().ok_or(FunctionError::ConversionFailed { from: val.type_name(), to: "f64", function: "fix" })?;
             let decimals = args.get(1).and_then(|v| v.as_f64()).unwrap_or(3.0) as usize;
-            let min_int = args
-                .get(2)
-                .and_then(|v| v.as_f64())
-                .unwrap_or(f64::INFINITY) as usize;
-
+            let min_int = args.get(2).and_then(|v| v.as_f64()).unwrap_or(f64::INFINITY) as usize;
             let sign = if n < 0.0 { "-" } else { "" };
             let abs = n.abs();
-
-            // format with exact decimals
             let formatted = format!("{:.*}", decimals, abs);
-
             let mut parts = formatted.split('.');
             let int_part = parts.next().unwrap_or("");
             let frac_part = parts.next().unwrap_or("");
-
-            // left pad integers with spaces
             let padded_int = if min_int == usize::MAX {
                 int_part.to_string()
+            } else if int_part.len() < min_int {
+                let pad = " ".repeat(min_int - int_part.len());
+                format!("{}{}", pad, int_part)
             } else {
-                if int_part.len() < min_int {
-                    let pad = " ".repeat(min_int - int_part.len());
-                    format!("{}{}", pad, int_part)
-                } else {
-                    int_part.to_string()
-                }
+                int_part.to_string()
             };
-
             let result = if decimals > 0 {
                 format!("{}{}.{}", sign, padded_int, frac_part)
             } else {
                 format!("{}{}", sign, padded_int)
             };
-            //println!("'{}'", result);
-            Some(Value::String(result))
+            Ok(Value::String(result))
         },
-        // Math functions
-        "abs" => |args| match args.first()? {
-            Value::F64(n) => Some(Value::F64(n.abs())),
-            Value::I64(n) => Some(Value::I64(n.abs())),
-            _ => None,
+        "abs" => |args| {
+            let val = get_arg(&args, 0, "abs")?;
+            match val {
+                Value::F64(n) => Ok(Value::F64(n.abs())),
+                Value::I64(n) => Ok(Value::I64(n.abs())),
+                v => Err(FunctionError::InvalidType { expected: "number", got: v.type_name(), function: "abs" }),
+            }
         },
-        "floor" => |args| args.first()?.as_f64().map(|n| Value::F64(n.floor())),
-        "ceil" => |args| args.first()?.as_f64().map(|n| Value::F64(n.ceil())),
+        "floor" => |args| {
+            let n = arg_f64(&args, 0, "floor")?;
+            Ok(Value::F64(n.floor()))
+        },
+        "ceil" => |args| {
+            let n = arg_f64(&args, 0, "ceil")?;
+            Ok(Value::F64(n.ceil()))
+        },
         "round" => |args| {
-            let n = args.first()?.as_f64()?;
+            let n = arg_f64(&args, 0, "round")?;
             let decimals = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as i32;
             let factor = 10f64.powi(decimals);
-            Some(Value::F64((n * factor).round() / factor))
+            Ok(Value::F64((n * factor).round() / factor))
         },
-        "trunc" => |args| args.first()?.as_f64().map(|n| Value::F64(n.trunc())),
-        "sqrt" => |args| args.first()?.as_f64().map(|n| Value::F64(n.sqrt())),
-        "cbrt" => |args| args.first()?.as_f64().map(|n| Value::F64(n.cbrt())),
+        "trunc" => |args| {
+            let n = arg_f64(&args, 0, "trunc")?;
+            Ok(Value::F64(n.trunc()))
+        },
+        "sqrt" => |args| {
+            let n = arg_f64(&args, 0, "sqrt")?;
+            Ok(Value::F64(n.sqrt()))
+        },
+        "cbrt" => |args| {
+            let n = arg_f64(&args, 0, "cbrt")?;
+            Ok(Value::F64(n.cbrt()))
+        },
         "pow" => |args| {
-            let base = args.first()?.as_f64()?;
-            let exp = args.get(1)?.as_f64()?;
-            Some(Value::F64(base.powf(exp)))
+            let base = arg_f64(&args, 0, "pow")?;
+            let exp = arg_f64(&args, 1, "pow")?;
+            Ok(Value::F64(base.powf(exp)))
         },
-        "exp" => |args| args.first()?.as_f64().map(|n| Value::F64(n.exp())),
-        "ln" => |args| args.first()?.as_f64().map(|n| Value::F64(n.ln())),
+        "exp" => |args| {
+            let n = arg_f64(&args, 0, "exp")?;
+            Ok(Value::F64(n.exp()))
+        },
+        "ln" => |args| {
+            let n = arg_f64(&args, 0, "ln")?;
+            Ok(Value::F64(n.ln()))
+        },
         "log" => |args| {
-            let n = args.first()?.as_f64()?;
+            let n = arg_f64(&args, 0, "log")?;
             let base = args.get(1).and_then(|v| v.as_f64()).unwrap_or(10.0);
-            Some(Value::F64(n.log(base)))
+            Ok(Value::F64(n.log(base)))
         },
-        "log2" => |args| args.first()?.as_f64().map(|n| Value::F64(n.log2())),
-        "log10" => |args| args.first()?.as_f64().map(|n| Value::F64(n.log10())),
+        "log2" => |args| {
+            let n = arg_f64(&args, 0, "log2")?;
+            Ok(Value::F64(n.log2()))
+        },
+        "log10" => |args| {
+            let n = arg_f64(&args, 0, "log10")?;
+            Ok(Value::F64(n.log10()))
+        },
         "sin" => |args| {
-            args.first()?.as_f64().map(|n| {
-                //println!("Sin() in get_builtin() input: {n}");
-                Value::F64(n.sin())
-            })
+            let n = arg_f64(&args, 0, "sin")?;
+            Ok(Value::F64(n.sin()))
         },
-        "cos" => |args| args.first()?.as_f64().map(|n| Value::F64(n.cos())),
-        "tan" => |args| args.first()?.as_f64().map(|n| Value::F64(n.tan())),
-        "asin" => |args| args.first()?.as_f64().map(|n| Value::F64(n.asin())),
-        "acos" => |args| args.first()?.as_f64().map(|n| Value::F64(n.acos())),
-        "atan" => |args| args.first()?.as_f64().map(|n| Value::F64(n.atan())),
+        "cos" => |args| {
+            let n = arg_f64(&args, 0, "cos")?;
+            Ok(Value::F64(n.cos()))
+        },
+        "tan" => |args| {
+            let n = arg_f64(&args, 0, "tan")?;
+            Ok(Value::F64(n.tan()))
+        },
+        "asin" => |args| {
+            let n = arg_f64(&args, 0, "asin")?;
+            Ok(Value::F64(n.asin()))
+        },
+        "acos" => |args| {
+            let n = arg_f64(&args, 0, "acos")?;
+            Ok(Value::F64(n.acos()))
+        },
+        "atan" => |args| {
+            let n = arg_f64(&args, 0, "atan")?;
+            Ok(Value::F64(n.atan()))
+        },
         "atan2" => |args| {
-            let y = args.first()?.as_f64()?;
-            let x = args.get(1)?.as_f64()?;
-            Some(Value::F64(y.atan2(x)))
+            let y = arg_f64(&args, 0, "atan2")?;
+            let x = arg_f64(&args, 1, "atan2")?;
+            Ok(Value::F64(y.atan2(x)))
         },
-        "sinh" => |args| args.first()?.as_f64().map(|n| Value::F64(n.sinh())),
-        "cosh" => |args| args.first()?.as_f64().map(|n| Value::F64(n.cosh())),
-        "tanh" => |args| args.first()?.as_f64().map(|n| Value::F64(n.tanh())),
-        "degrees" => |args| args.first()?.as_f64().map(|n| Value::F64(n.to_degrees())),
-        "radians" => |args| args.first()?.as_f64().map(|n| Value::F64(n.to_radians())),
+        "sinh" => |args| {
+            let n = arg_f64(&args, 0, "sinh")?;
+            Ok(Value::F64(n.sinh()))
+        },
+        "cosh" => |args| {
+            let n = arg_f64(&args, 0, "cosh")?;
+            Ok(Value::F64(n.cosh()))
+        },
+        "tanh" => |args| {
+            let n = arg_f64(&args, 0, "tanh")?;
+            Ok(Value::F64(n.tanh()))
+        },
+        "degrees" => |args| {
+            let n = arg_f64(&args, 0, "degrees")?;
+            Ok(Value::F64(n.to_degrees()))
+        },
+        "radians" => |args| {
+            let n = arg_f64(&args, 0, "radians")?;
+            Ok(Value::F64(n.to_radians()))
+        },
         "min" => |args| {
             let mut min_val: Option<f64> = None;
             for arg in &args {
@@ -703,7 +897,7 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     min_val = Some(min_val.map_or(n, |m| m.min(n)));
                 }
             }
-            min_val.map(Value::F64)
+            min_val.map(Value::F64).ok_or(FunctionError::Other { message: "no numeric arguments provided".to_string(), function: "min" })
         },
         "max" => |args| {
             let mut max_val: Option<f64> = None;
@@ -712,401 +906,485 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     max_val = Some(max_val.map_or(n, |m| m.max(n)));
                 }
             }
-            max_val.map(Value::F64)
+            max_val.map(Value::F64).ok_or(FunctionError::Other { message: "no numeric arguments provided".to_string(), function: "max" })
         },
         "clamp" => |args| {
-            //println!("clamp args: {:?}", args);
-            let val = args.first()?.as_f64()?;
-            let min = args.get(1)?.as_f64()?;
-            let max = args.get(2)?.as_f64()?;
-            //println!("{}, {}, {}, {}", val, min, max, val.clamp(min, max));
-            Some(Value::F64(val.clamp(min, max)))
+            let val = arg_f64(&args, 0, "clamp")?;
+            let min = arg_f64(&args, 1, "clamp")?;
+            let max = arg_f64(&args, 2, "clamp")?;
+            Ok(Value::F64(val.clamp(min, max)))
         },
         "lerp" => |args| {
-            let a = args.first()?.as_f64()?;
-            let b = args.get(1)?.as_f64()?;
-            let t = args.get(2)?.as_f64()?;
-            Some(Value::F64(a + (b - a) * t))
+            let a = arg_f64(&args, 0, "lerp")?;
+            let b = arg_f64(&args, 1, "lerp")?;
+            let t = arg_f64(&args, 2, "lerp")?;
+            Ok(Value::F64(a + (b - a) * t))
         },
         "sign" => |args| {
-            let n = args.first()?.as_f64()?;
-            Some(Value::F64(if n > 0.0 {
-                1.0
-            } else if n < 0.0 {
-                -1.0
-            } else {
-                0.0
-            }))
+            let n = arg_f64(&args, 0, "sign")?;
+            Ok(Value::F64(if n > 0.0 { 1.0 } else if n < 0.0 { -1.0 } else { 0.0 }))
         },
-        "fract" => |args| args.first()?.as_f64().map(|n| Value::F64(n.fract())),
+        "fract" => |args| {
+            let n = arg_f64(&args, 0, "fract")?;
+            Ok(Value::F64(n.fract()))
+        },
         "mod" => |args| {
-            let a = args.first()?.as_f64()?;
-            let b = args.get(1)?.as_f64()?;
-            Some(Value::F64(a % b))
+            let a = arg_f64(&args, 0, "mod")?;
+            let b = arg_f64(&args, 1, "mod")?;
+            if b == 0.0 {
+                return Err(FunctionError::InvalidValue { message: "modulo by zero".to_string(), function: "mod" });
+            }
+            Ok(Value::F64(a % b))
         },
         "hypot" => |args| {
-            let a = args.first()?.as_f64()?;
-            let b = args.get(1)?.as_f64()?;
-            Some(Value::F64(a.hypot(b)))
+            let a = arg_f64(&args, 0, "hypot")?;
+            let b = arg_f64(&args, 1, "hypot")?;
+            Ok(Value::F64(a.hypot(b)))
         },
-
-        // Constants
-        "pi" => |_| Some(Value::F64(std::f64::consts::PI)),
-        "e" => |_| Some(Value::F64(std::f64::consts::E)),
-        "tau" => |_| Some(Value::F64(std::f64::consts::TAU)),
-        "inf" => |_| Some(Value::F64(f64::INFINITY)),
-        "nan" => |_| Some(Value::F64(f64::NAN)),
-
-        // Number checks
-        "isnan" => |args| args.first()?.as_f64().map(|n| Value::Bool(n.is_nan())),
-        "isinf" => |args| args.first()?.as_f64().map(|n| Value::Bool(n.is_infinite())),
-        "isfinite" => |args| args.first()?.as_f64().map(|n| Value::Bool(n.is_finite())),
-
-        // String / array functions
-        "len" => |args| match args.first()? {
-            Value::String(s) => Some(Value::F64(s.len() as f64)),
-            Value::Array(arr) => Some(Value::F64(arr.len() as f64)),
-            _ => None,
+        "pi" => |_| Ok(Value::F64(std::f64::consts::PI)),
+        "e" => |_| Ok(Value::F64(std::f64::consts::E)),
+        "tau" => |_| Ok(Value::F64(std::f64::consts::TAU)),
+        "inf" => |_| Ok(Value::F64(f64::INFINITY)),
+        "nan" => |_| Ok(Value::F64(f64::NAN)),
+        "isnan" => |args| {
+            let n = arg_f64(&args, 0, "isnan")?;
+            Ok(Value::Bool(n.is_nan()))
         },
-        "upper" => |args| match args.first()? {
-            Value::String(s) => Some(Value::String(s.to_uppercase())),
-            v => Some(Value::String(v.to_string().to_uppercase())),
+        "isinf" => |args| {
+            let n = arg_f64(&args, 0, "isinf")?;
+            Ok(Value::Bool(n.is_infinite()))
         },
-        "lower" => |args| match args.first()? {
-            Value::String(s) => Some(Value::String(s.to_lowercase())),
-            v => Some(Value::String(v.to_string().to_lowercase())),
+        "isfinite" => |args| {
+            let n = arg_f64(&args, 0, "isfinite")?;
+            Ok(Value::Bool(n.is_finite()))
         },
-        "capitalize" => |args| match args.first()? {
-            Value::String(s) => {
-                let mut chars = s.chars();
-                let result = match chars.next() {
-                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                    None => String::new(),
-                };
-                Some(Value::String(result))
+        "len" => |args| {
+            let val = get_arg(&args, 0, "len")?;
+            match val {
+                Value::String(s) => Ok(Value::F64(s.len() as f64)),
+                Value::Array(arr) => Ok(Value::F64(arr.len() as f64)),
+                v => Err(FunctionError::InvalidType { expected: "string or array", got: v.type_name(), function: "len" }),
             }
-            _ => None,
         },
-        "title" => |args| match args.first()? {
-            Value::String(s) => {
-                let result = s
-                    .split_whitespace()
-                    .map(|word| {
-                        let mut chars = word.chars();
-                        match chars.next() {
-                            Some(first) => {
-                                first.to_uppercase().collect::<String>()
-                                    + &chars.as_str().to_lowercase()
+        "upper" => |args| {
+            let val = get_arg(&args, 0, "upper")?;
+            Ok(Value::String(val.to_string().to_uppercase()))
+        },
+        "lower" => |args| {
+            let val = get_arg(&args, 0, "lower")?;
+            Ok(Value::String(val.to_string().to_lowercase()))
+        },
+        "capitalize" => |args| {
+            let val = get_arg(&args, 0, "capitalize")?;
+            match val {
+                Value::String(s) => {
+                    let mut chars = s.chars();
+                    let result = match chars.next() {
+                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                        None => String::new(),
+                    };
+                    Ok(Value::String(result))
+                }
+                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "capitalize" }),
+            }
+        },
+        "title" => |args| {
+            let val = get_arg(&args, 0, "title")?;
+            match val {
+                Value::String(s) => {
+                    let result = s
+                        .split_whitespace()
+                        .map(|word| {
+                            let mut chars = word.chars();
+                            match chars.next() {
+                                Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+                                None => String::new(),
                             }
-                            None => String::new(),
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                Some(Value::String(result))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    Ok(Value::String(result))
+                }
+                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "title" }),
             }
-            _ => None,
         },
-        "trim" => |args| match args.first()? {
-            Value::String(s) => Some(Value::String(s.trim().to_string())),
-            _ => None,
+        "trim" => |args| {
+            let val = get_arg(&args, 0, "trim")?;
+            match val {
+                Value::String(s) => Ok(Value::String(s.trim().to_string())),
+                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "trim" }),
+            }
         },
-        "ltrim" => |args| match args.first()? {
-            Value::String(s) => Some(Value::String(s.trim_start().to_string())),
-            _ => None,
+        "ltrim" => |args| {
+            let val = get_arg(&args, 0, "ltrim")?;
+            match val {
+                Value::String(s) => Ok(Value::String(s.trim_start().to_string())),
+                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "ltrim" }),
+            }
         },
-        "rtrim" => |args| match args.first()? {
-            Value::String(s) => Some(Value::String(s.trim_end().to_string())),
-            _ => None,
+        "rtrim" => |args| {
+            let val = get_arg(&args, 0, "rtrim")?;
+            match val {
+                Value::String(s) => Ok(Value::String(s.trim_end().to_string())),
+                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "rtrim" }),
+            }
         },
-        "reverse" => |args| match args.first()? {
-            Value::String(s) => Some(Value::String(s.chars().rev().collect())),
-            Value::Array(arr) => Some(Value::Array(arr.iter().rev().cloned().collect())),
-            _ => None,
+        "reverse" => |args| {
+            let val = get_arg(&args, 0, "reverse")?;
+            match val {
+                Value::String(s) => Ok(Value::String(s.chars().rev().collect())),
+                Value::Array(arr) => Ok(Value::Array(arr.iter().rev().cloned().collect())),
+                v => Err(FunctionError::InvalidType { expected: "string or array", got: v.type_name(), function: "reverse" }),
+            }
         },
         "repeat" => |args| {
-            let s = match args.first()? {
+            let val = get_arg(&args, 0, "repeat")?;
+            let s = match val {
                 Value::String(s) => s.clone(),
                 v => v.to_string(),
             };
-            let n = args.get(1)?.as_f64()? as usize;
-            Some(Value::String(s.repeat(n)))
+            let n = arg_f64(&args, 1, "repeat")? as usize;
+            Ok(Value::String(s.repeat(n)))
         },
-        "replace" => |args| match args.first()? {
-            Value::String(s) => {
-                let from = match args.get(1)? {
-                    Value::String(s) => s.clone(),
-                    v => v.to_string(),
-                };
-                let to = match args.get(2)? {
-                    Value::String(s) => s.clone(),
-                    v => v.to_string(),
-                };
-                Some(Value::String(s.replace(&from, &to)))
-            }
-            _ => None,
-        },
-        "split" => |args| match args.first()? {
-            Value::String(s) => {
-                let delim = match args.get(1) {
-                    Some(Value::String(d)) => d.clone(),
-                    _ => " ".to_string(),
-                };
-                let parts: Vec<Value> = s
-                    .split(&delim)
-                    .map(|p| Value::String(p.to_string()))
-                    .collect();
-                Some(Value::Array(parts))
-            }
-            _ => None,
-        },
-        "join" => |args| match args.first()? {
-            Value::Array(arr) => {
-                let delim = match args.get(1) {
-                    Some(Value::String(d)) => d.clone(),
-                    _ => "".to_string(),
-                };
-                let result: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
-                Some(Value::String(result.join(&delim)))
-            }
-            _ => None,
-        },
-        "substr" => |args| match args.first()? {
-            Value::String(s) => {
-                let start = args.get(1)?.as_f64()? as usize;
-                let len = args.get(2).and_then(|v| v.as_f64()).map(|n| n as usize);
-                let chars: Vec<char> = s.chars().collect();
-                let end = len
-                    .map(|l| (start + l).min(chars.len()))
-                    .unwrap_or(chars.len());
-                if start >= chars.len() {
-                    Some(Value::String(String::new()))
-                } else {
-                    Some(Value::String(chars[start..end].iter().collect()))
+        "replace" => |args| {
+            let val = get_arg(&args, 0, "replace")?;
+            match val {
+                Value::String(s) => {
+                    let from = match get_arg(&args, 1, "replace")? {
+                        Value::String(s) => s.clone(),
+                        v => v.to_string(),
+                    };
+                    let to = match get_arg(&args, 2, "replace")? {
+                        Value::String(s) => s.clone(),
+                        v => v.to_string(),
+                    };
+                    Ok(Value::String(s.replace(&from, &to)))
                 }
+                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "replace" }),
             }
-            _ => None,
         },
-        "contains" => |args| match args.first()? {
-            Value::String(s) => {
-                let needle = match args.get(1)? {
-                    Value::String(n) => n.clone(),
-                    v => v.to_string(),
-                };
-                Some(Value::Bool(s.contains(&needle)))
+        "split" => |args| {
+            let val = get_arg(&args, 0, "split")?;
+            match val {
+                Value::String(s) => {
+                    let delim = match args.get(1) {
+                        Some(Value::String(d)) => d.clone(),
+                        _ => " ".to_string(),
+                    };
+                    let parts: Vec<Value> = s.split(&delim).map(|p| Value::String(p.to_string())).collect();
+                    Ok(Value::Array(parts))
+                }
+                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "split" }),
             }
-            Value::Array(arr) => {
-                let needle = args.get(1)?;
-                Some(Value::Bool(arr.iter().any(|v| v == needle)))
-            }
-            _ => None,
         },
-        "startswith" => |args| match args.first()? {
-            Value::String(s) => {
-                let prefix = match args.get(1)? {
-                    Value::String(n) => n.clone(),
-                    v => v.to_string(),
-                };
-                Some(Value::Bool(s.starts_with(&prefix)))
+        "join" => |args| {
+            let val = get_arg(&args, 0, "join")?;
+            match val {
+                Value::Array(arr) => {
+                    let delim = match args.get(1) {
+                        Some(Value::String(d)) => d.clone(),
+                        _ => "".to_string(),
+                    };
+                    let result: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
+                    Ok(Value::String(result.join(&delim)))
+                }
+                v => Err(FunctionError::InvalidType { expected: "array", got: v.type_name(), function: "join" }),
             }
-            _ => None,
         },
-        "endswith" => |args| match args.first()? {
-            Value::String(s) => {
-                let suffix = match args.get(1)? {
-                    Value::String(n) => n.clone(),
-                    v => v.to_string(),
-                };
-                Some(Value::Bool(s.ends_with(&suffix)))
-            }
-            _ => None,
-        },
-        "indexof" => |args| match args.first()? {
-            Value::String(s) => {
-                let needle = match args.get(1)? {
-                    Value::String(n) => n.clone(),
-                    v => v.to_string(),
-                };
-                Some(Value::F64(
-                    s.find(&needle).map(|i| i as f64).unwrap_or(-1.0),
-                ))
-            }
-            Value::Array(arr) => {
-                let needle = args.get(1)?;
-                for (i, v) in arr.iter().enumerate() {
-                    if v == needle {
-                        return Some(Value::F64(i as f64));
+        "substr" => |args| {
+            let val = get_arg(&args, 0, "substr")?;
+            match val {
+                Value::String(s) => {
+                    let start = arg_f64(&args, 1, "substr")? as usize;
+                    let len = args.get(2).and_then(|v| v.as_f64()).map(|n| n as usize);
+                    let chars: Vec<char> = s.chars().collect();
+                    let end = len.map(|l| (start + l).min(chars.len())).unwrap_or(chars.len());
+                    if start >= chars.len() {
+                        Ok(Value::String(String::new()))
+                    } else {
+                        Ok(Value::String(chars[start..end].iter().collect()))
                     }
                 }
-                Some(Value::F64(-1.0))
-            }
-            _ => None,
-        },
-        "padleft" => |args| match args.first()? {
-            Value::String(s) => {
-                let width = args.get(1)?.as_f64()? as usize;
-                let pad_char = match args.get(2) {
-                    Some(Value::String(p)) if !p.is_empty() => p.chars().next().unwrap(),
-                    _ => ' ',
-                };
-                if s.len() >= width {
-                    Some(Value::String(s.clone()))
-                } else {
-                    let padding: String =
-                        std::iter::repeat(pad_char).take(width - s.len()).collect();
-                    Some(Value::String(padding + s))
-                }
-            }
-            v => {
-                let s = v.to_string();
-                let width = args.get(1)?.as_f64()? as usize;
-                let pad_char = match args.get(2) {
-                    Some(Value::String(p)) if !p.is_empty() => p.chars().next().unwrap(),
-                    _ => ' ',
-                };
-                if s.len() >= width {
-                    Some(Value::String(s))
-                } else {
-                    let padding: String =
-                        std::iter::repeat(pad_char).take(width - s.len()).collect();
-                    Some(Value::String(padding + &s))
-                }
+                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "substr" }),
             }
         },
-        "padright" => |args| match args.first()? {
-            Value::String(s) => {
-                let width = args.get(1)?.as_f64()? as usize;
-                let pad_char = match args.get(2) {
-                    Some(Value::String(p)) if !p.is_empty() => p.chars().next().unwrap(),
-                    _ => ' ',
-                };
-                if s.len() >= width {
-                    Some(Value::String(s.clone()))
-                } else {
-                    let padding: String =
-                        std::iter::repeat(pad_char).take(width - s.len()).collect();
-                    Some(Value::String(s.clone() + &padding))
+        "contains" => |args| {
+            let val = get_arg(&args, 0, "contains")?;
+            match val {
+                Value::String(s) => {
+                    let needle = match get_arg(&args, 1, "contains")? {
+                        Value::String(n) => n.clone(),
+                        v => v.to_string(),
+                    };
+                    Ok(Value::Bool(s.contains(&needle)))
                 }
+                Value::Array(arr) => {
+                    let needle = get_arg(&args, 1, "contains")?;
+                    Ok(Value::Bool(arr.iter().any(|v| v == needle)))
+                }
+                v => Err(FunctionError::InvalidType { expected: "string or array", got: v.type_name(), function: "contains" }),
             }
-            _ => None,
         },
-        "center" => |args| match args.first()? {
-            Value::String(s) => {
-                let width = args.get(1)?.as_f64()? as usize;
-                let pad_char = match args.get(2) {
-                    Some(Value::String(p)) if !p.is_empty() => p.chars().next().unwrap(),
-                    _ => ' ',
-                };
-                if s.len() >= width {
-                    Some(Value::String(s.clone()))
-                } else {
-                    let total_pad = width - s.len();
-                    let left_pad = total_pad / 2;
-                    let right_pad = total_pad - left_pad;
-                    let left: String = std::iter::repeat(pad_char).take(left_pad).collect();
-                    let right: String = std::iter::repeat(pad_char).take(right_pad).collect();
-                    Some(Value::String(left + s + &right))
+        "startswith" => |args| {
+            let val = get_arg(&args, 0, "startswith")?;
+            match val {
+                Value::String(s) => {
+                    let prefix = match get_arg(&args, 1, "startswith")? {
+                        Value::String(n) => n.clone(),
+                        v => v.to_string(),
+                    };
+                    Ok(Value::Bool(s.starts_with(&prefix)))
                 }
+                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "startswith" }),
             }
-            _ => None,
+        },
+        "endswith" => |args| {
+            let val = get_arg(&args, 0, "endswith")?;
+            match val {
+                Value::String(s) => {
+                    let suffix = match get_arg(&args, 1, "endswith")? {
+                        Value::String(n) => n.clone(),
+                        v => v.to_string(),
+                    };
+                    Ok(Value::Bool(s.ends_with(&suffix)))
+                }
+                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "endswith" }),
+            }
+        },
+        "indexof" => |args| {
+            let val = get_arg(&args, 0, "indexof")?;
+            match val {
+                Value::String(s) => {
+                    let needle = match get_arg(&args, 1, "indexof")? {
+                        Value::String(n) => n.clone(),
+                        v => v.to_string(),
+                    };
+                    Ok(Value::F64(s.find(&needle).map(|i| i as f64).unwrap_or(-1.0)))
+                }
+                Value::Array(arr) => {
+                    let needle = get_arg(&args, 1, "indexof")?;
+                    for (i, v) in arr.iter().enumerate() {
+                        if v == needle {
+                            return Ok(Value::F64(i as f64));
+                        }
+                    }
+                    Ok(Value::F64(-1.0))
+                }
+                v => Err(FunctionError::InvalidType { expected: "string or array", got: v.type_name(), function: "indexof" }),
+            }
+        },
+        "get" => |args| {
+            let arr = match args.get(0) {
+                Some(Value::Array(arr)) => arr,
+                _ => return Err(FunctionError::InvalidType { expected: "array", got: "value", function: "get" }),
+            };
+            let index = arg_i64(&args, 1, "get")? as usize;
+            arr.get(index).cloned().ok_or(FunctionError::IndexOutOfBounds { index, len: arr.len(), function: "get" })
+        },
+        "padleft" => |args| {
+            let val = get_arg(&args, 0, "padleft")?;
+            let s = val.to_string();
+            let width = arg_f64(&args, 1, "padleft")? as usize;
+            let pad_char = match args.get(2) {
+                Some(Value::String(p)) if !p.is_empty() => p.chars().next().unwrap(),
+                _ => ' ',
+            };
+            if s.len() >= width {
+                Ok(Value::String(s))
+            } else {
+                let padding: String = std::iter::repeat(pad_char).take(width - s.len()).collect();
+                Ok(Value::String(padding + &s))
+            }
+        },
+        "padright" => |args| {
+            let val = get_arg(&args, 0, "padright")?;
+            match val {
+                Value::String(s) => {
+                    let width = arg_f64(&args, 1, "padright")? as usize;
+                    let pad_char = match args.get(2) {
+                        Some(Value::String(p)) if !p.is_empty() => p.chars().next().unwrap(),
+                        _ => ' ',
+                    };
+                    if s.len() >= width {
+                        Ok(Value::String(s.clone()))
+                    } else {
+                        let padding: String = std::iter::repeat(pad_char).take(width - s.len()).collect();
+                        Ok(Value::String(s.clone() + &padding))
+                    }
+                }
+                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "padright" }),
+            }
+        },
+        "center" => |args| {
+            let val = get_arg(&args, 0, "center")?;
+            match val {
+                Value::String(s) => {
+                    let width = arg_f64(&args, 1, "center")? as usize;
+                    let pad_char = match args.get(2) {
+                        Some(Value::String(p)) if !p.is_empty() => p.chars().next().unwrap(),
+                        _ => ' ',
+                    };
+                    if s.len() >= width {
+                        Ok(Value::String(s.clone()))
+                    } else {
+                        let total_pad = width - s.len();
+                        let left_pad = total_pad / 2;
+                        let right_pad = total_pad - left_pad;
+                        let left: String = std::iter::repeat(pad_char).take(left_pad).collect();
+                        let right: String = std::iter::repeat(pad_char).take(right_pad).collect();
+                        Ok(Value::String(left + s + &right))
+                    }
+                }
+                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "center" }),
+            }
         },
         "char" => |args| {
-            let code = args.first()?.as_f64()? as u32;
-            char::from_u32(code).map(|c| Value::String(c.to_string()))
+            let code = arg_f64(&args, 0, "char")? as u32;
+            char::from_u32(code).map(|c| Value::String(c.to_string())).ok_or_else(|| FunctionError::InvalidValue { message: format!("invalid unicode codepoint: {}", code), function: "char" })
         },
-        "ord" => |args| match args.first()? {
-            Value::String(s) => s.chars().next().map(|c| Value::I64(c as i64)),
-            _ => None,
+        "ord" => |args| {
+            let val = get_arg(&args, 0, "ord")?;
+            match val {
+                Value::String(s) => s.chars().next().map(|c| Value::I64(c as i64)).ok_or_else(|| FunctionError::InvalidValue { message: "empty string".to_string(), function: "ord" }),
+                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "ord" }),
+            }
         },
         "hex" => |args| {
-            let n = args.first()?.as_f64()? as i64;
-            Some(Value::String(format!("{:x}", n)))
+            let n = arg_f64(&args, 0, "hex")? as i64;
+            Ok(Value::String(format!("{:x}", n)))
         },
         "bin" => |args| {
-            let n = args.first()?.as_f64()? as i64;
-            Some(Value::String(format!("{:b}", n)))
+            let n = arg_f64(&args, 0, "bin")? as i64;
+            Ok(Value::String(format!("{:b}", n)))
         },
         "oct" => |args| {
-            let n = args.first()?.as_f64()? as i64;
-            Some(Value::String(format!("{:o}", n)))
+            let n = arg_f64(&args, 0, "oct")? as i64;
+            Ok(Value::String(format!("{:o}", n)))
         },
-
-        // Array functions
-        "first" => |args| match args.first()? {
-            Value::Array(arr) => arr.first().cloned(),
-            Value::String(s) => s.chars().next().map(|c| Value::String(c.to_string())),
-            _ => None,
-        },
-        "last" => |args| match args.first()? {
-            Value::Array(arr) => arr.last().cloned(),
-            Value::String(s) => s.chars().last().map(|c| Value::String(c.to_string())),
-            _ => None,
-        },
-        "sum" => |args| match args.first()? {
-            Value::Array(arr) => {
-                let sum: f64 = arr.iter().filter_map(|v| v.as_f64()).sum();
-                Some(Value::F64(sum))
-            }
-            _ => {
-                let sum: f64 = args.iter().filter_map(|v| v.as_f64()).sum();
-                Some(Value::F64(sum))
+        "first" => |args| {
+            let val = get_arg(&args, 0, "first")?;
+            match val {
+                Value::Array(arr) => arr.first().cloned().ok_or(FunctionError::EmptyInput { function: "first" }),
+                Value::String(s) => s.chars().next().map(|c| Value::String(c.to_string())).ok_or(FunctionError::EmptyInput { function: "first" }),
+                v => Err(FunctionError::InvalidType { expected: "string or array", got: v.type_name(), function: "first" }),
             }
         },
-
-        "avg" => |args| match args.first()? {
-            Value::Array(arr) => {
-                let nums: Vec<f64> = arr.iter().filter_map(|v| v.as_f64()).collect();
-                if nums.is_empty() {
-                    None
-                } else {
-                    Some(Value::F64(nums.iter().sum::<f64>() / nums.len() as f64))
+        "last" => |args| {
+            let val = get_arg(&args, 0, "last")?;
+            match val {
+                Value::Array(arr) => arr.last().cloned().ok_or(FunctionError::EmptyInput { function: "last" }),
+                Value::String(s) => s.chars().last().map(|c| Value::String(c.to_string())).ok_or(FunctionError::EmptyInput { function: "last" }),
+                v => Err(FunctionError::InvalidType { expected: "string or array", got: v.type_name(), function: "last" }),
+            }
+        },
+        "sum" => |args| {
+            let val = get_arg(&args, 0, "sum")?;
+            match val {
+                Value::Array(arr) => {
+                    let sum: f64 = arr.iter().filter_map(|v| v.as_f64()).sum();
+                    Ok(Value::F64(sum))
                 }
-            }
-            _ => {
-                let nums: Vec<f64> = args.iter().filter_map(|v| v.as_f64()).collect();
-                if nums.is_empty() {
-                    None
-                } else {
-                    Some(Value::F64(nums.iter().sum::<f64>() / nums.len() as f64))
+                _ => {
+                    let sum: f64 = args.iter().filter_map(|v| v.as_f64()).sum();
+                    Ok(Value::F64(sum))
                 }
             }
         },
-
+        "avg" => |args| {
+            let val = get_arg(&args, 0, "avg")?;
+            match val {
+                Value::Array(arr) => {
+                    let nums: Vec<f64> = arr.iter().filter_map(|v| v.as_f64()).collect();
+                    if nums.is_empty() {
+                        Err(FunctionError::EmptyInput { function: "avg" })
+                    } else {
+                        Ok(Value::F64(nums.iter().sum::<f64>() / nums.len() as f64))
+                    }
+                }
+                _ => {
+                    let nums: Vec<f64> = args.iter().filter_map(|v| v.as_f64()).collect();
+                    if nums.is_empty() {
+                        Err(FunctionError::EmptyInput { function: "avg" })
+                    } else {
+                        Ok(Value::F64(nums.iter().sum::<f64>() / nums.len() as f64))
+                    }
+                }
+            }
+        },
         "nearest" => |args| {
-            let choices = match args.get(1) {
-                Some(Value::Array(arr)) => arr.iter().filter_map(|v| v.as_f64()),
-                _ => return args.get(0).cloned(),
+            let choices_arr = match args.get(1) {
+                Some(Value::Array(arr)) => arr,
+                _ => return Ok(args.get(0).cloned().unwrap_or(Value::None)),
             };
-            //println!("Nearest: {:?}", args);
-            let value = args.get(0)?.as_f64()?;
-
-            let nearest = choices.min_by(|a, b| {
-                (value - *a)
-                    .abs()
-                    .partial_cmp(&(value - *b).abs())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })?;
-
-            Some(Value::F64(nearest))
+            let value = arg_f64(&args, 0, "nearest")?;
+            let choices: Vec<f64> = choices_arr.iter().filter_map(|v| v.as_f64()).collect();
+            if choices.is_empty() {
+                return Err(FunctionError::EmptyInput { function: "nearest" });
+            }
+            let nearest = choices.into_iter().min_by(|a, b| {
+                (value - a).abs().partial_cmp(&(value - b).abs()).unwrap_or(std::cmp::Ordering::Equal)
+            }).ok_or(FunctionError::EmptyInput { function: "nearest" })?;
+            Ok(Value::F64(nearest))
         },
+        "nearest_index" => |args| {
+            let choices_arr = match args.get(0) {
+                Some(Value::Array(arr)) => arr,
+                _ => return Err(FunctionError::InvalidType { expected: "array", got: "value", function: "nearest_index" }),
+            };
+            let choices: Vec<f64> = choices_arr.iter().filter_map(|v| v.as_f64()).collect();
+            if choices.is_empty() {
+                return Err(FunctionError::EmptyInput { function: "nearest_index" });
+            }
+            let value = arg_f64(&args, 1, "nearest_index")?;
+            let index = choices.iter().enumerate().min_by(|(_, a), (_, b)| {
+                (value - **a).abs().partial_cmp(&(value - **b).abs()).unwrap_or(std::cmp::Ordering::Equal)
+            }).map(|(i, _)| i).ok_or(FunctionError::EmptyInput { function: "nearest_index" })?;
+            Ok(Value::I64(index as i64))
+        },
+        "array_get" => |args| {
+            let arr = match args.get(0) {
+                Some(Value::Array(arr)) => arr,
+                _ => return Err(FunctionError::InvalidType { expected: "array", got: "value", function: "array_get" }),
+            };
+            let index = arg_i64(&args, 1, "array_get")? as usize;
+            arr.get(index).cloned().ok_or(FunctionError::IndexOutOfBounds { index, len: arr.len(), function: "array_get" })
+        },
+        "index_of" => |args| {
+            let array = match args.get(0) {
+                Some(Value::Array(arr)) => arr,
+                _ => return Err(FunctionError::InvalidType { expected: "array", got: "value", function: "index_of" }),
+            };
+            let value = get_arg(&args, 1, "index_of")?;
 
-        "count" => |args| match args.first()? {
-            Value::Array(arr) => Some(Value::I64(arr.len() as i64)),
-            Value::String(s) => Some(Value::I64(s.chars().count() as i64)),
-            _ => Some(Value::I64(args.len() as i64)),
+            let index = array.iter().position(|v| {
+                if v == value {
+                    return true;
+                }
+                match (v.as_f64(), value.as_f64()) {
+                    (Some(a), Some(b)) => a == b,
+                    _ => false,
+                }
+            }).ok_or_else(|| FunctionError::Other { message: "value not found in array".to_string(), function: "index_of" })?;
+
+            Ok(Value::I64(index as i64))
+        },
+        "count" => |args| {
+            let val = get_arg(&args, 0, "count")?;
+            match val {
+                Value::Array(arr) => Ok(Value::I64(arr.len() as i64)),
+                Value::String(s) => Ok(Value::I64(s.chars().count() as i64)),
+                _ => Ok(Value::I64(args.len() as i64)),
+            }
         },
         "range" => |args| {
-            let start = args.first()?.as_f64()? as i64;
-            let end = args.get(1)?.as_f64()? as i64;
+            let start = arg_f64(&args, 0, "range")? as i64;
+            let end = arg_f64(&args, 1, "range")? as i64;
             let step = args.get(2).and_then(|v| v.as_f64()).unwrap_or(1.0) as i64;
-
             if step == 0 {
-                return None;
+                return Err(FunctionError::InvalidValue { message: "step cannot be zero".to_string(), function: "range" });
             }
-
             let mut result = Vec::new();
             let mut i = start;
-
             if step > 0 {
                 while i < end {
                     result.push(Value::I64(i));
@@ -1118,158 +1396,136 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     i += step;
                 }
             }
-
-            Some(Value::Array(result))
+            Ok(Value::Array(result))
         },
-
-        "slice" => |args| match args.first()? {
-            Value::Array(arr) => {
-                let start = args.get(1)?.as_f64()? as i64;
-                let end = args.get(2).and_then(|v| v.as_f64()).map(|n| n as i64);
-
-                let len = arr.len() as i64;
-                let start = if start < 0 {
-                    (len + start).max(0)
-                } else {
-                    start.min(len)
-                } as usize;
-                let end = match end {
-                    Some(e) => (if e < 0 { (len + e).max(0) } else { e.min(len) }) as usize,
-                    None => arr.len(),
-                };
-
-                if start >= end {
-                    Some(Value::Array(vec![]))
-                } else {
-                    Some(Value::Array(arr[start..end].to_vec()))
+        "slice" => |args| {
+            let val = get_arg(&args, 0, "slice")?;
+            match val {
+                Value::Array(arr) => {
+                    let start = arg_f64(&args, 1, "slice")? as i64;
+                    let end = args.get(2).and_then(|v| v.as_f64()).map(|n| n as i64);
+                    let len = arr.len() as i64;
+                    let start = if start < 0 { (len + start).max(0) } else { start.min(len) } as usize;
+                    let end = match end {
+                        Some(e) => (if e < 0 { (len + e).max(0) } else { e.min(len) }) as usize,
+                        None => arr.len(),
+                    };
+                    if start >= end {
+                        Ok(Value::Array(vec![]))
+                    } else {
+                        Ok(Value::Array(arr[start..end].to_vec()))
+                    }
                 }
-            }
-            Value::String(s) => {
-                let chars: Vec<char> = s.chars().collect();
-                let start = args.get(1)?.as_f64()? as i64;
-                let end = args.get(2).and_then(|v| v.as_f64()).map(|n| n as i64);
-
-                let len = chars.len() as i64;
-                let start = if start < 0 {
-                    (len + start).max(0)
-                } else {
-                    start.min(len)
-                } as usize;
-                let end = match end {
-                    Some(e) => (if e < 0 { (len + e).max(0) } else { e.min(len) }) as usize,
-                    None => chars.len(),
-                };
-
-                if start >= end {
-                    Some(Value::String(String::new()))
-                } else {
-                    Some(Value::String(chars[start..end].iter().collect()))
+                Value::String(s) => {
+                    let chars: Vec<char> = s.chars().collect();
+                    let start = arg_f64(&args, 1, "slice")? as i64;
+                    let end = args.get(2).and_then(|v| v.as_f64()).map(|n| n as i64);
+                    let len = chars.len() as i64;
+                    let start = if start < 0 { (len + start).max(0) } else { start.min(len) } as usize;
+                    let end = match end {
+                        Some(e) => (if e < 0 { (len + e).max(0) } else { e.min(len) }) as usize,
+                        None => chars.len(),
+                    };
+                    if start >= end {
+                        Ok(Value::String(String::new()))
+                    } else {
+                        Ok(Value::String(chars[start..end].iter().collect()))
+                    }
                 }
+                v => Err(FunctionError::InvalidType { expected: "string or array", got: v.type_name(), function: "slice" }),
             }
-            _ => None,
         },
-
-        // Type functions
-        "type" => |args| Some(Value::String(args.first()?.type_name().to_string())),
-        "isnull" => |args| {
-            Some(Value::Bool(
-                args.first().map(|v| v.is_null()).unwrap_or(true),
-            ))
+        "type" => |args| {
+            let val = get_arg(&args, 0, "type")?;
+            Ok(Value::String(val.type_name().to_string()))
         },
-        "isfloat" => |args| Some(Value::Bool(matches!(args.first(), Some(Value::F64(_))))),
-        "isint" => |args| Some(Value::Bool(matches!(args.first(), Some(Value::I64(_))))),
-        "isstr" => |args| Some(Value::Bool(matches!(args.first(), Some(Value::String(_))))),
-        "isbool" => |args| Some(Value::Bool(matches!(args.first(), Some(Value::Bool(_))))),
-        "isarray" => |args| Some(Value::Bool(matches!(args.first(), Some(Value::Array(_))))),
-
-        // Conversion functions
-        "str" => |args| Some(Value::String(args.first()?.clone().into_string())),
-        "bool" => |args| Some(Value::Bool(args.first()?.is_truthy())),
-        "int" => |args| Some(args.first()?.clone().to_i64()),
-        "float" => |args| Some(args.first()?.clone().to_f64()),
-
-        // Formatting functions
+        "isnone" => |args| {
+            Ok(Value::Bool(args.first().map(|v| v.is_none()).unwrap_or(true)))
+        },
+        "isfloat" => |args| Ok(Value::Bool(matches!(args.first(), Some(Value::F64(_))))),
+        "isint" => |args| Ok(Value::Bool(matches!(args.first(), Some(Value::I64(_))))),
+        "isstr" => |args| Ok(Value::Bool(matches!(args.first(), Some(Value::String(_))))),
+        "isbool" => |args| Ok(Value::Bool(matches!(args.first(), Some(Value::Bool(_))))),
+        "isarray" => |args| Ok(Value::Bool(matches!(args.first(), Some(Value::Array(_))))),
+        "str" => |args| {
+            let val = get_arg(&args, 0, "str")?;
+            Ok(Value::String(val.clone().into_string()))
+        },
+        "bool" => |args| {
+            let val = get_arg(&args, 0, "bool")?;
+            Ok(Value::Bool(val.is_truthy()))
+        },
+        "int" => |args| {
+            let val = get_arg(&args, 0, "int")?;
+            Ok(val.clone().to_i64())
+        },
+        "float" => |args| {
+            let val = get_arg(&args, 0, "float")?;
+            Ok(val.clone().to_f64())
+        },
         "format" => |args| {
-            let val = args.first()?;
+            let val = get_arg(&args, 0, "format")?;
             let precision = args.get(1).and_then(|v| v.as_f64()).map(|n| n as usize);
-
             if let (Some(n), Some(p)) = (val.as_f64(), precision) {
-                Some(Value::String(format!("{:.*}", p, n)))
+                Ok(Value::String(format!("{:.*}", p, n)))
             } else {
-                Some(Value::String(val.to_string()))
+                Ok(Value::String(val.to_string()))
             }
         },
         "comma" => |args| {
-            // Format number with thousands separator
-            let n = args.first()?.as_f64()?;
+            let n = arg_f64(&args, 0, "comma")?;
             let decimals = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
-
             let formatted = if decimals > 0 {
                 format!("{:.*}", decimals, n)
             } else {
                 format!("{}", n.trunc() as i64)
             };
-
             let parts: Vec<&str> = formatted.split('.').collect();
             let int_part = parts[0];
             let frac_part = parts.get(1);
-
             let negative = int_part.starts_with('-');
             let digits: String = int_part.chars().filter(|c| c.is_ascii_digit()).collect();
-
             let with_commas = insert_thousands_commas(&digits);
-
-            let result = if negative {
-                format!("-{}", with_commas)
-            } else {
-                with_commas
-            };
-
+            let result = if negative { format!("-{}", with_commas) } else { with_commas };
             match frac_part {
-                Some(frac) => Some(Value::String(format!("{}.{}", result, frac))),
-                None => Some(Value::String(result)),
+                Some(frac) => Ok(Value::String(format!("{}.{}", result, frac))),
+                None => Ok(Value::String(result)),
             }
         },
         "percent" => |args| {
-            let n = args.first()?.as_f64()?;
+            let n = arg_f64(&args, 0, "percent")?;
             let decimals = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
-            Some(Value::String(format!("{:.*}%", decimals, n * 100.0)))
+            Ok(Value::String(format!("{:.*}%", decimals, n * 100.0)))
         },
         "currency" => |args| {
-            let n = args.first()?.as_f64()?;
+            let n = arg_f64(&args, 0, "currency")?;
             let symbol = match args.get(1) {
                 Some(Value::String(s)) => s.clone(),
                 _ => "$".to_string(),
             };
             let decimals = args.get(2).and_then(|v| v.as_f64()).unwrap_or(2.0) as usize;
-
-            // Use comma formatter
             let formatted = if decimals > 0 {
                 format!("{:.*}", decimals, n.abs())
             } else {
                 format!("{}", n.abs().trunc() as i64)
             };
-
             let parts: Vec<&str> = formatted.split('.').collect();
             let int_part = parts[0];
             let frac_part = parts.get(1);
-
             let digits: String = int_part.chars().filter(|c| c.is_ascii_digit()).collect();
             let with_commas = insert_thousands_commas(&digits);
-
             let num_str = match frac_part {
                 Some(frac) => format!("{}.{}", with_commas, frac),
                 None => with_commas,
             };
-
             if n < 0.0 {
-                Some(Value::String(format!("-{}{}", symbol, num_str)))
+                Ok(Value::String(format!("-{}{}", symbol, num_str)))
             } else {
-                Some(Value::String(format!("{}{}", symbol, num_str)))
+                Ok(Value::String(format!("{}{}", symbol, num_str)))
             }
         },
         "ordinal" => |args| {
-            let n = args.first()?.as_f64()? as i64;
+            let n = arg_f64(&args, 0, "ordinal")? as i64;
             let suffix = match (n % 10, n % 100) {
                 (1, 11) => "th",
                 (2, 12) => "th",
@@ -1279,240 +1535,224 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 (3, _) => "rd",
                 _ => "th",
             };
-            Some(Value::String(format!("{}{}", n, suffix)))
+            Ok(Value::String(format!("{}{}", n, suffix)))
         },
         "bytes" => |args| {
-            // Format bytes to human-readable
-            let n = args.first()?.as_f64()?;
+            let n = arg_f64(&args, 0, "bytes")?;
             let decimals = args.get(1).and_then(|v| v.as_f64()).unwrap_or(2.0) as usize;
             let units = ["B", "KB", "MB", "GB", "TB", "PB"];
-
             let mut value = n.abs();
             let mut unit_idx = 0;
             while value >= 1024.0 && unit_idx < units.len() - 1 {
                 value /= 1024.0;
                 unit_idx += 1;
             }
-
             let sign = if n < 0.0 { "-" } else { "" };
-            Some(Value::String(format!(
-                "{}{:.*} {}",
-                sign, decimals, value, units[unit_idx]
-            )))
+            Ok(Value::String(format!("{}{:.*} {}", sign, decimals, value, units[unit_idx])))
         },
-
-        // Conditional helpers
         "if" => |args| {
-            let cond = args.first()?.is_truthy();
-            let yes = args.get(1)?.clone();
+            let cond = get_arg(&args, 0, "if")?.is_truthy();
+            let yes = get_arg(&args, 1, "if")?.clone();
             let no = args.get(2).cloned().unwrap_or(Value::None);
-            Some(if cond { yes } else { no })
+            Ok(if cond { yes } else { no })
         },
-        "ifnull" => |args| {
-            let val = args.first()?;
-            if val.is_null() {
-                args.get(1).cloned()
+        "ifnone" => |args| {
+            let val = get_arg(&args, 0, "ifnone")?;
+            if val.is_none() {
+                Ok(args.get(1).cloned().unwrap_or(Value::None))
             } else {
-                Some(val.clone())
+                Ok(val.clone())
             }
         },
         "default" => |args| {
-            let val = args.first()?;
-            if val.is_null() || matches!(val, Value::String(s) if s.is_empty()) {
-                args.get(1).cloned()
+            let val = get_arg(&args, 0, "default")?;
+            if val.is_none() || matches!(val, Value::String(s) if s.is_empty()) {
+                Ok(args.get(1).cloned().unwrap_or(Value::None))
             } else {
-                Some(val.clone())
+                Ok(val.clone())
             }
         },
         "coalesce" => |args| {
             for arg in &args {
-                if !arg.is_null() {
-                    return Some(arg.clone());
+                if !arg.is_none() {
+                    return Ok(arg.clone());
                 }
             }
-            Some(Value::None)
+            Ok(Value::None)
         },
         "choose" => |args| {
-            let idx = args.first()?.as_f64()? as usize;
-            args.get(idx + 1).cloned()
+            let idx = arg_f64(&args, 0, "choose")? as usize;
+            args.get(idx + 1).cloned().ok_or(FunctionError::IndexOutOfBounds { index: idx, len: args.len().saturating_sub(1), function: "choose" })
         },
         "switch" => |args| {
-            // switch(value, case1, result1, case2, result2, ..., default)
-            let val = args.first()?;
+            let val = get_arg(&args, 0, "switch")?;
             let pairs = &args[1..];
             let mut i = 0;
             while i + 1 < pairs.len() {
                 if val == &pairs[i] {
-                    return Some(pairs[i + 1].clone());
+                    return Ok(pairs[i + 1].clone());
                 }
                 i += 2;
             }
-            // Return default if odd number of remaining args
             if pairs.len() % 2 == 1 {
-                Some(pairs.last()?.clone())
+                Ok(pairs.last().cloned().unwrap_or(Value::None))
             } else {
-                Some(Value::None)
+                Ok(Value::None)
             }
         },
         "map" => |args| {
-            // map(value, inMin, inMax, outMin, outMax)
-            let val = args.first()?.as_f64()?;
-            let in_min = args.get(1)?.as_f64()?;
-            let in_max = args.get(2)?.as_f64()?;
-            let out_min = args.get(3)?.as_f64()?;
-            let out_max = args.get(4)?.as_f64()?;
-
+            let val = arg_f64(&args, 0, "map")?;
+            let in_min = arg_f64(&args, 1, "map")?;
+            let in_max = arg_f64(&args, 2, "map")?;
+            let out_min = arg_f64(&args, 3, "map")?;
+            let out_max = arg_f64(&args, 4, "map")?;
             let t = (val - in_min) / (in_max - in_min);
-            Some(Value::F64(out_min + t * (out_max - out_min)))
+            Ok(Value::F64(out_min + t * (out_max - out_min)))
         },
-
-        // Time/Date helpers (basic, no actual time - uses numeric input)
         "duration" => |args| {
-            // Format seconds as duration
-            let mut secs = args.first()?.as_f64()?;
-            let negative = secs < 0.0;
-            secs = secs.abs();
-
-            let hours = (secs / 3600.0).floor() as i64;
-            let mins = ((secs % 3600.0) / 60.0).floor() as i64;
-            let s = (secs % 60.0).floor() as i64;
-
-            let result = if hours > 0 {
-                format!("{}:{:02}:{:02}", hours, mins, s)
-            } else {
-                format!("{}:{:02}", mins, s)
-            };
-
-            Some(Value::String(if negative {
-                format!("-{}", result)
-            } else {
-                result
-            }))
+            let secs = arg_time_seconds(args.as_slice(), 0, "duration")?;
+            Ok(Value::String(format_duration(secs)))
         },
         "elapsed" => |args| {
-            let secs = args.first()?.as_f64()?.abs();
+            let timestamp = arg_time_seconds(args.as_slice(), 0, "elapsed")?;
 
-            let result = if secs < 60.0 {
-                let n = secs.round();
-                format!("{:.0} second{}", n, if n == 1.0 { "" } else { "s" })
-            } else if secs < 3600.0 {
-                let n = (secs / 60.0).round();
-                format!("{:.0} minute{}", n, if n == 1.0 { "" } else { "s" })
-            } else if secs < 86400.0 {
-                format!("{:.1} hours", secs / 3600.0)
-            } else if secs < 604800.0 {
-                format!("{:.1} days", secs / 86400.0)
-            } else if secs < 2592000.0 {
-                format!("{:.1} weeks", secs / 604800.0)
-            } else if secs < 31536000.0 {
-                format!("{:.1} months", secs / 2592000.0)
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| FunctionError::ConversionFailed {
+                    from: "system time",
+                    to: "unix timestamp",
+                    function: "elapsed",
+                })?
+                .as_secs_f64();
+
+            let elapsed = now - timestamp;
+
+            let result = if elapsed >= 0.0 {
+                format!("{} ago", format_elapsed(elapsed))
             } else {
-                format!("{:.1} years", secs / 31536000.0)
+                format!("in {}", format_elapsed(-elapsed))
             };
 
-            Some(Value::String(result))
+            Ok(Value::String(result))
         },
+        "fancy_time" => |args| {
+            let secs = arg_f64(&args, 0, "fancy_time")?;
+            let day_seconds = arg_f64(&args, 1, "fancy_time")?;
 
-        // Debug/utility
-        "debug" => |args| Some(Value::String(format!("{:?}", args.first()?))),
-        "typeof" => |args| Some(Value::String(args.first()?.type_name().to_string())),
-        "defined" => |args| {
-            Some(Value::Bool(
-                !args.first().map(|v| v.is_null()).unwrap_or(true),
+            Ok(Value::String(format_custom_time(
+                secs,
+                day_seconds,
+            )))
+        },
+        "datetime" => |args| {
+            let timestamp = arg_time_seconds(&args, 0, "datetime")?;
+
+            let dt = DateTime::<Utc>::from_timestamp(timestamp as i64, ((timestamp.fract().abs()) * 1_000_000_000.0) as u32)
+                .ok_or(FunctionError::ConversionFailed {
+                    from: "unix timestamp",
+                    to: "datetime",
+                    function: "datetime",
+                })?;
+
+            Ok(Value::String(
+                dt.format("%A, %d %B %Y, %H:%M:%S UTC").to_string()
             ))
         },
-        "empty" => |args| match args.first() {
-            Some(Value::String(s)) => Some(Value::Bool(s.is_empty())),
-            Some(Value::Array(arr)) => Some(Value::Bool(arr.is_empty())),
-            Some(Value::None) => Some(Value::Bool(true)),
-            _ => Some(Value::Bool(false)),
+        "debug" => |args| {
+            let val = get_arg(&args, 0, "debug")?;
+            Ok(Value::String(format!("{:?}", val)))
         },
-        "hsv_to_rgb" => |args| match args.first() {
-            Some(Value::Array(hsv)) => {
-                let hsv = HSV {
-                    h: hsv[0].as_f64()? as f32,
-                    s: hsv[1].as_f64()? as f32,
-                    v: hsv[2].as_f64()? as f32,
-                };
-                Some(Value::from_vec(hsv_to_rgb(hsv)))
+        "typeof" => |args| {
+            let val = get_arg(&args, 0, "typeof")?;
+            Ok(Value::String(val.type_name().to_string()))
+        },
+        "defined" => |args| {
+            Ok(Value::Bool(!args.first().map(|v| v.is_none()).unwrap_or(true)))
+        },
+        "empty" => |args| {
+            match args.first() {
+                Some(Value::String(s)) => Ok(Value::Bool(s.is_empty())),
+                Some(Value::Array(arr)) => Ok(Value::Bool(arr.is_empty())),
+                Some(Value::None) => Ok(Value::Bool(true)),
+                _ => Ok(Value::Bool(false)),
             }
-            Some(Value::F64(hue)) => {
-                let hsv = HSV {
-                    h: *hue as f32,
-                    s: args[1].as_f64()? as f32,
-                    v: args[2].as_f64()? as f32,
-                };
-                Some(Value::from_vec(hsv_to_rgb(hsv)))
+        },
+        "is_some" => |args| {
+            //println!("In is_some(xyz): {:?}", args.first());
+            match args.first() {
+                Some(v) => {
+                    Ok(Value::Bool(value_exists(v)))
+                }
+                _ => Err(FunctionError::MissingArgument { index: 0, function: "is_some" }),
             }
-            _ => Some(Value::None),
+        },
+        "hsv_to_rgb" => |args| {
+            match args.first() {
+                Some(Value::Array(hsv)) => {
+                    if hsv.len() < 3 {
+                        return Err(FunctionError::InvalidValue { message: "expected array of 3 elements [h, s, v]".to_string(), function: "hsv_to_rgb" });
+                    }
+                    let hsv_obj = HSV {
+                        h: hsv[0].as_f64().ok_or(FunctionError::ConversionFailed { from: hsv[0].type_name(), to: "f32", function: "hsv_to_rgb" })? as f32,
+                        s: hsv[1].as_f64().ok_or(FunctionError::ConversionFailed { from: hsv[1].type_name(), to: "f32", function: "hsv_to_rgb" })? as f32,
+                        v: hsv[2].as_f64().ok_or(FunctionError::ConversionFailed { from: hsv[2].type_name(), to: "f32", function: "hsv_to_rgb" })? as f32,
+                    };
+                    Ok(Value::from_vec(hsv_to_rgb(hsv_obj)))
+                }
+                Some(Value::F64(hue)) => {
+                    let h = *hue as f32;
+                    let s = arg_f64(&args, 1, "hsv_to_rgb")? as f32;
+                    let v = arg_f64(&args, 2, "hsv_to_rgb")? as f32;
+                    let hsv_obj = HSV { h, s, v };
+                    Ok(Value::from_vec(hsv_to_rgb(hsv_obj)))
+                }
+                Some(v) => Err(FunctionError::InvalidType { expected: "array or number", got: v.type_name(), function: "hsv_to_rgb" }),
+                None => Err(FunctionError::MissingArgument { index: 0, function: "hsv_to_rgb" }),
+            }
         },
         "random" => |args| {
-            //println!("{:?}", args);
             let mut rng = ThreadRng::default();
             match args.first() {
                 Some(Value::Array(array)) => {
-                    // Array as [min, max] range, or pick random element
                     if array.len() == 2 {
                         match (&array[0], &array[1]) {
-                            (Value::F64(min), Value::F64(max)) => {
-                                Some(Value::F64(rng.random_range(*min..=*max)))
-                            }
-                            (Value::I64(min), Value::I64(max)) => {
-                                Some(Value::I64(rng.random_range(*min..=*max)))
-                            }
-                            _ => None,
+                            (Value::F64(min), Value::F64(max)) => Ok(Value::F64(rng.random_range(*min..=*max))),
+                            (Value::I64(min), Value::I64(max)) => Ok(Value::I64(rng.random_range(*min..=*max))),
+                            _ => Err(FunctionError::InvalidType { expected: "matching numeric pair", got: "mixed types", function: "random" }),
                         }
                     } else if !array.is_empty() {
-                        // Pick random element from array
                         let idx = rng.random_range(0..array.len());
-                        Some(array[idx].clone())
+                        Ok(array[idx].clone())
                     } else {
-                        None
+                        Err(FunctionError::EmptyInput { function: "random" })
                     }
                 }
                 Some(Value::F64(first)) => {
-                    // Check for second argument to form range
                     match args.get(1) {
-                        Some(Value::F64(second)) => {
-                            Some(Value::F64(rng.random_range(*first..=*second)))
-                        }
-                        _ => {
-                            // Single value: random from 0.0 to first
-                            Some(Value::F64(rng.random_range(0.0..=*first)))
-                        }
+                        Some(Value::F64(second)) => Ok(Value::F64(rng.random_range(*first..=*second))),
+                        Some(Value::I64(second)) => Ok(Value::F64(rng.random_range(*first..=*second as f64))),
+                        _ => Ok(Value::F64(rng.random_range(0.0..=*first))),
                     }
                 }
                 Some(Value::I64(first)) => {
-                    // Check for second argument to form range
                     match args.get(1) {
-                        Some(Value::I64(second)) => {
-                            Some(Value::I64(rng.random_range(*first..=*second)))
-                        }
-                        _ => {
-                            // Single value: random from 0 to first
-                            Some(Value::I64(rng.random_range(0..=*first)))
-                        }
+                        Some(Value::F64(second)) => Ok(Value::F64(rng.random_range(*first as f64..=*second))),
+                        Some(Value::I64(second)) => Ok(Value::I64(rng.random_range(*first..=*second))),
+                        _ => Ok(Value::I64(rng.random_range(0..=*first))),
                     }
                 }
                 Some(Value::String(string)) => {
-                    // Hash the string for deterministic-ish random value
                     use std::collections::hash_map::DefaultHasher;
                     use std::hash::{Hash, Hasher};
                     let mut hasher = DefaultHasher::new();
                     string.hash(&mut hasher);
-                    Some(Value::F64((hasher.finish() % 1000000) as f64 / 1000000.0))
+                    Ok(Value::F64((hasher.finish() % 1000000) as f64 / 1000000.0))
                 }
-                Some(Value::Bool(_)) => {
-                    // Return random boolean
-                    Some(Value::Bool(rng.random()))
-                }
-                _ => {
-                    // Default: random f64 between 0.0 and 1.0
-                    Some(Value::F64(rng.random()))
-                }
+                Some(Value::Bool(_)) => Ok(Value::Bool(rng.random())),
+                Some(Value::None) => Ok(Value::F64(rng.random())),
+                None => Ok(Value::F64(rng.random())),
             }
         },
-
         _ => return None,
     })
 }
@@ -1551,14 +1791,17 @@ pub enum ParseError {
         on_type: String,
         pos: usize,
     },
+    ErrorInFunction { name: String, args: Vec<Value>, function_error: FunctionError },
 }
 
 #[derive(Debug, Clone)]
 pub enum AnnoyingError {
     DivisionByZero { pos: usize },
-    NullValue { pos: usize },
-    OverflowWarning { pos: usize },
+    NoneValue { pos: usize },
+    OverflowWarning { pos: usize }
 }
+
+use owo_colors::OwoColorize;
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -1570,15 +1813,19 @@ impl fmt::Display for ParseError {
             } => {
                 write!(
                     f,
-                    "Parse error at position {}: expected {}, but found {:?}",
-                    pos, expected, found
+                    "{} at position {}: expected {}, but found {:?}",
+                    "Parse error".bright_red().bold(),
+                    pos.bright_yellow(),
+                    expected.bright_blue(),
+                    found
                 )
             }
             Self::UnexpectedEnd { expected } => {
                 write!(
                     f,
-                    "Parse error: unexpected end of input, expected {}",
-                    expected
+                    "{}: unexpected end of input, expected {}",
+                    "Parse error".bright_red().bold(),
+                    expected.bright_blue()
                 )
             }
             Self::TypeMismatch {
@@ -1589,22 +1836,30 @@ impl fmt::Display for ParseError {
             } => {
                 write!(
                     f,
-                    "Type error at position {}: {} requires {}, but got {}",
-                    pos, operation, expected, found
+                    "{} at position {}: '{}' requires {}, but got {}",
+                    "Type error".bright_red().bold(),
+                    pos.bright_yellow(),
+                    operation.bright_blue(),
+                    expected.bright_blue(),
+                    found.bright_magenta()
                 )
             }
             Self::UndefinedVariable { name, pos } => {
                 write!(
                     f,
-                    "Reference error at position {}: undefined variable '{}'",
-                    pos, name
+                    "{} at position {}: undefined variable '{}'",
+                    "Reference error".bright_red().bold(),
+                    pos.bright_yellow(),
+                    name.bright_blue()
                 )
             }
             Self::UndefinedFunction { name, pos } => {
                 write!(
                     f,
-                    "Reference error at position {}: undefined function '{}'",
-                    pos, name
+                    "{} at position {}: undefined function '{}'",
+                    "Reference error".bright_red().bold(),
+                    pos.bright_yellow(),
+                    name.bright_blue()
                 )
             }
             Self::InvalidPropertyAccess {
@@ -1614,8 +1869,11 @@ impl fmt::Display for ParseError {
             } => {
                 write!(
                     f,
-                    "Property error at position {}: type '{}' has no property '{}'",
-                    pos, on_type, property
+                    "{} at position {}: type '{}' has no property '{}'",
+                    "Property error".bright_red().bold(),
+                    pos.bright_yellow(),
+                    on_type.bright_magenta(),
+                    property.bright_blue()
                 )
             }
             Self::InvalidIndexAccess {
@@ -1625,14 +1883,30 @@ impl fmt::Display for ParseError {
             } => {
                 write!(
                     f,
-                    "Index error at position {}: cannot index '{}' with '{}'",
-                    pos, on_type, index_type
+                    "{} at position {}: cannot index '{}' with '{}'",
+                    "Index error".bright_red().bold(),
+                    pos.bright_yellow(),
+                    on_type.bright_magenta(),
+                    index_type.bright_magenta()
+                )
+            }
+            Self::ErrorInFunction {
+                name,
+                args,
+                function_error,
+            } => {
+                write!(
+                    f,
+                    "{} in function '{}' with args '{:?}': {:?}",
+                    "Function error".bright_red().bold(),
+                    name.bright_blue(),
+                    args,
+                    function_error
                 )
             }
         }
     }
 }
-
 impl fmt::Display for AnnoyingError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -1643,10 +1917,10 @@ impl fmt::Display for AnnoyingError {
                     pos
                 )
             }
-            Self::NullValue { pos } => {
+            Self::NoneValue { pos } => {
                 write!(
                     f,
-                    "Warning at position {}: null value used in operation",
+                    "Warning at position {}: none value used in operation",
                     pos
                 )
             }
@@ -1663,846 +1937,7 @@ impl fmt::Display for AnnoyingError {
 
 type ParseResult<T> = Result<T, ParseError>;
 
-#[derive(Clone, Debug, PartialEq)]
-enum Token {
-    Number(f64),
-    Ident(String),
-    StrLit(String),
-    True,
-    False,
-    Null,
-    Plus,
-    Minus,
-    Star,
-    Slash,
-    Percent,
-    Power,
-    BitAnd,
-    BitOr,
-    BitXor,
-    BitNot,
-    Shl,
-    Shr,
-    Eq,
-    Neq,
-    Lt,
-    Gt,
-    Le,
-    Ge,
-    StrictEq,
-    StrictNeq,
-    And,
-    Or,
-    Not,
-    NullCoalesce,
-    OptChain,
-    Question,
-    Colon,
-    LParen,
-    RParen,
-    LBracket,
-    RBracket,
-    Comma,
-    Dot,
-    DotDot,
-    DotDotEq,
-    Dollar,
-    Pipe,
-    End,
-    RBrace,
-    LBrace,
-}
 
-fn tokenize_expr(input: &str) -> Vec<Token> {
-    let mut tokens = Vec::new();
-    let mut chars = input.chars().peekable();
-
-    while let Some(&c) = chars.peek() {
-        if c.is_whitespace() {
-            chars.next();
-        } else if c == '"' || c == '\'' || c == '`' {
-            let quote = c;
-            chars.next();
-            let mut s = String::new();
-            while let Some(&d) = chars.peek() {
-                chars.next();
-                if d == quote {
-                    break;
-                } else if d == '\\' {
-                    if let Some(&e) = chars.peek() {
-                        chars.next();
-                        match e {
-                            'n' => s.push('\n'),
-                            't' => s.push('\t'),
-                            'r' => s.push('\r'),
-                            '\\' => s.push('\\'),
-                            '"' => s.push('"'),
-                            '\'' => s.push('\''),
-                            '0' => s.push('\0'),
-                            _ => {
-                                s.push('\\');
-                                s.push(e);
-                            }
-                        }
-                    }
-                } else {
-                    s.push(d);
-                }
-            }
-            tokens.push(Token::StrLit(s));
-        } else {
-            let prev_is_operand = matches!(
-                tokens.last(),
-                Some(Token::Number(_))
-                    | Some(Token::Ident(_))
-                    | Some(Token::RParen)
-                    | Some(Token::RBracket)
-                    | Some(Token::StrLit(_))
-            );
-
-            if c.is_ascii_digit()
-                || (c == '.'
-                    && !prev_is_operand
-                    && !matches!(tokens.last(), Some(Token::Colon))
-                    && chars.clone().nth(1).map_or(false, |n| n.is_ascii_digit()))
-            {
-                let mut s = String::new();
-                let mut has_dot = false;
-                let mut has_exp = false;
-
-                if c == '0' {
-                    s.push(c);
-                    chars.next();
-                    if let Some(&next) = chars.peek() {
-                        match next {
-                            'x' | 'X' => {
-                                s.push(next);
-                                chars.next();
-                                while let Some(&d) = chars.peek() {
-                                    if d.is_ascii_hexdigit() || d == '_' {
-                                        if d != '_' {
-                                            s.push(d);
-                                        }
-                                        chars.next();
-                                    } else {
-                                        break;
-                                    }
-                                }
-                                if let Ok(v) = i64::from_str_radix(&s[2..], 16) {
-                                    tokens.push(Token::Number(v as f64));
-                                }
-                                continue;
-                            }
-                            'b' | 'B' => {
-                                s.push(next);
-                                chars.next();
-                                while let Some(&d) = chars.peek() {
-                                    if d == '0' || d == '1' || d == '_' {
-                                        if d != '_' {
-                                            s.push(d);
-                                        }
-                                        chars.next();
-                                    } else {
-                                        break;
-                                    }
-                                }
-                                if let Ok(v) = i64::from_str_radix(&s[2..], 2) {
-                                    tokens.push(Token::Number(v as f64));
-                                }
-                                continue;
-                            }
-                            'o' | 'O' => {
-                                s.push(next);
-                                chars.next();
-                                while let Some(&d) = chars.peek() {
-                                    if ('0'..='7').contains(&d) || d == '_' {
-                                        if d != '_' {
-                                            s.push(d);
-                                        }
-                                        chars.next();
-                                    } else {
-                                        break;
-                                    }
-                                }
-                                if let Ok(v) = i64::from_str_radix(&s[2..], 8) {
-                                    tokens.push(Token::Number(v as f64));
-                                }
-                                continue;
-                            }
-                            _ => {}
-                        }
-                    }
-                } else {
-                    s.push(c);
-                    chars.next();
-                }
-
-                while let Some(&d) = chars.peek() {
-                    if d.is_ascii_digit() || d == '_' {
-                        if d != '_' {
-                            s.push(d);
-                        }
-                        chars.next();
-                    } else if d == '.' && !has_dot && !has_exp {
-                        let mut peek_chars = chars.clone();
-                        peek_chars.next();
-                        if peek_chars.peek() == Some(&'.') {
-                            break;
-                        }
-                        has_dot = true;
-                        s.push(d);
-                        chars.next();
-                    } else if (d == 'e' || d == 'E') && !has_exp {
-                        has_exp = true;
-                        s.push(d);
-                        chars.next();
-                        if let Some(&sign) = chars.peek() {
-                            if sign == '+' || sign == '-' {
-                                s.push(sign);
-                                chars.next();
-                            }
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                if let Ok(v) = s.parse() {
-                    tokens.push(Token::Number(v));
-                }
-            } else if c.is_alphabetic() || c == '_' {
-                let mut s = String::new();
-
-                while let Some(&d) = chars.peek() {
-                    if d.is_alphanumeric() || d == '_' || d == '.' {
-                        s.push(d);
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-
-                match s.as_str() {
-                    "true" => tokens.push(Token::True),
-                    "false" => tokens.push(Token::False),
-                    "null" | "none" => tokens.push(Token::Null),
-                    _ => tokens.push(Token::Ident(s)),
-                }
-            } else {
-                chars.next();
-                match c {
-                    '+' => tokens.push(Token::Plus),
-                    '-' => tokens.push(Token::Minus),
-                    '*' => {
-                        if chars.peek() == Some(&'*') {
-                            chars.next();
-                            tokens.push(Token::Power);
-                        } else {
-                            tokens.push(Token::Star);
-                        }
-                    }
-                    '/' => tokens.push(Token::Slash),
-                    '%' => tokens.push(Token::Percent),
-                    '(' => tokens.push(Token::LParen),
-                    ')' => tokens.push(Token::RParen),
-                    '[' => tokens.push(Token::LBracket),
-                    ']' => tokens.push(Token::RBracket),
-                    '{' => tokens.push(Token::LBrace),
-                    '}' => tokens.push(Token::RBrace),
-                    ',' => tokens.push(Token::Comma),
-                    '$' => tokens.push(Token::Dollar),
-                    '~' => tokens.push(Token::BitNot),
-                    '?' => {
-                        if chars.peek() == Some(&'?') {
-                            chars.next();
-                            tokens.push(Token::NullCoalesce);
-                        } else if chars.peek() == Some(&'.') {
-                            chars.next();
-                            tokens.push(Token::OptChain);
-                        } else {
-                            tokens.push(Token::Question);
-                        }
-                    }
-                    ':' => {
-                        tokens.push(Token::Colon);
-
-                        if chars.peek() == Some(&'.') {
-                            chars.next();
-                            tokens.push(Token::Dot);
-                        }
-                    }
-                    '.' => {
-                        if chars.peek() == Some(&'.') {
-                            chars.next();
-                            if chars.peek() == Some(&'=') {
-                                chars.next();
-                                tokens.push(Token::DotDotEq);
-                            } else {
-                                tokens.push(Token::DotDot);
-                            }
-                        } else {
-                            tokens.push(Token::Dot);
-                        }
-                    }
-                    '!' => {
-                        if chars.peek() == Some(&'=') {
-                            chars.next();
-                            if chars.peek() == Some(&'=') {
-                                chars.next();
-                                tokens.push(Token::StrictNeq);
-                            } else {
-                                tokens.push(Token::Neq);
-                            }
-                        } else {
-                            tokens.push(Token::Not);
-                        }
-                    }
-                    '=' => {
-                        if chars.peek() == Some(&'=') {
-                            chars.next();
-                            if chars.peek() == Some(&'=') {
-                                chars.next();
-                                tokens.push(Token::StrictEq);
-                            } else {
-                                tokens.push(Token::Eq);
-                            }
-                        }
-                    }
-                    '<' => {
-                        if chars.peek() == Some(&'=') {
-                            chars.next();
-                            tokens.push(Token::Le);
-                        } else if chars.peek() == Some(&'<') {
-                            chars.next();
-                            tokens.push(Token::Shl);
-                        } else {
-                            tokens.push(Token::Lt);
-                        }
-                    }
-                    '>' => {
-                        if chars.peek() == Some(&'=') {
-                            chars.next();
-                            tokens.push(Token::Ge);
-                        } else if chars.peek() == Some(&'>') {
-                            chars.next();
-                            tokens.push(Token::Shr);
-                        } else {
-                            tokens.push(Token::Gt);
-                        }
-                    }
-                    '&' => {
-                        if chars.peek() == Some(&'&') {
-                            chars.next();
-                            tokens.push(Token::And);
-                        } else {
-                            tokens.push(Token::BitAnd);
-                        }
-                    }
-                    '|' => {
-                        if chars.peek() == Some(&'|') {
-                            chars.next();
-                            tokens.push(Token::Or);
-                        } else if chars.peek() == Some(&'>') {
-                            chars.next();
-                            tokens.push(Token::Pipe);
-                        } else {
-                            tokens.push(Token::BitOr);
-                        }
-                    }
-                    '^' => tokens.push(Token::BitXor),
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    tokens.push(Token::End);
-    tokens
-}
-
-struct Parser<'a> {
-    tokens: &'a [Token],
-    pos: usize,
-    vars: &'a Variables,
-    settings: &'a Settings,
-    is_inside_braces: bool,
-}
-
-impl<'a> Parser<'a> {
-    fn new(tokens: &'a [Token], vars: &'a Variables, settings: &'a Settings) -> Self {
-        Self {
-            tokens,
-            pos: 0,
-            vars,
-            settings,
-            is_inside_braces: false,
-        }
-    }
-
-    fn peek(&self) -> Token {
-        self.tokens.get(self.pos).cloned().unwrap_or(Token::End)
-    }
-
-    fn peek_n(&self, n: usize) -> Token {
-        self.tokens.get(self.pos + n).cloned().unwrap_or(Token::End)
-    }
-
-    pub fn parse(&mut self) -> ParseResult<Value> {
-        let value = self.parse_expr_bp(0, false)?;
-        if self.peek() != Token::End {
-            return Err(ParseError::UnexpectedToken {
-                expected: "end of expression".to_string(),
-                found: self.peek(),
-                pos: self.pos,
-            });
-        }
-        Ok(value)
-    }
-
-    fn parse_expr(&mut self, min_bp: u8) -> ParseResult<Value> {
-        self.parse_expr_bp(min_bp, false)
-    }
-
-    fn parse_expr_bp(&mut self, min_bp: u8, stop_at_ternary_colon: bool) -> ParseResult<Value> {
-        let mut left = self.parse_primary()?;
-
-        loop {
-            let op = self.peek();
-
-            if stop_at_ternary_colon && op == Token::Colon && self.peek_n(1) != Token::Dot {
-                break;
-            }
-
-            if let Value::String(ref l) = left {
-                if matches!(op, Token::Ident(_) | Token::StrLit(_) | Token::LBrace) {
-                    let right = self.parse_primary()?;
-                    left = Value::String(format!("{}{}", l, right.to_string()));
-                    continue;
-                }
-            }
-
-            let (l_bp, r_bp) = match op {
-                Token::Pipe => (1, 2),
-                Token::Question => (2, 0),
-                Token::Colon => (16, 17),
-                Token::NullCoalesce => (3, 4),
-                Token::Or => (4, 5),
-                Token::And => (5, 6),
-                Token::BitOr => (6, 7),
-                Token::BitXor => (7, 8),
-                Token::BitAnd => (8, 9),
-                Token::Eq | Token::Neq | Token::StrictEq | Token::StrictNeq => (9, 10),
-                Token::Lt | Token::Gt | Token::Le | Token::Ge => (10, 11),
-                Token::Shl | Token::Shr => (11, 12),
-                Token::Plus | Token::Minus => (12, 13),
-                Token::Star | Token::Slash | Token::Percent => (13, 14),
-                Token::Power => (15, 14),
-                Token::Dot | Token::LBracket => (16, 17),
-                _ => break,
-            };
-
-            if l_bp < min_bp {
-                break;
-            }
-
-            self.pos += 1;
-
-            if op == Token::Question {
-                let yes = self.parse_expr_bp(0, true)?;
-                if self.peek() != Token::Colon {
-                    return Err(ParseError::UnexpectedToken {
-                        expected: ":".to_string(),
-                        found: self.peek(),
-                        pos: self.pos,
-                    });
-                }
-                self.pos += 1;
-
-                let no = self.parse_expr_bp(2, false)?;
-                left = if left.is_truthy() { yes } else { no };
-                continue;
-            }
-
-            if op == Token::Pipe {
-                let name = match self.peek() {
-                    Token::Ident(s) => {
-                        self.pos += 1;
-                        s
-                    }
-                    _ => {
-                        return Err(ParseError::UnexpectedToken {
-                            expected: "identifier".to_string(),
-                            found: self.peek(),
-                            pos: self.pos,
-                        });
-                    }
-                };
-
-                let mut args = vec![left.clone()];
-
-                if self.peek() == Token::LParen {
-                    self.pos += 1;
-                    let mut more_args = Vec::new();
-
-                    if self.peek() != Token::RParen {
-                        loop {
-                            more_args.push(self.parse_expr_bp(0, false)?);
-                            match self.peek() {
-                                Token::Comma => {
-                                    self.pos += 1;
-                                }
-                                Token::RParen => break,
-                                tok => {
-                                    return Err(ParseError::UnexpectedToken {
-                                        expected: "',' or ')'".to_string(),
-                                        found: tok.clone(),
-                                        pos: self.pos,
-                                    });
-                                }
-                            }
-                        }
-                    }
-
-                    self.pos += 1;
-                    args.append(&mut more_args);
-                }
-
-                left = call_builtin(&name, args).ok_or(ParseError::UndefinedFunction {
-                    name: name.clone(),
-                    pos: self.pos - 1,
-                })?;
-                continue;
-            }
-
-            if op == Token::Colon {
-                if self.peek() != Token::Dot {
-                    return Err(ParseError::UnexpectedToken {
-                        expected: ".".to_string(),
-                        found: self.peek(),
-                        pos: self.pos,
-                    });
-                }
-
-                self.pos += 1;
-
-                let precision = match self.peek() {
-                    Token::Number(n) => {
-                        self.pos += 1;
-                        n as usize
-                    }
-                    Token::Ident(_) | Token::StrLit(_) | Token::LBrace => {
-                        let precision_val = self.parse_expr_bp(17, false)?;
-                        match precision_val.as_f64() {
-                            Some(v) => v as usize,
-                            None => {
-                                return Err(ParseError::TypeMismatch {
-                                    operation: "precision".to_string(),
-                                    expected: "number".to_string(),
-                                    found: precision_val.type_name().to_string(),
-                                    pos: self.pos,
-                                });
-                            }
-                        }
-                    }
-                    _ => {
-                        return Err(ParseError::UnexpectedToken {
-                            expected: "precision value".to_string(),
-                            found: self.peek(),
-                            pos: self.pos,
-                        });
-                    }
-                };
-
-                let Some(n) = left.as_f64() else {
-                    return Err(ParseError::TypeMismatch {
-                        operation: "format".to_string(),
-                        expected: "number".to_string(),
-                        found: left.type_name().to_string(),
-                        pos: self.pos,
-                    });
-                };
-
-                left = Value::String(format!("{:.*}", precision, n));
-                continue;
-            }
-
-            if op == Token::Dot {
-                let prop_tok = self.peek();
-                self.pos += 1;
-
-                match prop_tok {
-                    Token::Ident(name) => {
-                        // println!("LEFT before property = {:?}", left);
-                        // println!("name = {:?}", name);
-                        left = match get_property(&left, &name) {
-                            Some(v) => v,
-                            None => {
-                                let full = format!("{}.{}", left.to_string(), name);
-
-                                get_var(&self.vars, &self.settings, full.as_str())
-                            }
-                        };
-                        //println!("LEFT after property = {:?}", left);
-                    }
-                    Token::Number(n) => {
-                        if n.fract() == 0.0 && n >= 0.0 {
-                            let idx = Value::I64(n as i64);
-                            left = match get_index(&left, &idx) {
-                                Some(v) => v,
-                                None => {
-                                    let full_name = format!("{}.{}", left.to_string(), n as i64);
-                                    get_var(&self.vars, &self.settings, full_name.as_str())
-                                }
-                            };
-                        } else {
-                            let full_name = format!("{}.{}", left.to_string(), n as i64);
-                            left = get_var(&self.vars, &self.settings, full_name.as_str());
-                        }
-                    }
-                    Token::LBrace => {
-                        let prev_inside = self.is_inside_braces;
-                        self.is_inside_braces = true;
-                        let key = self.parse_expr_bp(0, false)?;
-                        if self.peek() != Token::RBrace {
-                            return Err(ParseError::UnexpectedToken {
-                                expected: "}".to_string(),
-                                found: self.peek(),
-                                pos: self.pos,
-                            });
-                        }
-                        self.pos += 1;
-                        self.is_inside_braces = prev_inside;
-
-                        let resolved = match &key {
-                            Value::I64(_) | Value::F64(_) => get_index(&left, &key),
-                            _ => get_property(&left, &key.to_string()),
-                        };
-
-                        left = resolved.unwrap_or_else(|| {
-                            Value::String(format!("{}.{}", &left.to_string(), &key.to_string()))
-                        });
-                    }
-                    _ => {
-                        return Err(ParseError::UnexpectedToken {
-                            expected: "identifier or numeric index".to_string(),
-                            found: prop_tok.clone(),
-                            pos: self.pos - 1,
-                        });
-                    }
-                }
-            } else if op == Token::LBracket {
-                let idx = self.parse_expr_bp(0, false)?;
-                if self.peek() != Token::RBracket {
-                    return Err(ParseError::UnexpectedToken {
-                        expected: "]".to_string(),
-                        found: self.peek(),
-                        pos: self.pos,
-                    });
-                }
-                self.pos += 1;
-                left = get_index(&left, &idx).ok_or(ParseError::InvalidIndexAccess {
-                    index_type: idx.type_name().to_string(),
-                    on_type: left.type_name().to_string(),
-                    pos: self.pos - 1,
-                })?;
-            } else {
-                let right = self.parse_expr_bp(r_bp, false)?;
-                left = eval_binary(left, right, &op, self.pos - 1)?;
-            }
-        }
-
-        Ok(left)
-    }
-
-    fn parse_primary(&mut self) -> ParseResult<Value> {
-        let tok = self.peek();
-        self.pos += 1;
-        let pos = self.pos - 1;
-
-        match tok {
-            Token::Number(n) => Ok(Value::F64(n)),
-            Token::StrLit(s) => Ok(Value::String(s)),
-            Token::True => Ok(Value::Bool(true)),
-            Token::False => Ok(Value::Bool(false)),
-            Token::Null => Ok(Value::None),
-
-            Token::Minus => Ok(Value::F64(
-                -(self
-                    .parse_expr_bp(15, false)?
-                    .as_f64()
-                    .ok_or(ParseError::TypeMismatch {
-                        operation: "negation".to_string(),
-                        expected: "number".to_string(),
-                        found: "value".to_string(),
-                        pos,
-                    })?),
-            )),
-
-            Token::Not => Ok(Value::Bool(!self.parse_expr_bp(15, false)?.is_truthy())),
-
-            Token::BitNot => Ok(Value::I64(
-                !(self
-                    .parse_expr_bp(15, false)?
-                    .as_i64()
-                    .ok_or(ParseError::TypeMismatch {
-                        operation: "bitnot".to_string(),
-                        expected: "integer".to_string(),
-                        found: "value".to_string(),
-                        pos,
-                    })?),
-            )),
-
-            Token::LBrace => {
-                let prev_inside = self.is_inside_braces;
-                self.is_inside_braces = true;
-                let v = self.parse_expr_bp(0, false)?;
-                if self.peek() != Token::RBrace {
-                    return Err(ParseError::UnexpectedToken {
-                        expected: "}".to_string(),
-                        found: self.peek(),
-                        pos: self.pos,
-                    });
-                }
-                self.pos += 1;
-                self.is_inside_braces = prev_inside;
-                Ok(v)
-            }
-
-            Token::LParen => {
-                let v = self.parse_expr_bp(0, false)?;
-                if self.peek() != Token::RParen {
-                    return Err(ParseError::UnexpectedToken {
-                        expected: ")".to_string(),
-                        found: self.peek(),
-                        pos: self.pos,
-                    });
-                }
-                self.pos += 1;
-                Ok(v)
-            }
-
-            Token::LBracket => {
-                let mut items = Vec::new();
-
-                if self.peek() != Token::RBracket {
-                    loop {
-                        let item = self.parse_expr_bp(0, false)?;
-
-                        if self.peek() == Token::DotDot || self.peek() == Token::DotDotEq {
-                            let inclusive = self.peek() == Token::DotDotEq;
-                            self.pos += 1;
-
-                            let end_val = self.parse_expr_bp(0, false)?;
-                            let start = item.as_i64().ok_or(ParseError::TypeMismatch {
-                                operation: "range start".to_string(),
-                                expected: "integer".to_string(),
-                                found: item.type_name().to_string(),
-                                pos,
-                            })?;
-                            let end = end_val.as_i64().ok_or(ParseError::TypeMismatch {
-                                operation: "range end".to_string(),
-                                expected: "integer".to_string(),
-                                found: end_val.type_name().to_string(),
-                                pos,
-                            })?;
-
-                            let range: Box<dyn Iterator<Item = i64>> = if inclusive {
-                                Box::new(start..=end)
-                            } else {
-                                Box::new(start..end)
-                            };
-
-                            items.extend(range.map(|i| Value::F64(i as f64)));
-                        } else {
-                            items.push(item);
-                        }
-
-                        match self.peek() {
-                            Token::Comma => {
-                                self.pos += 1;
-                            }
-                            Token::RBracket => break,
-                            tok => {
-                                return Err(ParseError::UnexpectedToken {
-                                    expected: "',' or ']'".to_string(),
-                                    found: tok.clone(),
-                                    pos: self.pos,
-                                });
-                            }
-                        }
-                    }
-                }
-
-                self.pos += 1;
-                Ok(Value::Array(items))
-            }
-
-            Token::Ident(name) => {
-                //println!("In Ident: {}", name);
-                if let Some(val) = get_var_opt(&self.vars, &self.settings, name.as_str()) {
-                    return Ok(val);
-                }
-                if self.peek() == Token::LParen {
-                    self.pos += 1;
-                    let mut args = Vec::new();
-
-                    if self.peek() != Token::RParen {
-                        loop {
-                            args.push(self.parse_expr_bp(0, false)?);
-                            match self.peek() {
-                                Token::Comma => {
-                                    self.pos += 1;
-                                }
-                                Token::RParen => break,
-                                tok => {
-                                    return Err(ParseError::UnexpectedToken {
-                                        expected: "',' or ')'".to_string(),
-                                        found: tok.clone(),
-                                        pos: self.pos,
-                                    });
-                                }
-                            }
-                        }
-                    }
-
-                    self.pos += 1;
-                    call_builtin(&name, args).ok_or(ParseError::UndefinedFunction {
-                        name: name.clone(),
-                        pos,
-                    })
-                } else if self.is_inside_braces {
-                    //println!("{}", name);
-                    match name.as_str() {
-                        "PI" | "pi" => Ok(Value::F64(std::f64::consts::PI)),
-                        "TAU" | "tau" => Ok(Value::F64(std::f64::consts::TAU)),
-                        "E" | "e" => Ok(Value::F64(std::f64::consts::E)),
-                        "INF" | "inf" => Ok(Value::F64(f64::INFINITY)),
-                        "NAN" | "NaN" => Ok(Value::F64(f64::NAN)),
-                        _ => {
-                            if let Some(key) = SettingKey::from_str(name.as_str()) {
-                                Ok(self.settings.read_setting(key).to_value())
-                            } else {
-                                let val = self.vars.get(&name).as_deref().cloned();
-                                let (field_type, _) = match name.split_once('=') {
-                                    Some((field_type, base)) => (field_type, base),
-                                    None => ("None", name.as_str()),
-                                };
-                                Ok(initialize_value(field_type, val))
-                            }
-                        }
-                    }
-                } else {
-                    Ok(Value::String(name))
-                }
-            }
-
-            _ => Err(ParseError::UnexpectedToken {
-                expected: "expression".to_string(),
-                found: tok,
-                pos,
-            }),
-        }
-    }
-}
 fn get_var(variables: &Variables, settings: &Settings, name: &str) -> Value {
     if let Some(key) = SettingKey::from_str(name) {
         return settings.read_setting(key).to_value();
@@ -2520,192 +1955,6 @@ fn get_var_opt(variables: &Variables, settings: &Settings, name: &str) -> Option
         Some(v) => Some(v.into_owned()),
         None => None,
     }
-}
-
-fn eval_binary(left: Value, right: Value, op: &Token, pos: usize) -> ParseResult<Value> {
-    match op {
-        Token::Plus => add_values(left.clone(), right.clone()).ok_or(ParseError::TypeMismatch {
-            operation: "addition".to_string(),
-            expected: "number, string, or array".to_string(),
-            found: format!("{} + {}", left.type_name(), right.type_name()),
-            pos,
-        }),
-        Token::Minus => sub_values(left.clone(), right.clone()).ok_or(ParseError::TypeMismatch {
-            operation: "subtraction".to_string(),
-            expected: "number or array".to_string(),
-            found: format!("{} - {}", left.type_name(), right.type_name()),
-            pos,
-        }),
-        Token::Star => {
-            multiply_values(left.clone(), right.clone()).ok_or(ParseError::TypeMismatch {
-                operation: "multiplication".to_string(),
-                expected: "number, string, or array".to_string(),
-                found: format!("{} * {}", left.type_name(), right.type_name()),
-                pos,
-            })
-        }
-        Token::Slash | Token::Percent => {
-            let a = left.as_f64().ok_or(ParseError::TypeMismatch {
-                operation: "div/mod".to_string(),
-                expected: "number".to_string(),
-                found: left.type_name().to_string(),
-                pos,
-            })?;
-            let b = right.as_f64().ok_or(ParseError::TypeMismatch {
-                operation: "div/mod".to_string(),
-                expected: "number".to_string(),
-                found: right.type_name().to_string(),
-                pos,
-            })?;
-            Ok(Value::F64(if matches!(op, Token::Slash) {
-                a / b
-            } else {
-                a % b
-            }))
-        }
-        Token::Power => {
-            let a = left.as_f64().ok_or(ParseError::TypeMismatch {
-                operation: "power".to_string(),
-                expected: "number".to_string(),
-                found: left.type_name().to_string(),
-                pos,
-            })?;
-            let b = right.as_f64().ok_or(ParseError::TypeMismatch {
-                operation: "power".to_string(),
-                expected: "number".to_string(),
-                found: right.type_name().to_string(),
-                pos,
-            })?;
-            Ok(Value::F64(a.powf(b)))
-        }
-        Token::Eq | Token::StrictEq => Ok(Value::Bool(left == right)),
-        Token::Neq | Token::StrictNeq => Ok(Value::Bool(left != right)),
-        Token::Lt => Ok(Value::Bool(
-            left.as_f64().ok_or(ParseError::TypeMismatch {
-                operation: "lt".to_string(),
-                expected: "number".to_string(),
-                found: left.type_name().to_string(),
-                pos,
-            })? < right.as_f64().ok_or(ParseError::TypeMismatch {
-                operation: "lt".to_string(),
-                expected: "number".to_string(),
-                found: right.type_name().to_string(),
-                pos,
-            })?,
-        )),
-        Token::Gt => Ok(Value::Bool(
-            left.as_f64().ok_or(ParseError::TypeMismatch {
-                operation: "gt".to_string(),
-                expected: "number".to_string(),
-                found: left.type_name().to_string(),
-                pos,
-            })? > right.as_f64().ok_or(ParseError::TypeMismatch {
-                operation: "gt".to_string(),
-                expected: "number".to_string(),
-                found: right.type_name().to_string(),
-                pos,
-            })?,
-        )),
-        Token::Le => Ok(Value::Bool(
-            left.as_f64().ok_or(ParseError::TypeMismatch {
-                operation: "le".to_string(),
-                expected: "number".to_string(),
-                found: left.type_name().to_string(),
-                pos,
-            })? <= right.as_f64().ok_or(ParseError::TypeMismatch {
-                operation: "le".to_string(),
-                expected: "number".to_string(),
-                found: right.type_name().to_string(),
-                pos,
-            })?,
-        )),
-        Token::Ge => Ok(Value::Bool(
-            left.as_f64().ok_or(ParseError::TypeMismatch {
-                operation: "ge".to_string(),
-                expected: "number".to_string(),
-                found: left.type_name().to_string(),
-                pos,
-            })? >= right.as_f64().ok_or(ParseError::TypeMismatch {
-                operation: "ge".to_string(),
-                expected: "number".to_string(),
-                found: right.type_name().to_string(),
-                pos,
-            })?,
-        )),
-        Token::Shl => Ok(Value::I64(
-            left.as_i64().ok_or(ParseError::TypeMismatch {
-                operation: "shl".to_string(),
-                expected: "integer".to_string(),
-                found: left.type_name().to_string(),
-                pos,
-            })? << right.as_i64().ok_or(ParseError::TypeMismatch {
-                operation: "shl".to_string(),
-                expected: "integer".to_string(),
-                found: right.type_name().to_string(),
-                pos,
-            })? as u32,
-        )),
-        Token::Shr => Ok(Value::I64(
-            left.as_i64().ok_or(ParseError::TypeMismatch {
-                operation: "shr".to_string(),
-                expected: "integer".to_string(),
-                found: left.type_name().to_string(),
-                pos,
-            })? >> right.as_i64().ok_or(ParseError::TypeMismatch {
-                operation: "shr".to_string(),
-                expected: "integer".to_string(),
-                found: right.type_name().to_string(),
-                pos,
-            })? as u32,
-        )),
-        Token::BitAnd => Ok(Value::I64(
-            left.as_i64().ok_or(ParseError::TypeMismatch {
-                operation: "bitand".to_string(),
-                expected: "integer".to_string(),
-                found: left.type_name().to_string(),
-                pos,
-            })? & right.as_i64().ok_or(ParseError::TypeMismatch {
-                operation: "bitand".to_string(),
-                expected: "integer".to_string(),
-                found: right.type_name().to_string(),
-                pos,
-            })?,
-        )),
-        Token::BitOr => Ok(Value::I64(
-            left.as_i64().ok_or(ParseError::TypeMismatch {
-                operation: "bitor".to_string(),
-                expected: "integer".to_string(),
-                found: left.type_name().to_string(),
-                pos,
-            })? | right.as_i64().ok_or(ParseError::TypeMismatch {
-                operation: "bitor".to_string(),
-                expected: "integer".to_string(),
-                found: right.type_name().to_string(),
-                pos,
-            })?,
-        )),
-        Token::BitXor => Ok(Value::I64(
-            left.as_i64().ok_or(ParseError::TypeMismatch {
-                operation: "bitxor".to_string(),
-                expected: "integer".to_string(),
-                found: left.type_name().to_string(),
-                pos,
-            })? ^ right.as_i64().ok_or(ParseError::TypeMismatch {
-                operation: "bitxor".to_string(),
-                expected: "integer".to_string(),
-                found: right.type_name().to_string(),
-                pos,
-            })?,
-        )),
-        Token::And => Ok(Value::Bool(left.is_truthy() && right.is_truthy())),
-        Token::Or => Ok(Value::Bool(left.is_truthy() || right.is_truthy())),
-        Token::NullCoalesce => Ok(if left.is_truthy() { left } else { right }),
-        _ => unreachable!(),
-    }
-}
-
-fn call_builtin(name: &str, args: Vec<Value>) -> Option<Value> {
-    get_builtin(name)?(args)
 }
 
 fn combine_array_values<F>(left: Vec<Value>, right: Vec<Value>, mut op: F) -> Option<Vec<Value>>
@@ -2728,6 +1977,26 @@ where
     Some(out)
 }
 
+fn map_array_values<F>(array: Vec<Value>, value: Value, mut op: F) -> Option<Vec<Value>>
+where
+    F: FnMut(Value, Value) -> Option<Value>,
+{
+    array
+        .into_iter()
+        .map(|element| op(element, value.clone()))
+        .collect()
+}
+
+fn map_array_values_right<F>(value: Value, array: Vec<Value>, mut op: F) -> Option<Vec<Value>>
+where
+    F: FnMut(Value, Value) -> Option<Value>,
+{
+    array
+        .into_iter()
+        .map(|element| op(value.clone(), element))
+        .collect()
+}
+
 fn add_values(a: Value, b: Value) -> Option<Value> {
     match (a, b) {
         (Value::F64(x), Value::F64(y)) => Some(Value::F64(x + y)),
@@ -2744,13 +2013,11 @@ fn add_values(a: Value, b: Value) -> Option<Value> {
         (Value::Array(x), Value::Array(y)) => {
             combine_array_values(x, y, add_values).map(Value::Array)
         }
-        (Value::Array(mut x), v) => {
-            x.push(v);
-            Some(Value::Array(x))
+        (Value::Array(x), v) => {
+            map_array_values(x, v, add_values).map(Value::Array)
         }
-        (v, Value::Array(mut y)) => {
-            y.insert(0, v);
-            Some(Value::Array(y))
+        (v, Value::Array(y)) => {
+            map_array_values_right(v, y, add_values).map(Value::Array)
         }
         (Value::String(s), Value::None) => Some(Value::String(s)),
         (Value::None, Value::String(s)) => Some(Value::String(s)),
@@ -2767,6 +2034,12 @@ fn sub_values(a: Value, b: Value) -> Option<Value> {
         (Value::Array(x), Value::Array(y)) => {
             combine_array_values(x, y, sub_values).map(Value::Array)
         }
+        (Value::Array(x), v) => {
+            map_array_values(x, v, sub_values).map(Value::Array)
+        }
+        (v, Value::Array(y)) => {
+            map_array_values_right(v, y, sub_values).map(Value::Array)
+        }
         _ => None,
     }
 }
@@ -2776,6 +2049,12 @@ fn multiply_values(l: Value, r: Value) -> Option<Value> {
         (Value::Array(x), Value::Array(y)) => {
             combine_array_values(x.clone(), y.clone(), multiply_values).map(Value::Array)
         }
+        (Value::Array(x), _) => {
+            map_array_values(x.clone(), r, multiply_values).map(Value::Array)
+        }
+        (_, Value::Array(y)) => {
+            map_array_values_right(l, y.clone(), multiply_values).map(Value::Array)
+        }
         (Value::String(s), Value::I64(n)) => Some(Value::String(s.repeat(*n as usize))),
         (Value::I64(n), Value::String(s)) => Some(Value::String(s.repeat(*n as usize))),
         _ => Some(Value::F64(l.as_f64()? * r.as_f64()?)),
@@ -2784,7 +2063,7 @@ fn multiply_values(l: Value, r: Value) -> Option<Value> {
 
 fn get_property(value: &Value, prop: &str) -> Option<Value> {
     match prop {
-        "exists" => return Some(Value::Bool(value_exists(value))),
+        "is_some" => return Some(Value::Bool(value_exists(value))),
         _ => {}
     }
     match value {
@@ -2796,6 +2075,7 @@ fn get_property(value: &Value, prop: &str) -> Option<Value> {
     }
 }
 fn value_exists(value: &Value) -> bool {
+    //println!("In xyz.is_some: {}", value);
     match value {
         Value::None => { false }
         Value::F64(_) => { true }
@@ -2915,125 +2195,10 @@ fn normalize_index(idx: i64, len: usize) -> Option<usize> {
     }
 }
 
-// pub fn evaluate_placeholder(src: &str, vars: &Variables) -> String {
-//     format_slot(src.trim(), vars)
-// }
+static PRINTED_PARSE_ERRORS: OnceLock<Mutex<HashSet<u64>>> = OnceLock::new(); // The hash of the expression String!
 
-fn format_slot(src: &str, vars: &Variables, settings: &Settings) -> String {
-    let (expr, modifiers) = split_format_chain(src);
-    let mut value = match eval_expr(expr, vars, settings) {
-        Some(v) => v,
-        None => return src.to_string(),
-    };
-    for modifier in modifiers {
-        value = match apply_modifier(value, modifier) {
-            Some(v) => v,
-            None => return src.to_string(),
-        };
-    }
-    value.into_string()
-}
-
-fn split_format_chain(src: &str) -> (&str, Vec<&str>) {
-    let mut paren_depth: i32 = 0;
-    let mut bracket_depth: i32 = 0;
-    let mut brace_depth: i32 = 0;
-    let mut ternary_depth = 0;
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut escape = false;
-
-    for (idx, ch) in src.char_indices() {
-        if escape {
-            escape = false;
-            continue;
-        }
-        if in_single {
-            match ch {
-                '\\' => escape = true,
-                '\'' => in_single = false,
-                _ => {}
-            }
-            continue;
-        }
-        if in_double {
-            match ch {
-                '\\' => escape = true,
-                '"' => in_double = false,
-                _ => {}
-            }
-            continue;
-        }
-        match ch {
-            '\'' => in_single = true,
-            '"' => in_double = true,
-            '(' => paren_depth += 1,
-            ')' => paren_depth = paren_depth.saturating_sub(1),
-            '[' => bracket_depth += 1,
-            ']' => bracket_depth = bracket_depth.saturating_sub(1),
-            '{' => brace_depth += 1,
-            '}' => brace_depth = brace_depth.saturating_sub(1),
-            '?' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => ternary_depth += 1,
-            ':' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                if ternary_depth > 0 {
-                    ternary_depth -= 1;
-                } else {
-                    let expr = src[..idx].trim();
-                    let mods = src[idx + 1..]
-                        .split(':')
-                        .map(|m| m.trim())
-                        .filter(|m| !m.is_empty())
-                        .collect();
-                    return (expr, mods);
-                }
-            }
-            _ => {}
-        }
-    }
-    (src.trim(), Vec::new())
-}
-
-fn apply_modifier(value: Value, modifier: &str) -> Option<Value> {
-    let modifier = modifier.trim();
-    if modifier.is_empty() {
-        return Some(value);
-    }
-    if let Some(precision_str) = modifier.strip_prefix('.') {
-        let precision = precision_str.trim().parse::<usize>().ok()?;
-        let n = value.as_f64()?;
-        return Some(Value::String(format!("{:.*}", precision, n)));
-    }
-    if let Some(func) = get_builtin(modifier) {
-        return func(vec![value]);
-    }
-    None
-}
-
-static PRINTED_PARSE_ERRORS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-
-fn printed_parse_errors() -> &'static Mutex<HashSet<String>> {
+fn printed_parse_errors() -> &'static Mutex<HashSet<u64>> {
     PRINTED_PARSE_ERRORS.get_or_init(|| Mutex::new(HashSet::new()))
-}
-
-
-pub fn eval_expr(expr: &str, vars: &Variables, settings: &Settings) -> Option<Value> {
-    let tokens = tokenize_expr(expr);
-    //println!("Expr input: {:?}", expr);
-    let result = Parser::new(&tokens, vars, settings).parse();
-    match result {
-        Ok(result) => Some(result),
-        Err(e) => {
-            if settings.print_parse_errors {
-                let err = format!("ParseError for '{}': {}", expr, e);
-                let mut printed = printed_parse_errors().lock().unwrap();
-
-                if printed.insert(err.clone()) {
-                    eprintln!("{err}");
-                }
-            }
-            None
-        }
-    }
 }
 
 pub fn resolve_template(template: &str, vars: &Variables, settings: &Settings) -> String {
@@ -3075,29 +2240,6 @@ pub fn resolve_template(template: &str, vars: &Variables, settings: &Settings) -
         }
     }
     out
-}
-
-fn trim_float(n: f64) -> String {
-    if !n.is_finite() {
-        return n.to_string();
-    }
-
-    let mut s = if n.fract() == 0.0 {
-        format!("{:.0}", n)
-    } else {
-        format!("{n}")
-    };
-
-    if s.contains('.') {
-        while s.ends_with('0') {
-            s.pop();
-        }
-        if s.ends_with('.') {
-            s.pop();
-        }
-    }
-
-    if s == "-0" { "0".to_string() } else { s }
 }
 
 pub fn set_input_box(template: &str, current_text: &str, _vars: &mut Variables) -> String {
@@ -3150,9 +2292,1067 @@ fn insert_thousands_commas(digits: &str) -> String {
         .rev()
         .collect()
 }
-fn is_component_suffix(s: &str) -> bool {
-    matches!(
-        s,
-        "x" | "y" | "z" | "w" | "r" | "g" | "b" | "a" | "h" | "s" | "v"
-    ) || s.parse::<usize>().is_ok()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TokenKind {
+    Number(f64),
+    Ident(String),
+    StrLit(String),
+    True,
+    False,
+    None,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    Power,
+    BitAnd,
+    BitOr,
+    BitXor,
+    BitNot,
+    Shl,
+    Shr,
+    Eq,
+    Neq,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    StrictEq,
+    StrictNeq,
+    And,
+    Or,
+    Not,
+    NullCoalesce,
+    OptChain,
+    Question,
+    Colon,
+    LParen,
+    RParen,
+    LBracket,
+    RBracket,
+    Comma,
+    Dot,
+    DotDot,
+    DotDotEq,
+    Dollar,
+    Pipe,
+    End,
+    RBrace,
+    LBrace,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Token {
+    pub kind: TokenKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Type {
+    Int,
+    Float,
+    Bool,
+    String,
+    Array(Box<Type>),
+    VarOrSetting(String),
+    None,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Expr {
+    Number(f64, Span),
+    String(String, Span),
+    Bool(bool, Span),
+    None(Span),
+    VarOrSetting(String, Span),
+    Array(Vec<Expr>, Span),
+    Binary { left: Box<Expr>, operator: TokenKind, right: Box<Expr>, span: Span },
+    Unary { operator: TokenKind, expr: Box<Expr>, span: Span },
+    FunctionCall { name: String, args: Vec<Expr>, span: Span },
+    Index { value: Box<Expr>, index: Box<Expr>, span: Span },
+    Property { value: Box<Expr>, property: String, span: Span },
+    Ternary { cond: Box<Expr>, then_expr: Box<Expr>, else_expr: Box<Expr>, span: Span },
+    Format { value: Box<Expr>, precision: Box<Expr>, span: Span },
+}
+
+fn get_span(expr: &Expr) -> Span {
+    match expr {
+        Expr::Number(_, s) | Expr::String(_, s) | Expr::Bool(_, s) | Expr::None(s) | Expr::VarOrSetting(_, s) | Expr::Array(_, s) => s.clone(),
+        Expr::Binary { span, .. } | Expr::Unary { span, .. } | Expr::FunctionCall { span, .. } | Expr::Index { span, .. } | Expr::Property { span, .. } | Expr::Ternary { span, .. } | Expr::Format { span, .. } => span.clone(),
+    }
+}
+
+pub fn tokenize_expr(input: &str) -> Result<Vec<Token>, ParseError> {
+    let mut tokens = Vec::new();
+    let mut chars = input.char_indices().peekable();
+
+    while let Some(&(i, c)) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+
+        if c == '"' || c == '\'' || c == '`' {
+            let start = i;
+            let quote = c;
+            chars.next();
+            let mut s = String::new();
+            while let Some(&(j, d)) = chars.peek() {
+                chars.next();
+                if d == quote {
+                    let end = j + 1;
+                    tokens.push(Token { kind: TokenKind::StrLit(s), span: Span { start, end } });
+                    break;
+                } else if d == '\\' {
+                    if let Some(&(_, e)) = chars.peek() {
+                        chars.next();
+                        match e {
+                            'n' => s.push('\n'),
+                            't' => s.push('\t'),
+                            'r' => s.push('\r'),
+                            '\\' => s.push('\\'),
+                            '"' => s.push('"'),
+                            '\'' => s.push('\''),
+                            '0' => s.push('\0'),
+                            _ => {
+                                s.push('\\');
+                                s.push(e);
+                            }
+                        }
+                    }
+                } else {
+                    s.push(d);
+                }
+            }
+            continue;
+        }
+
+        let prev_is_operand = matches!(
+            tokens.last().map(|t| &t.kind),
+            Some(TokenKind::Number(_))
+                | Some(TokenKind::Ident(_))
+                | Some(TokenKind::RParen)
+                | Some(TokenKind::RBracket)
+                | Some(TokenKind::StrLit(_))
+        );
+
+        if c.is_ascii_digit()
+            || (c == '.'
+            && !prev_is_operand
+            && !matches!(tokens.last().map(|t| &t.kind), Some(TokenKind::Colon))
+            && chars.clone().nth(1).map_or(false, |(_, n)| n.is_ascii_digit()))
+        {
+            let start = i;
+            let mut s = String::new();
+            let mut has_dot = false;
+            let mut has_exp = false;
+
+            if c == '0' {
+                s.push(c);
+                chars.next();
+                if let Some(&(_, next)) = chars.peek() {
+                    match next {
+                        'x' | 'X' => {
+                            s.push(next);
+                            chars.next();
+                            while let Some(&(_, d)) = chars.peek() {
+                                if d.is_ascii_hexdigit() || d == '_' {
+                                    if d != '_' { s.push(d); }
+                                    chars.next();
+                                } else {
+                                    break;
+                                }
+                            }
+                            if let Ok(v) = i64::from_str_radix(&s[2..], 16) {
+                                let end = i + s.len();
+                                tokens.push(Token { kind: TokenKind::Number(v as f64), span: Span { start, end } });
+                            }
+                            continue;
+                        }
+                        'b' | 'B' => {
+                            s.push(next);
+                            chars.next();
+                            while let Some(&(_, d)) = chars.peek() {
+                                if d == '0' || d == '1' || d == '_' {
+                                    if d != '_' { s.push(d); }
+                                    chars.next();
+                                } else {
+                                    break;
+                                }
+                            }
+                            if let Ok(v) = i64::from_str_radix(&s[2..], 2) {
+                                let end = i + s.len();
+                                tokens.push(Token { kind: TokenKind::Number(v as f64), span: Span { start, end } });
+                            }
+                            continue;
+                        }
+                        'o' | 'O' => {
+                            s.push(next);
+                            chars.next();
+                            while let Some(&(_, d)) = chars.peek() {
+                                if ('0'..='7').contains(&d) || d == '_' {
+                                    if d != '_' { s.push(d); }
+                                    chars.next();
+                                } else {
+                                    break;
+                                }
+                            }
+                            if let Ok(v) = i64::from_str_radix(&s[2..], 8) {
+                                let end = i + s.len();
+                                tokens.push(Token { kind: TokenKind::Number(v as f64), span: Span { start, end } });
+                            }
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                s.push(c);
+                chars.next();
+            }
+
+            while let Some(&(_, d)) = chars.peek() {
+                if d.is_ascii_digit() || d == '_' {
+                    if d != '_' { s.push(d); }
+                    chars.next();
+                } else if d == '.' && !has_dot && !has_exp {
+                    let mut peek_chars = chars.clone();
+                    peek_chars.next();
+                    if peek_chars.peek().map(|&(_, c)| c) == Some('.') {
+                        break;
+                    }
+                    has_dot = true;
+                    s.push(d);
+                    chars.next();
+                } else if (d == 'e' || d == 'E') && !has_exp {
+                    has_exp = true;
+                    s.push(d);
+                    chars.next();
+                    if let Some(&(_, sign)) = chars.peek() {
+                        if sign == '+' || sign == '-' {
+                            s.push(sign);
+                            chars.next();
+                        }
+                    }
+                } else {
+                    break;
+                }
+            }
+            let end = i + s.len();
+            if let Ok(v) = s.parse() {
+                tokens.push(Token { kind: TokenKind::Number(v), span: Span { start, end } });
+            }
+            continue;
+        }
+
+        if c.is_alphabetic() || c == '_' {
+            let start = i;
+            let mut s = String::new();
+            while let Some(&(_, d)) = chars.peek() {
+                if d.is_alphanumeric() || d == '_' {
+                    s.push(d);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            let end = i + s.len();
+            let kind = match s.to_ascii_lowercase().as_str() {
+                "true" => TokenKind::True,
+                "false" => TokenKind::False,
+                "none" | "null" => TokenKind::None,
+                _ => TokenKind::Ident(s),
+            };
+            tokens.push(Token { kind, span: Span { start, end } });
+            continue;
+        }
+
+        let start = i;
+        chars.next();
+        let mut end = i + 1;
+        let kind = match c {
+            '+' => TokenKind::Plus,
+            '-' => TokenKind::Minus,
+            '*' => {
+                if chars.peek().map(|&(_, c)| c) == Some('*') {
+                    chars.next();
+                    end = i + 2;
+                    TokenKind::Power
+                } else {
+                    TokenKind::Star
+                }
+            }
+            '/' => TokenKind::Slash,
+            '%' => TokenKind::Percent,
+            '(' => TokenKind::LParen,
+            ')' => TokenKind::RParen,
+            '[' => TokenKind::LBracket,
+            ']' => TokenKind::RBracket,
+            '{' => TokenKind::LBrace,
+            '}' => TokenKind::RBrace,
+            ',' => TokenKind::Comma,
+            '$' => TokenKind::Dollar,
+            '~' => TokenKind::BitNot,
+            '?' => {
+                if chars.peek().map(|&(_, c)| c) == Some('?') {
+                    chars.next();
+                    end = i + 2;
+                    TokenKind::NullCoalesce
+                } else if chars.peek().map(|&(_, c)| c) == Some('.') {
+                    chars.next();
+                    end = i + 2;
+                    TokenKind::OptChain
+                } else {
+                    TokenKind::Question
+                }
+            }
+            ':' => TokenKind::Colon,
+            '.' => {
+                if chars.peek().map(|&(_, c)| c) == Some('.') {
+                    chars.next();
+                    if chars.peek().map(|&(_, c)| c) == Some('=') {
+                        chars.next();
+                        end = i + 3;
+                        TokenKind::DotDotEq
+                    } else {
+                        end = i + 2;
+                        TokenKind::DotDot
+                    }
+                } else {
+                    TokenKind::Dot
+                }
+            }
+            '!' => {
+                if chars.peek().map(|&(_, c)| c) == Some('=') {
+                    chars.next();
+                    if chars.peek().map(|&(_, c)| c) == Some('=') {
+                        chars.next();
+                        end = i + 3;
+                        TokenKind::StrictNeq
+                    } else {
+                        end = i + 2;
+                        TokenKind::Neq
+                    }
+                } else {
+                    TokenKind::Not
+                }
+            }
+            '=' => {
+                if chars.peek().map(|&(_, c)| c) == Some('=') {
+                    chars.next();
+                    if chars.peek().map(|&(_, c)| c) == Some('=') {
+                        chars.next();
+                        end = i + 3;
+                        TokenKind::StrictEq
+                    } else {
+                        end = i + 2;
+                        TokenKind::Eq
+                    }
+                } else {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "==".to_string(),
+                        found: Token { kind: TokenKind::Ident(c.to_string()), span: Span { start, end } },
+                        pos: start,
+                    });
+                }
+            }
+            '<' => {
+                if chars.peek().map(|&(_, c)| c) == Some('=') {
+                    chars.next();
+                    end = i + 2;
+                    TokenKind::Le
+                } else if chars.peek().map(|&(_, c)| c) == Some('<') {
+                    chars.next();
+                    end = i + 2;
+                    TokenKind::Shl
+                } else {
+                    TokenKind::Lt
+                }
+            }
+            '>' => {
+                if chars.peek().map(|&(_, c)| c) == Some('=') {
+                    chars.next();
+                    end = i + 2;
+                    TokenKind::Ge
+                } else if chars.peek().map(|&(_, c)| c) == Some('>') {
+                    chars.next();
+                    end = i + 2;
+                    TokenKind::Shr
+                } else {
+                    TokenKind::Gt
+                }
+            }
+            '&' => {
+                if chars.peek().map(|&(_, c)| c) == Some('&') {
+                    chars.next();
+                    end = i + 2;
+                    TokenKind::And
+                } else {
+                    TokenKind::BitAnd
+                }
+            }
+            '|' => {
+                if chars.peek().map(|&(_, c)| c) == Some('|') {
+                    chars.next();
+                    end = i + 2;
+                    TokenKind::Or
+                } else if chars.peek().map(|&(_, c)| c) == Some('>') {
+                    chars.next();
+                    end = i + 2;
+                    TokenKind::Pipe
+                } else {
+                    TokenKind::BitOr
+                }
+            }
+            '^' => TokenKind::BitXor,
+            _ => return Err(ParseError::UnexpectedToken {
+                expected: "valid character".to_string(),
+                found: Token { kind: TokenKind::Ident(c.to_string()), span: Span { start, end } },
+                pos: start,
+            }),
+        };
+        tokens.push(Token { kind, span: Span { start, end } });
+    }
+
+    tokens.push(Token { kind: TokenKind::End, span: Span { start: input.len(), end: input.len() } });
+    Ok(tokens)
+}
+
+struct Parser<'a> {
+    tokens: &'a [Token],
+    pos: usize,
+}
+
+impl<'a> Parser<'a> {
+    fn new(tokens: &'a [Token]) -> Self {
+        Self { tokens, pos: 0 }
+    }
+
+    fn peek(&self) -> Token {
+        self.tokens.get(self.pos).cloned().unwrap_or(Token { kind: TokenKind::End, span: Span { start: 0, end: 0 } })
+    }
+    fn peek_n(&self, n: usize) -> Token {
+        self.tokens.get(self.pos + n).cloned().unwrap_or(Token {
+            kind: TokenKind::End,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+    pub fn parse(&mut self) -> ParseResult<Expr> {
+        let value = self.parse_expr_bp(0)?;
+        if self.peek().kind != TokenKind::End {
+            return Err(ParseError::UnexpectedToken {
+                expected: "end of expression".to_string(),
+                found: self.peek(),
+                pos: self.peek().span.start,
+            });
+        }
+        Ok(value)
+    }
+
+    fn parse_expr_bp(&mut self, min_bp: u8) -> ParseResult<Expr> {
+        let mut left = self.parse_primary()?;
+        let left_span = get_span(&left);
+
+        loop {
+            let op = self.peek();
+
+            // If it's a Colon NOT followed by a Dot, it's a ternary colon, so break
+            // and let the Question handler consume it without advancing the position.
+            if op.kind == TokenKind::Colon && self.peek_n(1).kind != TokenKind::Dot {
+                break;
+            }
+
+            let (l_bp, r_bp) = match op.kind {
+                TokenKind::Pipe => (1, 2),
+                TokenKind::Question => (2, 0),
+                TokenKind::Colon => (16, 17),
+                TokenKind::NullCoalesce => (3, 4),
+                TokenKind::Or => (4, 5),
+                TokenKind::And => (5, 6),
+                TokenKind::BitOr => (6, 7),
+                TokenKind::BitXor => (7, 8),
+                TokenKind::BitAnd => (8, 9),
+                TokenKind::Eq | TokenKind::Neq | TokenKind::StrictEq | TokenKind::StrictNeq => (9, 10),
+                TokenKind::Lt | TokenKind::Gt | TokenKind::Le | TokenKind::Ge => (10, 11),
+                TokenKind::Shl | TokenKind::Shr => (11, 12),
+                TokenKind::Plus | TokenKind::Minus => (12, 13),
+                TokenKind::Star | TokenKind::Slash | TokenKind::Percent => (13, 14),
+                TokenKind::Power => (15, 14),
+                TokenKind::Dot => (16, 17),
+                _ => break,
+            };
+
+            if l_bp < min_bp {
+                break;
+            }
+
+            self.pos += 1;
+
+            if op.kind == TokenKind::Question {
+                let yes = self.parse_expr_bp(0)?;
+                if self.peek().kind != TokenKind::Colon {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: ":".to_string(),
+                        found: self.peek(),
+                        pos: self.pos,
+                    });
+                }
+                self.pos += 1;
+
+                let no = self.parse_expr_bp(2)?;
+                let span = Span { start: left_span.start, end: get_span(&no).end };
+                left = Expr::Ternary { cond: Box::new(left), then_expr: Box::new(yes), else_expr: Box::new(no), span };
+                continue;
+            }
+
+            if op.kind == TokenKind::Pipe {
+                let name = match self.peek().kind {
+                    TokenKind::Ident(s) => {
+                        self.pos += 1;
+                        s
+                    }
+                    _ => {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "identifier".to_string(),
+                            found: self.peek(),
+                            pos: self.pos,
+                        });
+                    }
+                };
+
+                let mut args = vec![left.clone()];
+
+                if self.peek().kind == TokenKind::LParen {
+                    self.pos += 1;
+                    if self.peek().kind != TokenKind::RParen {
+                        loop {
+                            args.push(self.parse_expr_bp(0)?);
+                            match self.peek().kind {
+                                TokenKind::Comma => { self.pos += 1; }
+                                TokenKind::RParen => break,
+                                _ => return Err(ParseError::UnexpectedToken { expected: "',' or ')'".to_string(), found: self.peek(), pos: self.pos }),
+                            }
+                        }
+                    }
+                    self.pos += 1;
+                }
+                let span = Span { start: left_span.start, end: self.peek().span.start };
+                left = Expr::FunctionCall { name, args, span };
+                continue;
+            }
+
+            if op.kind == TokenKind::Colon {
+                // We already checked above that it's followed by a Dot
+                self.pos += 1; // consume the Dot
+                let precision = self.parse_expr_bp(17)?;
+                let span = Span { start: left_span.start, end: get_span(&precision).end };
+                left = Expr::Format { value: Box::new(left), precision: Box::new(precision), span };
+                continue;
+            }
+
+            if op.kind == TokenKind::Dot {
+                let prop_tok = self.peek();
+                self.pos += 1;
+
+                match prop_tok.kind {
+                    TokenKind::Ident(name) => {
+                        if self.peek().kind == TokenKind::LParen {
+                            self.pos += 1;
+                            let mut args = vec![left.clone()];
+                            if self.peek().kind != TokenKind::RParen {
+                                loop {
+                                    args.push(self.parse_expr_bp(0)?);
+                                    match self.peek().kind {
+                                        TokenKind::Comma => { self.pos += 1; }
+                                        TokenKind::RParen => break,
+                                        _ => return Err(ParseError::UnexpectedToken { expected: "',' or ')'".to_string(), found: self.peek(), pos: self.pos }),
+                                    }
+                                }
+                            }
+                            self.pos += 1;
+                            let span = Span { start: left_span.start, end: self.peek().span.start };
+                            left = Expr::FunctionCall { name, args, span };
+                        } else {
+                            let span = Span { start: left_span.start, end: prop_tok.span.end };
+                            left = Expr::Property { value: Box::new(left), property: name, span };
+                        }
+                    }
+                    TokenKind::Number(n) => {
+                        let span = Span { start: left_span.start, end: prop_tok.span.end };
+                        left = Expr::Index { value: Box::new(left), index: Box::new(Expr::Number(n, prop_tok.span)), span };
+                    }
+                    _ => {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "identifier or numeric index".to_string(),
+                            found: prop_tok.clone(),
+                            pos: self.pos - 1,
+                        });
+                    }
+                }
+            } else {
+                let right = self.parse_expr_bp(r_bp)?;
+                let span = Span { start: left_span.start, end: get_span(&right).end };
+                left = Expr::Binary { left: Box::new(left), operator: op.kind, right: Box::new(right), span };
+            }
+        }
+
+        Ok(left)
+    }
+
+    fn parse_primary(&mut self) -> ParseResult<Expr> {
+        let tok = self.peek();
+        self.pos += 1;
+        let pos = tok.span.start;
+
+        match &tok.kind {
+            TokenKind::Number(n) => Ok(Expr::Number(*n, tok.span)),
+            TokenKind::StrLit(s) => Ok(Expr::String(s.clone(), tok.span)),
+            TokenKind::True => Ok(Expr::Bool(true, tok.span)),
+            TokenKind::False => Ok(Expr::Bool(false, tok.span)),
+            TokenKind::None => Ok(Expr::None(tok.span)),
+
+            TokenKind::Minus | TokenKind::Not | TokenKind::BitNot => {
+                let expr = self.parse_expr_bp(15)?;
+                let span = Span { start: pos, end: get_span(&expr).end };
+                Ok(Expr::Unary { operator: tok.kind, expr: Box::new(expr), span })
+            }
+
+            TokenKind::LBrace => {
+                let next = self.peek();
+                if let TokenKind::Ident(mut name) = next.kind {
+                    self.pos += 1;
+
+                    while self.peek().kind == TokenKind::Dot {
+                        self.pos += 1;
+                        match self.peek().kind {
+                            TokenKind::Ident(prop) => {
+                                name.push('.');
+                                name.push_str(&prop);
+                                self.pos += 1;
+                            },
+                            TokenKind::Number(n) => {
+                                name.push_str(&format!(".{}", n as i64));
+                                self.pos += 1;
+                            },
+                            _ => {
+                                return Err(ParseError::UnexpectedToken {
+                                    expected: "identifier or number after '.'".to_string(),
+                                    found: self.peek(),
+                                    pos: self.pos,
+                                });
+                            }
+                        }
+                    }
+
+                    if self.peek().kind != TokenKind::RBrace {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "}".to_string(),
+                            found: self.peek(),
+                            pos: self.pos,
+                        });
+                    }
+                    let end = self.peek().span.end;
+                    self.pos += 1;
+                    Ok(Expr::VarOrSetting(name, Span { start: pos, end }))
+                } else {
+                    Err(ParseError::UnexpectedToken {
+                        expected: "identifier inside braces for variable/setting access".to_string(),
+                        found: next.clone(),
+                        pos: next.span.start,
+                    })
+                }
+            }
+
+            TokenKind::LParen => {
+                let v = self.parse_expr_bp(0)?;
+                if self.peek().kind != TokenKind::RParen {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: ")".to_string(),
+                        found: self.peek(),
+                        pos: self.pos,
+                    });
+                }
+                self.pos += 1;
+                Ok(v)
+            }
+
+            TokenKind::LBracket => {
+                let mut items = Vec::new();
+                let start = pos;
+
+                if self.peek().kind != TokenKind::RBracket {
+                    loop {
+                        let item_tok = self.peek();
+
+                        // Accept bare identifiers inside arrays as string literals
+                        let item = if let TokenKind::Ident(name) = &item_tok.kind {
+                            self.pos += 1;
+                            Expr::String(name.clone(), item_tok.span.clone())
+                        } else {
+                            self.parse_expr_bp(0)?
+                        };
+
+                        if self.peek().kind == TokenKind::DotDot || self.peek().kind == TokenKind::DotDotEq {
+                            let inclusive = self.peek().kind == TokenKind::DotDotEq;
+                            self.pos += 1;
+
+                            let end_val = self.parse_expr_bp(0)?;
+                            let span = Span { start: get_span(&item).start, end: get_span(&end_val).end };
+                            items.push(Expr::Binary {
+                                left: Box::new(item),
+                                operator: if inclusive { TokenKind::DotDotEq } else { TokenKind::DotDot },
+                                right: Box::new(end_val),
+                                span,
+                            });
+                        } else {
+                            items.push(item);
+                        }
+
+                        match self.peek().kind {
+                            TokenKind::Comma => { self.pos += 1; }
+                            TokenKind::RBracket => break,
+                            _ => return Err(ParseError::UnexpectedToken { expected: "',' or ']'".to_string(), found: self.peek(), pos: self.pos }),
+                        }
+                    }
+                }
+
+                self.pos += 1;
+                let end = self.tokens.get(self.pos - 1).map(|t| t.span.end).unwrap_or(pos);
+                Ok(Expr::Array(items, Span { start, end }))
+            }
+
+            TokenKind::Ident(name) => {
+                if self.peek().kind == TokenKind::LParen {
+                    self.pos += 1;
+                    let mut args = Vec::new();
+                    if self.peek().kind != TokenKind::RParen {
+                        loop {
+                            args.push(self.parse_expr_bp(0)?);
+                            match self.peek().kind {
+                                TokenKind::Comma => { self.pos += 1; }
+                                TokenKind::RParen => break,
+                                _ => return Err(ParseError::UnexpectedToken { expected: "',' or ')'".to_string(), found: self.peek(), pos: self.pos }),
+                            }
+                        }
+                    }
+                    self.pos += 1;
+                    let end = self.tokens.get(self.pos - 1).map(|t| t.span.end).unwrap_or(pos);
+                    Ok(Expr::FunctionCall { name: name.clone(), args, span: Span { start: pos, end } })
+                } else {
+                    Err(ParseError::UnexpectedToken {
+                        expected: "string literal, variable {name}, or function call".to_string(),
+                        found: tok.clone(),
+                        pos,
+                    })
+                }
+            }
+
+            _ => Err(ParseError::UnexpectedToken {
+                expected: "expression".to_string(),
+                found: tok.clone(),
+                pos,
+            }),
+        }
+    }
+}
+
+pub fn type_check_and_resolve(expr: &Expr, vars: &Variables, settings: &Settings) -> Result<Expr, ParseError> {
+    match expr {
+        Expr::VarOrSetting(name, span) => {
+            if SettingKey::from_str(name).is_some() || vars.get(name).is_some() {
+                Ok(expr.clone())
+            } else {
+                Err(ParseError::UndefinedVariable { name: name.clone(), pos: span.start })
+            }
+        }
+        Expr::FunctionCall { name, args, span } => {
+            if get_builtin(name).is_none() {
+                return Err(ParseError::UndefinedFunction { name: name.clone(), pos: span.start });
+            }
+            for arg in args {
+                type_check_and_resolve(arg, vars, settings)?;
+            }
+            Ok(expr.clone())
+        }
+        Expr::Binary { left, right, .. } => {
+            type_check_and_resolve(left, vars, settings)?;
+            type_check_and_resolve(right, vars, settings)?;
+            Ok(expr.clone())
+        }
+        Expr::Unary { operator, expr, span } => {
+            let resolved = type_check_and_resolve(expr, vars, settings)?;
+            Ok(Expr::Unary {
+                operator: operator.clone(),
+                expr: Box::new(resolved),
+                span: span.clone(),
+            })
+        }
+        Expr::Index { value, index, .. } => {
+            type_check_and_resolve(value, vars, settings)?;
+            type_check_and_resolve(index, vars, settings)?;
+            Ok(expr.clone())
+        }
+        Expr::Property { value, .. } => type_check_and_resolve(value, vars, settings),
+        Expr::Ternary { cond, then_expr, else_expr, .. } => {
+            type_check_and_resolve(cond, vars, settings)?;
+            type_check_and_resolve(then_expr, vars, settings)?;
+            type_check_and_resolve(else_expr, vars, settings)?;
+            Ok(expr.clone())
+        }
+        Expr::Format { value, precision, .. } => {
+            type_check_and_resolve(value, vars, settings)?;
+            type_check_and_resolve(precision, vars, settings)?;
+            Ok(expr.clone())
+        }
+        Expr::Array(items, _) => {
+            for item in items {
+                type_check_and_resolve(item, vars, settings)?;
+            }
+            Ok(expr.clone())
+        }
+        _ => Ok(expr.clone())
+    }
+}
+
+pub fn eval_ast(expr: &Expr, vars: &Variables, settings: &Settings) -> Result<Value, ParseError> {
+    match expr {
+        Expr::Number(n, _) => Ok(Value::F64(*n)),
+        Expr::String(s, _) => Ok(Value::String(s.clone())),
+        Expr::Bool(b, _) => Ok(Value::Bool(*b)),
+        Expr::None(_) => Ok(Value::None),
+        Expr::VarOrSetting(name, span) => {
+            get_var_opt(vars, settings, name).ok_or(ParseError::UndefinedVariable { name: name.clone(), pos: span.start })
+        }
+        Expr::Array(items, _) => {
+            let mut vals = Vec::new();
+            for item in items {
+                vals.push(eval_ast(item, vars, settings)?);
+            }
+            Ok(Value::Array(vals))
+        }
+        Expr::FunctionCall { name, args, span } => {
+            let mut arg_vals = Vec::new();
+            for arg in args {
+                arg_vals.push(eval_ast(arg, vars, settings)?);
+            }
+            let function = get_builtin(name).ok_or(ParseError::UndefinedFunction { name: name.clone(), pos: span.start })?;
+            function(arg_vals.clone()).map_err(|e| ParseError::ErrorInFunction { name: name.clone(), args: arg_vals, function_error: e })
+        }
+        Expr::Binary { left, operator, right, span } => {
+            let l = eval_ast(left, vars, settings)?;
+            let r = eval_ast(right, vars, settings)?;
+            eval_binary(l, r, operator, span.start)
+        }
+        Expr::Unary { operator, expr, span } => {
+            let val = eval_ast(expr, vars, settings)?;
+            match operator {
+                TokenKind::Minus => Ok(Value::F64(-val.as_f64().ok_or(ParseError::TypeMismatch { operation: "negation".to_string(), expected: "number".to_string(), found: val.type_name().to_string(), pos: span.start })?)),
+                TokenKind::Not => Ok(Value::Bool(!val.is_truthy())),
+                TokenKind::BitNot => Ok(Value::I64(!val.as_i64().ok_or(ParseError::TypeMismatch { operation: "bitnot".to_string(), expected: "integer".to_string(), found: val.type_name().to_string(), pos: span.start })?)),
+                _ => unreachable!(),
+            }
+        }
+        Expr::Index { value, index, span } => {
+            let val = eval_ast(value, vars, settings)?;
+            let idx = eval_ast(index, vars, settings)?;
+            get_index(&val, &idx).ok_or(ParseError::InvalidIndexAccess {
+                index_type: idx.type_name().to_string(),
+                on_type: val.type_name().to_string(),
+                pos: span.start,
+            })
+        }
+        Expr::Property { value, property, span } => {
+            let val = eval_ast(value, vars, settings)?;
+            if let Some(idx) = Variables::component_index(property) {
+                get_index(&val, &Value::I64(idx as i64)).ok_or(ParseError::InvalidIndexAccess {
+                    index_type: property.clone(),
+                    on_type: val.type_name().to_string(),
+                    pos: span.start,
+                })
+            } else {
+                get_property(&val, property).ok_or(ParseError::InvalidPropertyAccess {
+                    property: property.clone(),
+                    on_type: val.type_name().to_string(),
+                    pos: span.start,
+                })
+            }
+        }
+        Expr::Ternary { cond, then_expr, else_expr, .. } => {
+            let cond_val = eval_ast(cond, vars, settings)?;
+            if cond_val.is_truthy() {
+                eval_ast(then_expr, vars, settings)
+            } else {
+                eval_ast(else_expr, vars, settings)
+            }
+        }
+        Expr::Format { value, precision, span } => {
+            let val = eval_ast(value, vars, settings)?;
+            let prec_val = eval_ast(precision, vars, settings)?;
+            let n = val.as_f64().ok_or(ParseError::TypeMismatch { operation: "format".to_string(), expected: "number".to_string(), found: val.type_name().to_string(), pos: span.start })?;
+            let p = prec_val.as_f64().ok_or(ParseError::TypeMismatch { operation: "precision".to_string(), expected: "number".to_string(), found: prec_val.type_name().to_string(), pos: span.start })? as usize;
+            Ok(Value::String(format!("{:.*}", p, n)))
+        }
+    }
+}
+
+fn eval_binary(left: Value, right: Value, op: &TokenKind, pos: usize) -> ParseResult<Value> {
+    match op {
+        TokenKind::Plus => add_values(left.clone(), right.clone()).ok_or(ParseError::TypeMismatch {
+            operation: "addition".to_string(),
+            expected: "number, string, or array".to_string(),
+            found: format!("{} + {}", left.type_name(), right.type_name()),
+            pos,
+        }),
+        TokenKind::Minus => sub_values(left.clone(), right.clone()).ok_or(ParseError::TypeMismatch {
+            operation: "subtraction".to_string(),
+            expected: "number or array".to_string(),
+            found: format!("{} - {}", left.type_name(), right.type_name()),
+            pos,
+        }),
+        TokenKind::Star => {
+            multiply_values(left.clone(), right.clone()).ok_or(ParseError::TypeMismatch {
+                operation: "multiplication".to_string(),
+                expected: "number, string, or array".to_string(),
+                found: format!("{} * {}", left.type_name(), right.type_name()),
+                pos,
+            })
+        }
+        TokenKind::Slash | TokenKind::Percent => {
+            let a = left.as_f64().ok_or(ParseError::TypeMismatch { operation: "div/mod".to_string(), expected: "number".to_string(), found: left.type_name().to_string(), pos })?;
+            let b = right.as_f64().ok_or(ParseError::TypeMismatch { operation: "div/mod".to_string(), expected: "number".to_string(), found: right.type_name().to_string(), pos })?;
+            Ok(Value::F64(if matches!(op, TokenKind::Slash) { a / b } else { a % b }))
+        }
+        TokenKind::Power => {
+            let a = left.as_f64().ok_or(ParseError::TypeMismatch { operation: "power".to_string(), expected: "number".to_string(), found: left.type_name().to_string(), pos })?;
+            let b = right.as_f64().ok_or(ParseError::TypeMismatch { operation: "power".to_string(), expected: "number".to_string(), found: right.type_name().to_string(), pos })?;
+            Ok(Value::F64(a.powf(b)))
+        }
+        TokenKind::Eq | TokenKind::StrictEq => Ok(Value::Bool(left == right)),
+        TokenKind::Neq | TokenKind::StrictNeq => Ok(Value::Bool(left != right)),
+        TokenKind::Lt | TokenKind::Gt | TokenKind::Le | TokenKind::Ge => {
+            let a = left.as_f64().ok_or(ParseError::TypeMismatch { operation: "comparison".to_string(), expected: "number".to_string(), found: left.type_name().to_string(), pos })?;
+            let b = right.as_f64().ok_or(ParseError::TypeMismatch { operation: "comparison".to_string(), expected: "number".to_string(), found: right.type_name().to_string(), pos })?;
+            Ok(Value::Bool(match op {
+                TokenKind::Lt => a < b,
+                TokenKind::Gt => a > b,
+                TokenKind::Le => a <= b,
+                TokenKind::Ge => a >= b,
+                _ => unreachable!(),
+            }))
+        }
+        TokenKind::Shl | TokenKind::Shr => {
+            let a = left.as_i64().ok_or(ParseError::TypeMismatch { operation: "shift".to_string(), expected: "integer".to_string(), found: left.type_name().to_string(), pos })?;
+            let b = right.as_i64().ok_or(ParseError::TypeMismatch { operation: "shift".to_string(), expected: "integer".to_string(), found: right.type_name().to_string(), pos })?;
+            Ok(Value::I64(if matches!(op, TokenKind::Shl) { a << (b as u32) } else { a >> (b as u32) }))
+        }
+        TokenKind::BitAnd | TokenKind::BitOr | TokenKind::BitXor => {
+            let a = left.as_i64().ok_or(ParseError::TypeMismatch { operation: "bitwise".to_string(), expected: "integer".to_string(), found: left.type_name().to_string(), pos })?;
+            let b = right.as_i64().ok_or(ParseError::TypeMismatch { operation: "bitwise".to_string(), expected: "integer".to_string(), found: right.type_name().to_string(), pos })?;
+            Ok(Value::I64(match op {
+                TokenKind::BitAnd => a & b,
+                TokenKind::BitOr => a | b,
+                TokenKind::BitXor => a ^ b,
+                _ => unreachable!(),
+            }))
+        }
+        TokenKind::And => Ok(Value::Bool(left.is_truthy() && right.is_truthy())),
+        TokenKind::Or => Ok(Value::Bool(left.is_truthy() || right.is_truthy())),
+        TokenKind::NullCoalesce => Ok(if left.is_truthy() { left } else { right }),
+        TokenKind::DotDot | TokenKind::DotDotEq => {
+            let start = left.as_i64().ok_or(ParseError::TypeMismatch { operation: "range".to_string(), expected: "integer".to_string(), found: left.type_name().to_string(), pos })?;
+            let end = right.as_i64().ok_or(ParseError::TypeMismatch { operation: "range".to_string(), expected: "integer".to_string(), found: right.type_name().to_string(), pos })?;
+            let range: Box<dyn Iterator<Item=i64>> = if matches!(op, TokenKind::DotDotEq) {
+                Box::new(start..=end)
+            } else {
+                Box::new(start..end)
+            };
+            Ok(Value::Array(range.map(|i| Value::F64(i as f64)).collect()))
+        }
+        _ => unreachable!(),
+    }
+}
+
+
+pub fn eval_expr(expr: &str, vars: &Variables, settings: &Settings) -> Option<Value> {
+    let hasher = &mut DefaultHasher::new();
+    hasher.write(expr.as_bytes());
+    let expr_hash = hasher.finish();
+    fn print_error(err: String, expr_hash: u64) {
+        let dedup_parse_errors = true;
+
+        if dedup_parse_errors {
+            let mut printed = printed_parse_errors().lock().unwrap();
+            if printed.insert(expr_hash) {
+                eprintln!("{err}");
+            }
+        } else {
+            eprintln!("{err}");
+        }
+    }
+
+    let tokens = match tokenize_expr(expr) {
+        Ok(t) => t,
+        Err(e) => {
+            if settings.print_parse_errors {
+                print_error(format!("LexError for '{}': {}", expr, e), expr_hash);
+            }
+            return None;
+        }
+    };
+    //println!("TOKENS: {tokens:?}");
+    let mut parser = Parser::new(&tokens);
+    let ast = match parser.parse() {
+        Ok(a) => a,
+        Err(e) => {
+            if settings.print_parse_errors {
+                print_error(format!("ParseError for '{}': {}", expr, e), expr_hash);
+            }
+            return None;
+        }
+    };
+    //println!("AST: {ast:?}");
+    let resolved_ast = match type_check_and_resolve(&ast, vars, settings) {
+        Ok(a) => a,
+        Err(e) => {
+            if settings.print_parse_errors {
+                print_error(format!("TypeError for '{}': {}", expr, e), expr_hash);
+            }
+            return None;
+        }
+    };
+    //println!("RESOLVED_AST: {resolved_ast:?}");
+    match eval_ast(&resolved_ast, vars, settings) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            if settings.print_parse_errors {
+                print_error(format!("EvalError for '{}': {}", expr, e), expr_hash);
+            }
+            None
+        }
+    }
 }

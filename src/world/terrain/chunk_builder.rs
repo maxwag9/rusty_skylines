@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use crate::helpers::positions::{chunk_size, ChunkCoord, LocalPos, LodStep, WorldPos};
 use crate::renderer::gizmo::gizmo::{push_gizmo_renders, Gizmo};
 use crate::renderer::props::{ArchetypeId, PropInstance, Props};
@@ -247,7 +248,8 @@ pub struct CpuChunkMesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
     pub height_grid: Arc<ChunkHeightGrid>,
-    pub tree_placements: Vec<PropInstance>
+    pub tree_placements: Vec<PropInstance>,
+    pub archetypes: Vec<String>
 }
 
 /// Pre-computed cell data for greedy meshing decisions
@@ -334,10 +336,10 @@ impl ChunkBuilder {
         }
 
         let has_edits = terrain_edits_snapshot.has_edits_on_chunk(chunk_coord);
-        let tree_placements = if has_edits {
+        let (tree_placements, archetypes) = if has_edits {
             // conservative: skip auto-trees on hand-edited terrain to avoid
             // floating/clipping trees where the player flattened ground
-            Vec::new()
+            (Vec::new(), Vec::new())
         } else {
             let veg_samples = TreeSpawner::gather_vegetation_samples(chunk_coord, terrain_gen);
             terrain_gen.tree_spawner.spawn_trees_for_chunk(chunk_coord, &veg_samples, terrain_gen, tree_spawning_params)
@@ -385,7 +387,8 @@ impl ChunkBuilder {
             vertices,
             indices,
             height_grid: Arc::new(height_grid),
-            tree_placements
+            tree_placements,
+            archetypes
         })
     }
 
@@ -1040,6 +1043,7 @@ pub struct VegetationSample {
 #[derive(Clone, Copy)]
 pub struct TreeSpawningParams {
     pub forest_cluster_strength: f32,
+    pub dense_forests: bool
 }
 #[derive(Clone)]
 pub struct TreeSpawner {
@@ -1133,14 +1137,14 @@ impl TreeSpawner {
         veg_samples: &[VegetationSample],
         terrain_gen: &TerrainGenerator,
         tree_spawning_params: TreeSpawningParams,
-    ) -> Vec<PropInstance> {
+    ) -> (Vec<PropInstance>, Vec<String>) {
         debug_assert_eq!(veg_samples.len(), VEG_GRID_SIZE * VEG_GRID_SIZE);
         let gizmo = &mut Gizmo::new_empty();
         let cs = chunk_size() as f32;
         let cell_size = cs / VEG_GRID_SIZE as f32;
         let mut rng = Self::rng_for_chunk(chunk_coord);
         let mut placements = Vec::new();
-
+        let mut archetypes: HashSet<String> = HashSet::new();
         let strength = tree_spawning_params.forest_cluster_strength.clamp(0.0, 1.0);
 
         for sample in veg_samples {
@@ -1190,7 +1194,7 @@ impl TreeSpawner {
 
             // If the blob is strong, let it spawn multiple trees.
             let mut tree_count = 1usize;
-            if strength > 0.0 {
+            if tree_spawning_params.dense_forests && strength > 0.0 {
                 let extra = (forest_blob * forest_blob * 6.0 * strength).floor() as usize;
                 tree_count += extra;
             }
@@ -1215,9 +1219,11 @@ impl TreeSpawner {
                 let rotation_y_rad = rng.random_range(0.0..std::f32::consts::TAU);
                 let world_pos = WorldPos::new(chunk_coord, LocalPos::new(local_x, h_exact, local_z));
                 //gizmo.cross(world_pos, 2.0, [1.0, 0.0, 0.0, 1.0], 0.0, 10.0);
+                let tree_kind = self.pick_kind(h, m, &mut rng);
+                archetypes.insert(tree_kind.to_string());
                 placements.push(PropInstance {
                     id: None,
-                    archetype_id: Some(self.archetype_id_of_kind(self.pick_kind(h, m, &mut rng))),
+                    archetype_id: Some(self.archetype_id_of_kind(tree_kind)),
                     pos: world_pos,
                     color: [1.0, 1.0, 1.0, 1.0],
                     scale,
@@ -1239,7 +1245,7 @@ impl TreeSpawner {
         //     sum / veg_samples.len() as f32
         // );
 
-        placements
+        (placements, archetypes.into_iter().collect())
     }
 
     /// This is the actual forest map.
@@ -1306,9 +1312,9 @@ impl TreeSpawner {
 
     fn pick_kind(&self, height: f32, moisture: f32, rng: &mut impl Rng) -> TreeKind {
         if moisture > 0.7 {
-            TreeKind::Pine
+            TreeKind::Oak //TreeKind::Pine
         } else if height > 120.0 {
-            TreeKind::DeadTree
+            TreeKind::Oak //TreeKind::DeadTree
         } else if rng.random_bool(0.9) {
             TreeKind::Oak
         } else {

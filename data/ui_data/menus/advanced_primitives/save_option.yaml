@@ -1,0 +1,75 @@
+name: save_option
+elements:
+  - !Rect
+    id: World Background
+    actions:
+      - as:["SavesScreen", "Backgrounds", "Left_Buttons_Background"], set(str:self.size.x, as.size.x*0.9); set(str:self.size.y, as.size.x*0.05); set(str:self.center.x, as.center.x);
+    x: 0
+    y: 0
+    w: 300
+    h: 30
+    color:
+      - 0.00
+      - 0.00
+      - 0.00
+      - 0.8
+    border_color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 0.2
+    roundness: 0.05
+    border_thickness_percentage: 0.04
+
+
+  - !Text
+    id: world_name_text
+    actions: [ ]
+    x: 0
+    y: -15
+    pt: 10.0
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 0.9
+    text: '"{ap.0}"'
+    anchor: Center
+    misc:
+      active: true
+      pressable: false
+      editable: true
+  #  - !Text
+  #    id: world_load_result_text
+  #    actions: [ ]
+  #    x: 40
+  #    y: 15
+  #    pt: 6.0
+  #    color:
+  #      - 1.0
+  #      - 1.0
+  #      - 1.0
+  #      - 0.9
+  #    text: 'Load result: {ap.1}'
+  #    anchor: Center
+  #    misc:
+  #      active: true
+  #      pressable: false
+  #      editable: true
+  - !Text
+    id: world_info_text
+    actions: [ ]
+    x: 75
+    y: 15
+    pt: 6.0
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 0.9
+    text: '{expr:elapsed({ap.2}, true)}, {ap.3}'
+    anchor: Center
+    misc:
+      active: true
+      pressable: false
+      editable: true

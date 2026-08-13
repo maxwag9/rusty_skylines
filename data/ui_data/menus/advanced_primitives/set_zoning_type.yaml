@@ -1,0 +1,38 @@
+name: set_zoning_type
+elements:
+  - !Rect
+    id: set_zone
+    actions:
+      - on:r set(str:new_zone_type, {ap.0})
+      - on:r set(str:cursor_mode, Zoning)
+      - show_interaction({ap.1}, true)
+    x: 0
+    y: 0
+    w: 20
+    h: 20
+    rotation: 0.0
+    color:
+      - 0.005
+      - 0.1
+      - 0.72
+      - 0.99
+    border_color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    texture: null
+    roundness: 0.0
+    border_thickness_percentage: 0.0
+    fade: 0.0
+    blur: 0.0
+    glow_color:
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+    glow_misc: { }
+    misc:
+      active: true
+      touchable: true
+      editable: true

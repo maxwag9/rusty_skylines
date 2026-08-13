@@ -4,7 +4,7 @@ use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
 use std::collections::HashMap;
-use wgpu_text::TextBrush;
+use glyphon::FontSystem;
 use winit::dpi::PhysicalSize;
 
 #[derive(Debug)]
@@ -57,7 +57,8 @@ impl Menu {
     pub fn rebuild_layer_cache_index(
         &mut self,
         settings: &Settings,
-        brush: &TextBrush,
+        variables: &Variables,
+        font_system: &mut FontSystem,
         layer_index: usize,
         runtime: &UiRuntimes,
         aps: &HashMap<String, UiLayerYaml>,
@@ -66,8 +67,8 @@ impl Menu {
         let mut ap_layers = vec![];
         let (before, rest) = self.layers.split_at_mut(layer_index);
         let (layer, after) = rest.split_first_mut().unwrap();
+        let mut dirty = layer.dirty;
 
-        let dirty = layer.dirty;
         if !dirty.any() || !layer.active {
             return ap_layers;
         }
@@ -75,11 +76,9 @@ impl Menu {
         let outlines_dirty = dirty.outlines || dirty.polygons || dirty.rects || dirty.circles;
         let mut rebuilt = LayerDirty::none();
 
-        init_cache_structure(layer);
-
         if dirty.aps {
-            // Do not remove the ap references, references must stay. Only if they are temporary though...
             let mut ids_to_remove = vec![];
+
             for (idx, element) in layer.elements.iter().enumerate() {
                 match element {
                     UiElement::Advanced(ap) => {
@@ -90,9 +89,10 @@ impl Menu {
                             .any(|l| l.name == ap.id)
                         {
                             let layer =
-                                ap.clone().to_layer(settings, aps, layer.order, window_size);
+                                ap.clone().to_layer(settings, variables, aps, layer.order + 1, window_size);
                             ap_layers.push(layer);
                         }
+
                         if ap.is_temporary {
                             ids_to_remove.push(idx);
                         }
@@ -100,14 +100,20 @@ impl Menu {
                     _ => continue,
                 }
             }
+
             ids_to_remove.sort_unstable();
-            ids_to_remove.into_iter().rev().for_each(|i| {
-                let _ = layer.elements.remove(i);
-            });
+
+            if !ids_to_remove.is_empty() {
+                dirty.mark_all();
+            }
+
+            for i in ids_to_remove.into_iter().rev() {
+                layer.elements.remove(i);
+            }
         }
 
         if dirty.texts {
-            rebuild_text_cache(brush, layer, &mut rebuilt, runtime);
+            rebuild_text_cache(font_system, layer, &mut rebuilt, runtime);
         }
 
         if dirty.circles {
@@ -133,6 +139,7 @@ impl Menu {
         layer.dirty.clear(rebuilt);
         ap_layers
     }
+
 
     pub fn bump_layer_order(&mut self, layer_name: &str, delta: i32, variables: &mut Variables) {
         for layer in &mut self.layers {

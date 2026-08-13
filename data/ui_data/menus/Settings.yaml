@@ -14,26 +14,28 @@ layers:
           - 0.94
           - 1.0
         text: Settings
-      - !Text
-        id: settings_to_main_menu_text
-        actions:
-          - on:r call(open_main_menus)
-        x: 100
+      - !Advanced
+        name: settings_to_main_menu_button
+        ap_name: button
+        ap_vars:
+          - "str:str:To Main Menu"
+          - "25"
+          - "str:on:r call(open_main_menus)"
+        x: 300
         y: 50
-        pt: 22
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: <- To Main Menu
+        scale: 1.0
+        misc:
+          active: true
+          touchable: true
+          editable: true
+        editing_tool: false
       - !Advanced
         name: checkbox_render_chunk_bounds
         ap_name: checkbox
-        ap_var: render_chunk_bounds
-        x: 0.1
-        y: 0.3
-        scale: 2.0
+        ap_var: str:render_chunk_bounds
+        x: 900
+        y: 300
+        scale: 1.0
         misc:
           active: true
           touchable: false
@@ -42,10 +44,10 @@ layers:
       - !Advanced
         name: checkbox_render_intersection_gizmo
         ap_name: checkbox
-        ap_var: render_intersection_gizmo
-        x: 0.2
-        y: 0.3
-        scale: 2.0
+        ap_var: str:render_intersection_gizmo
+        x: 1000
+        y: 300
+        scale: 1.0
         misc:
           active: true
           touchable: false
@@ -54,10 +56,10 @@ layers:
       - !Advanced
         name: checkbox_render_partitions_gizmo
         ap_name: checkbox
-        ap_var: render_partitions_gizmo
-        x: 0.3
-        y: 0.3
-        scale: 2.0
+        ap_var: str:render_partitions_gizmo
+        x: 1100
+        y: 300
+        scale: 1.0
         misc:
           active: true
           touchable: false
@@ -66,10 +68,10 @@ layers:
       - !Advanced
         name: checkbox_render_node_ids_gizmo
         ap_name: checkbox
-        ap_var: render_node_ids_gizmo
-        x: 0.4
-        y: 0.3
-        scale: 2.0
+        ap_var: str:render_node_ids_gizmo
+        x: 1200
+        y: 300
+        scale: 1.0
         misc:
           active: true
           touchable: false
@@ -78,10 +80,10 @@ layers:
       - !Advanced
         name: checkbox_render_lanes_gizmo
         ap_name: checkbox
-        ap_var: render_lanes_gizmo
-        x: 0.5
-        y: 0.3
-        scale: 2.0
+        ap_var: str:render_lanes_gizmo
+        x: 1300
+        y: 300
+        scale: 1.0
         misc:
           active: true
           touchable: false
@@ -90,10 +92,10 @@ layers:
       - !Advanced
         name: checkbox_render_signfinding_gizmo
         ap_name: checkbox
-        ap_var: render_signfinding_gizmo
-        x: 0.6
-        y: 0.3
-        scale: 2.0
+        ap_var: str:render_signfinding_gizmo
+        x: 1400
+        y: 300
+        scale: 1.0
         misc:
           active: true
           touchable: false
@@ -102,10 +104,10 @@ layers:
       - !Advanced
         name: checkbox_render_parking_gizmo
         ap_name: checkbox
-        ap_var: render_parking_gizmo
-        x: 0.6
-        y: 0.4
-        scale: 2.0
+        ap_var: str:render_parking_gizmo
+        x: 1500
+        y: 300
+        scale: 1.0
         misc:
           active: true
           touchable: false
@@ -114,10 +116,10 @@ layers:
       - !Advanced
         name: checkbox_render_lot_info
         ap_name: checkbox
-        ap_var: render_lot_info
-        x: 0.4
-        y: 0.4
-        scale: 2.0
+        ap_var: str:render_lot_info
+        x: 1600
+        y: 300
+        scale: 1.0
         misc:
           active: true
           touchable: false
@@ -126,10 +128,10 @@ layers:
       - !Advanced
         name: checkbox_simple_car_following
         ap_name: checkbox
-        ap_var: simple_car_following
-        x: 0.7
-        y: 0.3
-        scale: 2.0
+        ap_var: str:simple_car_following
+        x: 1700
+        y: 300
+        scale: 1.0
         misc:
           active: true
           touchable: false
@@ -138,7 +140,7 @@ layers:
       - !Advanced
         name: checkbox_always_day
         ap_name: checkbox
-        ap_var: always_day
+        ap_var: str:always_day
         x: 880
         y: 680
         scale: 1.0
@@ -150,7 +152,7 @@ layers:
       - !Advanced
         name: checkbox_tonemap_ui
         ap_name: checkbox
-        ap_var: tonemap_ui
+        ap_var: str:tonemap_ui
         x: 880
         y: 540
         scale: 1.0
@@ -162,7 +164,7 @@ layers:
       - !Advanced
         name: tonemapping_state_dropdown
         ap_name: dropdown
-        ap_var: tonemapping_state
+        ap_var: str:tonemapping_state
         x: 200
         y: 640
         scale: 1.0
@@ -174,7 +176,7 @@ layers:
       - !Advanced
         name: color_grade_state_dropdown
         ap_name: dropdown
-        ap_var: color_grading_state
+        ap_var: str:color_grading_state
         x: 200
         y: 740
         scale: 1.0
@@ -186,9 +188,33 @@ layers:
       - !Advanced
         name: present_mode_dropdown
         ap_name: dropdown
-        ap_var: present_mode
+        ap_var: str:present_mode
         x: 200
         y: 840
+        scale: 1.0
+        misc:
+          active: true
+          touchable: false
+          editable: true
+        editing_tool: false
+      - !Advanced
+        name: shadow_type_dropdown
+        ap_name: dropdown
+        ap_var: str:shadow_type
+        x: 400
+        y: 240
+        scale: 1.0
+        misc:
+          active: true
+          touchable: false
+          editable: true
+        editing_tool: false
+      - !Advanced
+        name: fullscreen_mode_dropdown
+        ap_name: dropdown
+        ap_var: str:fullscreen_mode
+        x: 600
+        y: 640
         scale: 1.0
         misc:
           active: true
@@ -199,14 +225,56 @@ layers:
         name: msaa_slider
         ap_name: slider
         ap_var:
-          - "msaa_samples"
-          - "MSAA"
+          - "str:msaa_samples"
+          - "str:MSAA"
           - "1"
           - "8"
           - "1"
           - "{supported_msaa_levels}"
-        x: 1600
+          - "none:None"
+          - "true"
+        x: 1300
         y: 800
+        scale: 1.5
+        misc:
+          active: true
+          touchable: false
+          editable: true
+        editing_tool: false
+      - !Advanced
+        name: shadow_map_size_slider
+        ap_name: slider
+        ap_var:
+          - "str:shadow_map_size"
+          - "str:Shadow Quality"
+          - "1024"
+          - "8192"
+          - "1024"
+          - "[1024, 2048, 4096, 6144, 8192]"
+          - "[str:Potato, str:Low, str:Medium, str:High, str:Insane]"
+          - "true"
+        x: 1000
+        y: 400
+        scale: 1.5
+        misc:
+          active: true
+          touchable: false
+          editable: true
+        editing_tool: false
+      - !Advanced
+        name: target_fps_slider
+        ap_name: slider
+        ap_var:
+          - "str:target_fps"
+          - "str:FPS Limit"
+          - "25"
+          - "2000"
+          - "1"
+          - "[25, 30, 50, 59, 60, 75, 100, 120, 144, 240, 360, 480, 960, 2000]"
+          - "none:None"
+          - "true"
+        x: 1300
+        y: 700
         scale: 1.5
         misc:
           active: true

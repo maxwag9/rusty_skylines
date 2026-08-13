@@ -1414,7 +1414,6 @@ impl BuildingMeshManager {
                                 );
                                 center.local.y = zero_height;
                                 let prop_instance_id = props.place_prop(
-                                    center,
                                     "oak",
                                     PropInstance {
                                         id: None,

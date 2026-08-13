@@ -5,6 +5,20 @@ use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use wgpu::*;
 use winit::dpi::PhysicalSize;
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Background {
+    pub primary_color: [f32; 4],
+    pub secondary_color: [f32; 4],
+    pub block_size: f32,
+
+    pub warp_strength: f32,
+    pub warp_radius: f32,
+    pub time_scale: f32,
+    pub wave_strength: f32,
+    pub _padding: [f32; 3], // forces 64 bytes
+}
+
 pub struct UiPipelines {
     pub device: Device,
     pub uniform_layout: BindGroupLayout,
@@ -24,26 +38,16 @@ pub struct UiPipelines {
     pub polygon_layout: BindGroupLayout,
     pub good_blend: Option<BlendState>,
     pub additive_blend: BlendState,
-}
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Background {
-    pub primary_color: [f32; 4],
-    pub secondary_color: [f32; 4],
-    pub block_size: f32,
 
-    pub warp_strength: f32,
-    pub warp_radius: f32,
-    pub time_scale: f32,
-    pub wave_strength: f32,
-    pub _padding: [f32; 3], // forces 64 bytes
+    pub depth_view: TextureView
 }
+
 impl UiPipelines {
     pub fn new(
         device: &Device,
         config: &SurfaceConfiguration,
         msaa_samples: u32,
-        size: PhysicalSize<u32>,
+        size: PhysicalSize<u32>
     ) -> anyhow::Result<Self> {
         let format = config.format;
         let handle_quad_vertices = [
@@ -52,24 +56,32 @@ impl UiPipelines {
                 data: [0.0, 0.0],
                 color: [1.0; 4],
                 misc: [1.0; 4],
+                depth: 0.0,
+                _pad0: Default::default()
             },
             UiVertexPoly {
                 pos: [3.0, -3.0],
                 data: [0.0, 0.0],
                 color: [1.0; 4],
                 misc: [1.0; 4],
+                depth: 0.0,
+                _pad0: Default::default()
             },
             UiVertexPoly {
                 pos: [-3.0, 3.0],
                 data: [0.0, 0.0],
                 color: [1.0; 4],
                 misc: [1.0; 4],
+                depth: 0.0,
+                _pad0: Default::default()
             },
             UiVertexPoly {
                 pos: [3.0, 3.0],
                 data: [0.0, 0.0],
                 color: [1.0; 4],
                 misc: [1.0; 4],
+                depth: 0.0,
+                _pad0: Default::default()
             },
         ];
         let handle_quad_buffer = device.create_buffer_init(&BufferInitDescriptor {
@@ -84,24 +96,32 @@ impl UiPipelines {
                 data: [0.0, 0.0],
                 color: [1.0; 4],
                 misc: [1.0, 0.0, 0.0, 0.0],
+                depth: 0.0,
+                _pad0: Default::default()
             },
             UiVertexPoly {
                 pos: [1.0, -1.0],
                 data: [0.0, 0.0],
                 color: [1.0; 4],
                 misc: [1.0, 0.0, 0.0, 0.0],
+                depth: 0.0,
+                _pad0: Default::default()
             },
             UiVertexPoly {
                 pos: [-1.0, 1.0],
                 data: [0.0, 0.0],
                 color: [1.0; 4],
                 misc: [1.0, 0.0, 0.0, 0.0],
+                depth: 0.0,
+                _pad0: Default::default()
             },
             UiVertexPoly {
                 pos: [1.0, 1.0],
                 data: [0.0, 0.0],
                 color: [1.0; 4],
                 misc: [1.0, 0.0, 0.0, 0.0],
+                depth: 0.0,
+                _pad0: Default::default()
             },
         ];
         let quad_buffer = device.create_buffer_init(&BufferInitDescriptor {
@@ -257,6 +277,7 @@ impl UiPipelines {
             min_filter: FilterMode::Nearest,
             ..Default::default()
         });
+        let ui_depth_view = create_ui_depth_texture(&device, config.width, config.height);
 
         Ok(Self {
             device: device.clone(),
@@ -281,7 +302,11 @@ impl UiPipelines {
             additive_blend,
             good_blend,
             rect_layout,
+            depth_view: ui_depth_view
         })
+    }
+    pub fn resize(&mut self, config: &SurfaceConfiguration) {
+        self.depth_view = create_ui_depth_texture(&self.device, config.width, config.height);
     }
 }
 
@@ -291,4 +316,28 @@ pub fn multisample_state(samples: u32) -> MultisampleState {
         mask: !0,
         alpha_to_coverage_enabled: false,
     }
+}
+pub const UI_DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float; // TODO: Overkill!
+fn create_ui_depth_texture(
+    device: &Device,
+    width: u32,
+    height: u32,
+) -> TextureView {
+    let texture = device.create_texture(&TextureDescriptor {
+        label: Some("UI Depth Texture, yes 3D!"),
+        size: Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: UI_DEPTH_FORMAT,
+        usage: TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+
+    let view = texture.create_view(&TextureViewDescriptor::default());
+    view
 }

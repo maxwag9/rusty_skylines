@@ -15,7 +15,7 @@ struct ShapeParams {
     mode: f32,      // 0.0 = circle, 1.0 = polygon
     vertex_offset: u32,   // polygon vertices start index (ignored for circle)
     vertex_count: u32,    // polygon vertex count (ignored for circle)
-    _pad0: u32,
+    depth: f32,
 
     shape_data: vec4<f32>,     // (cx, cy, radius, thickness_factor)
     dash_color: vec4<f32>,
@@ -99,7 +99,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let x = (world.x / screen.size.x) * 2.0 - 1.0;
     let y = 1.0 - (world.y / screen.size.y) * 2.0;
 
-    out.pos = vec4<f32>(x, y, 0.0, 1.0);
+    out.pos = vec4<f32>(x, y, s.depth, 1.0);
     out.local_pos = world;
     out.shape_index = in.instance;
     out.center = center;

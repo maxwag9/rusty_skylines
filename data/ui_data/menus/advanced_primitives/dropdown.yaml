@@ -11,8 +11,8 @@ elements:
       - on:sel button:a, ifvareq({ap}_open, bool:false, forin({ap}.options, del_ap(self.menu, self.layer, {ap}_Option_{idx})))
       # If opening: Iterate over the options array and clone the template AP
       #- on:release button:a, print(str:{ap}.{idx})
-      - on:release button:left, ifvareq({ap}_open, bool:true, forin({ap}.options, add_ap(self.menu, {ap}_Option_{idx}, "dropdown_option", str:{ap}.options.{idx}, [{self.center.x}, {self.center.y} + {self.size.y} * ({idx} + 1)], 1.0, true);))
-      - on:release button:left, set_var(dd_{ap}_layer, self.layer)
+      - on:release button:left, ifvareq({ap}_open, bool:true, forin({ap}.options, add_ap(self.menu, {ap}_Option_{idx}, "dropdown_option", str:"{ap}.options.{idx}", [self.center.x, expr:{self.center.y} + {self.size.y} * ({idx} + 1)], 1.0, true);))
+      - on:release button:left, set(str:dd_{ap}_layer, self.layer)
       #- on:release button:left, print("dd_{ap}_layer")
       # If closing: Iterate over the options array and delete the cloned APs
       #- on:release button:left, print("{ap}_open")
@@ -21,7 +21,7 @@ elements:
       - on:release on:sel button:left, ifvareq({ap}_open, bool:false, forin({ap}.options, del_ap(self.menu, self.layer, {ap}_Option_{idx})))
 
       # Visual feedback for the main button
-      - show_interaction(self.color.fill, false)
+      - show_interaction(None, false)
     #      - on:hovering, ifvareq({ap}_open, bool:true, set(self.color.fill, [0.5, 0.5, 0.5, 1.0]), set(self.color.fill, [0.2, 0.2, 0.2, 1.0]))
     #      - on:hover_exit, ifvareq({ap}_open, bool:true, set(self.color.fill, [0.4, 0.4, 0.4, 1.0]), set(self.color.fill, [0.1, 0.1, 0.1, 1.0]))
 
@@ -44,7 +44,7 @@ elements:
 
   - !Text
     id: Main Button Text
-    x: 0.000
+    x: 0
     y: 0
     pt: 12.0
     color:

@@ -640,16 +640,15 @@ pub fn build_intersection_at_node(
         }
     }
 
-    if let Some(node) = storage.node_mut_safe(node_id) {
-        node.clear_node_lanes();
-    }
+    let node = storage.node_mut(node_id);
+    node.clear_node_lanes();
 
-    let node_lanes =
-        build_node_lanes_for_intersection(terrain, storage, road_types, node_id, params, gizmo);
 
-    if let Some(node) = storage.node_mut_safe(node_id) {
-        storage.node_mut(node_id).add_node_lanes(node_lanes);
-    }
+    let node_lanes = build_node_lanes_for_intersection(terrain, storage, road_types, node_id, params, gizmo);
+
+    let node = storage.node_mut(node_id);
+    storage.node_mut(node_id).add_node_lanes(node_lanes);
+
 
     affected_chunks
 }
@@ -976,16 +975,14 @@ fn carve_lanes_with_polygon(
             .collect();
 
         for lane_id in all_lanes {
-            let Some(lane) = storage.lane_safe(lane_id) else {
-                continue;
-            };
+            let lane = storage.lane(lane_id);
 
             let pts = lane.polyline();
             if pts.len() < 2 {
                 continue;
             }
 
-            let node_pos = storage.node(node_id).unwrap().pos();
+            let node_pos = storage.node(node_id).pos();
             let Some(node_idx) = endpoint_index_near_node(pts, node_pos) else {
                 continue;
             };
@@ -1020,7 +1017,7 @@ fn carve_lanes_with_polygon(
     }
 
     for (lane_id, geom) in edits {
-        storage.lane_mut(lane_id).map(|l| l.replace_geometry(geom));
+        storage.lane_mut(lane_id).replace_geometry(geom);
     }
 }
 
@@ -1500,7 +1497,7 @@ fn compute_intersection_geometry(
     settings: &Settings,
     gizmo: &mut Gizmo,
 ) -> Option<IntersectionGeometry> {
-    let node = storage.node(node_id)?;
+    let node = storage.node(node_id);
     let center = node.pos();
 
     let arms = node.arms();
@@ -1769,7 +1766,7 @@ pub fn gather_arms(
                 .lanes()
                 .iter()
                 .copied()
-                .filter(|id| storage.lane_safe(*id).is_some())
+                .filter(|id| storage.lane_exists(*id))
                 .collect();
 
             if lane_ids.is_empty() {
@@ -1833,9 +1830,6 @@ pub fn road_vertex(
     }
 }
 
-// ============================================================================
-// Node Lane Building
-// ============================================================================
 
 fn build_node_lanes_for_intersection(
     terrain: &Terrain,
@@ -1845,9 +1839,7 @@ fn build_node_lanes_for_intersection(
     intersection_params: &IntersectionBuildParams,
     gizmo: &mut Gizmo,
 ) -> Vec<NodeLane> {
-    let Some(node) = storage.node(node_id) else {
-        return Vec::new();
-    };
+    let node = storage.node(node_id);
 
     let node_pos = node.pos();
 
@@ -1863,9 +1855,7 @@ fn build_node_lanes_for_intersection(
         let segment_ends_here = segment.end() == node_id;
 
         for lane_id in segment.lanes() {
-            let Some(lane) = storage.lane_safe(*lane_id) else {
-                continue;
-            };
+            let lane = storage.lane(*lane_id);
 
             let pts = lane.polyline();
             if pts.len() < 2 {
@@ -1961,73 +1951,72 @@ fn build_node_lanes_for_intersection(
     }
 
     let mut node_lanes = Vec::new();
-    if let Some(lane_idx_base) = storage.node_lane_count_for_node(node_id) {
-        for (in_id, in_node_idx, in_pt, in_dir) in &incoming_lanes {
-            let in_lane = storage.lane(*in_id);
+    let lane_idx_base = storage.node_lane_count_for_node(node_id);
+    for (in_id, in_node_idx, in_pt, in_dir) in &incoming_lanes {
+        let in_lane = storage.lane(*in_id);
 
-            for (out_id, out_node_idx, out_pt, out_dir) in &outgoing_lanes {
-                // Skip same lane
-                if in_id == out_id {
-                    continue;
-                }
-
-                // Skip same segment (no U-turns within same road)
-                let out_lane = storage.lane(*out_id);
-                // if in_lane.segment() == out_lane.segment() {
-                //     continue;
-                // }
-
-                // Angle-based filtering
-                // in_dir points INTO the intersection (direction of incoming traffic)
-                // out_dir points OUT OF the intersection (direction of outgoing traffic)
-                //
-                // For a straight-through: in_dir ≈ out_dir → dot ≈ 1
-                // For 90° turn: dot ≈ 0
-                // For U-turn (180°): dot ≈ -1
-                let dot = in_dir.dot(*out_dir);
-
-                // Filter out U-turns and very sharp turns
-                // if dot < -0.99 {
-                //     continue;
-                // }
-
-                // Compute turn geometry
-                let chord = in_pt.distance_to(*out_pt);
-                let tightness = compute_turn_tightness(chord, dot, intersection_params);
-
-                let geom = generate_turn_geometry(
-                    terrain,
-                    *in_pt,
-                    *in_dir,
-                    *out_pt,
-                    *out_dir,
-                    intersection_params.turn_samples,
-                    tightness,
-                );
-
-                // Debug: draw the turn curve
-                let turn_pts = &geom.points;
-                for i in 0..turn_pts.len().saturating_sub(1) {
-                    gizmo.line(
-                        turn_pts[i],
-                        turn_pts[i + 1],
-                        [1.0, 1.0, 0.0, 1.0],
-                        ROAD_GIZMO_THICKNESS,
-                        DEBUG_DRAW_DURATION,
-                    );
-                }
-
-                let nl = NodeLane::new(
-                    (lane_idx_base + node_lanes.len()) as NodeLaneId,
-                    vec![LaneRef::Lane(*in_id, *in_node_idx as PolyIdx)],
-                    vec![LaneRef::Lane(*out_id, *out_node_idx as PolyIdx)],
-                    geom,
-                    50.0,
-                    0,
-                );
-
-                node_lanes.push(nl);
+        for (out_id, out_node_idx, out_pt, out_dir) in &outgoing_lanes {
+            // Skip same lane
+            if in_id == out_id {
+                continue;
             }
+
+            // Skip same segment (no U-turns within same road)
+            let out_lane = storage.lane(*out_id);
+            // if in_lane.segment() == out_lane.segment() {
+            //     continue;
+            // }
+
+            // Angle-based filtering
+            // in_dir points INTO the intersection (direction of incoming traffic)
+            // out_dir points OUT OF the intersection (direction of outgoing traffic)
+            //
+            // For a straight-through: in_dir ≈ out_dir → dot ≈ 1
+            // For 90° turn: dot ≈ 0
+            // For U-turn (180°): dot ≈ -1
+            let dot = in_dir.dot(*out_dir);
+
+            // Filter out U-turns and very sharp turns
+            // if dot < -0.99 {
+            //     continue;
+            // }
+
+            // Compute turn geometry
+            let chord = in_pt.distance_to(*out_pt);
+            let tightness = compute_turn_tightness(chord, dot, intersection_params);
+
+            let geom = generate_turn_geometry(
+                terrain,
+                *in_pt,
+                *in_dir,
+                *out_pt,
+                *out_dir,
+                intersection_params.turn_samples,
+                tightness,
+            );
+
+            // Debug: draw the turn curve
+            let turn_pts = &geom.points;
+            for i in 0..turn_pts.len().saturating_sub(1) {
+                gizmo.line(
+                    turn_pts[i],
+                    turn_pts[i + 1],
+                    [1.0, 1.0, 0.0, 1.0],
+                    ROAD_GIZMO_THICKNESS,
+                    DEBUG_DRAW_DURATION,
+                );
+            }
+
+            let nl = NodeLane::new(
+                (lane_idx_base + node_lanes.len()) as NodeLaneId,
+                vec![LaneRef::Lane(*in_id, *in_node_idx as PolyIdx)],
+                vec![LaneRef::Lane(*out_id, *out_node_idx as PolyIdx)],
+                geom,
+                50.0,
+                0,
+            );
+
+            node_lanes.push(nl);
         }
     }
 

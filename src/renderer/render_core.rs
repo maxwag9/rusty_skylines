@@ -15,7 +15,7 @@ use crate::renderer::shadows::{render_buildings_shadows, render_cars_shadows, re
 use crate::renderer::ui::{ScreenUniform, UiRenderer};
 use crate::renderer::ui_pipelines::multisample_state;
 use crate::renderer::uniform_updates::UniformUpdater;
-use crate::resources::Time;
+use crate::resources::{FrameTimeCheckpointType, Time};
 use crate::ui::input::Input;
 use crate::ui::ui_editor::Ui;
 use crate::world::astronomy::*;
@@ -34,6 +34,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
+use glyphon::Resolution;
 use wgpu::wgt::PollType;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -86,14 +87,14 @@ impl Renderer {
         let shader_watcher = ShaderWatcher::new().ok();
 
         let mut rt_subsystem = RTSubsystem::new(device);
-        let ui_renderer = UiRenderer::new(device, config, size, settings.msaa_samples)
+        let ui_renderer = UiRenderer::new(device, queue, config, size, settings.msaa_samples)
             .expect("Failed to create UI pipelines");
         let terrain_renderer = TerrainRenderSubsystem::new();
         let road_renderer = RoadRenderSubsystem::new(device);
         let car_renderer = CarRenderSubsystem::new(device, queue, &mut rt_subsystem);
         let building_renderer = BuildingRenderer::new(device);
         let mut render_manager = RenderManager::new(device, queue, texture_dir());
-        let gizmo = Gizmo::new(device, config, &ui_renderer.font, settings.msaa_samples);
+        let gizmo = Gizmo::new(device, config, &ui_renderer.font_arc, settings.msaa_samples);
         let profiler = GpuProfiler::new(&device, 3);
         let pipelines = Pipelines::new(
             &mut render_manager,
@@ -153,13 +154,11 @@ impl Renderer {
         }
         surface.configure(&self.device, &self.config);
         self.pipelines.resize(&self.config, self.msaa_samples);
+        self.ui_renderer.pipelines.resize(&self.config);
         self.render_manager.invalidate_bind_groups();
         ui.resize(self.old_window_size, new_size);
-        self.ui_renderer.brush.resize_view(
-            new_size.width as f32,
-            new_size.height as f32,
-            &self.queue
-        );
+        let res = Resolution { width: self.old_window_size.width, height: self.old_window_size.height };
+        self.ui_renderer.viewport.update(&self.queue, res);
     }
 
     pub fn render(
@@ -180,21 +179,23 @@ impl Renderer {
         if settings.render_debug_print {
             print!(" [render] after update_render");
         }
+        let time = &mut world.time;
+
+        time.frame_checkpoint(FrameTimeCheckpointType::BeforeAcquireFrame);
         let Some(frame) = acquire_frame(&surface, &self.device, &self.config) else {
             return;
         };
+        time.frame_checkpoint(FrameTimeCheckpointType::AfterAcquireFrame);
         if settings.render_debug_print {
             print!("[render] acquired frame");
         }
-        let time = &world.time;
+
         let camera = &world.world_state.camera;
-        let astronomy = &world.time.astronomy;
         let terrain = &mut world.terrain;
         let buildings = &world.buildings;
         let surface_view = frame.texture.create_view(&TextureViewDescriptor::default());
 
-        let mut encoder = self
-            .device
+        let mut encoder = self.device
             .create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
@@ -209,7 +210,7 @@ impl Renderer {
                     time,
                     settings,
                     terrain,
-                    buildings,
+                    buildings
                 );
             });
             self.execute_main_pass(
@@ -224,16 +225,12 @@ impl Renderer {
                 terrain,
                 &world.buildings,
                 &world.cars.car_storage(),
-                settings,
-                astronomy,
+                settings
             );
         });
 
         //println!("World CPU Time: {:?}", t.elapsed());
         self.profiler.resolve(&mut encoder);
-        let total_cpu_render_time = total_cpu_render_time_start.elapsed().as_secs_f32() * 1000.0f32;
-        ui.variables
-            .set_f64("total_cpu_render_time", total_cpu_render_time);
         if settings.render_debug_print {
             print!(" [render] before submit");
         }
@@ -245,8 +242,7 @@ impl Renderer {
         if settings.render_debug_print {
             print!(" [render] after present");
         }
-        self.profiler
-            .end_frame(&self.device, &self.queue, &mut ui.variables);
+        self.profiler.end_frame(&self.device, &self.queue, &mut ui.variables);
     }
 
     pub fn update_render(
@@ -536,8 +532,7 @@ impl Renderer {
         terrain: &Terrain,
         buildings: &Buildings,
         car_storage: &CarStorage,
-        settings: &Settings,
-        astronomy: &Astronomy,
+        settings: &Settings
     ) {
         self.execute_world_pass(
             encoder,
@@ -555,7 +550,7 @@ impl Renderer {
         });
 
         gpu_timestamp!(encoder, &mut self.profiler, "RT", {
-            let sun_up = astronomy.sun_dir.y > 0.0;
+            let sun_up = time.astronomy.sun_dir.y > 0.0;
             if sun_up && (settings.shadow_type == ShadowType::RT) {
                 render_ray_tracing(
                     encoder,
@@ -1084,7 +1079,7 @@ impl Renderer {
             &self.queue,
             ui_loader,
             &self.pipelines,
-            settings,
+            settings
         );
     }
 
@@ -1440,7 +1435,7 @@ impl Renderer {
 
 pub fn create_surface_and_adapter(
     window: Arc<Box<dyn Window>>,
-    event_loop: &dyn ActiveEventLoop,
+    event_loop: &dyn ActiveEventLoop
 ) -> (Surface<'static>, Adapter, PhysicalSize<u32>) {
     let display_handle = event_loop.owned_display_handle();
 
@@ -1465,17 +1460,18 @@ pub fn create_surface_and_adapter(
     }))
     .expect("No suitable GPU adapters found");
 
-    println!("Backend: {:?}", adapter.get_info().backend);
-
     (surface, adapter, size)
 }
+
 pub const SURFACE_FORMAT: TextureFormat = Rgba8UnormSrgb;
+
 pub fn create_surface_config(
     surface: &Surface,
     adapter: &Adapter,
     settings: &mut Settings,
     variables: &mut Variables,
-    size: PhysicalSize<u32>
+    size: PhysicalSize<u32>,
+    is_runtime: bool
 ) -> (SurfaceConfiguration, u32) {
     let surface_caps = surface.get_capabilities(adapter);
 
@@ -1495,7 +1491,7 @@ pub fn create_surface_config(
         .unwrap_or(CompositeAlphaMode::Opaque);
 
     let present_mode = pick_present_mode(surface, adapter, settings.present_mode.clone().to_wgpu());
-
+    if is_runtime { println!("Switched to Present mode: {:?}", present_mode) }
     let config = SurfaceConfiguration {
         usage: TextureUsages::RENDER_ATTACHMENT,
         format,
@@ -1511,7 +1507,7 @@ pub fn create_surface_config(
     let caps = adapter.get_texture_format_features(config.format);
     let msaa_options = get_supported_msaa_levels(adapter, format);
     variables.set_array("supported_msaa_levels", msaa_options);
-    let msaa_samples = clamp_to_supported_msaa(caps, settings.msaa_samples);
+    let msaa_samples = clamp_to_supported_msaa(caps, settings.msaa_samples, is_runtime);
     settings.msaa_samples = msaa_samples;
     (config, msaa_samples)
 }
@@ -1536,15 +1532,30 @@ pub fn create_device(adapter: &Adapter) -> (Device, Queue) {
 
 fn pick_present_mode(surface: &Surface, adapter: &Adapter, user_mode: PresentMode) -> PresentMode {
     let caps = surface.get_capabilities(adapter);
-    let fallbacks = [
-        user_mode,
-        PresentMode::Mailbox,
-        PresentMode::Immediate,
-        PresentMode::Fifo,
-    ];
+    let fallbacks = match user_mode {
+        PresentMode::Mailbox => [
+            PresentMode::Mailbox,
+            PresentMode::Fifo,
+            PresentMode::Immediate,
+        ],
+        PresentMode::Immediate => [
+            PresentMode::Immediate,
+            PresentMode::Mailbox,
+            PresentMode::Fifo,
+        ],
+        PresentMode::Fifo => [
+            PresentMode::Fifo,
+            PresentMode::Mailbox,
+            PresentMode::Immediate,
+        ],
+        _ => [
+            PresentMode::Mailbox,
+            PresentMode::Immediate,
+            PresentMode::Fifo
+        ]
+    };
 
-    fallbacks
-        .into_iter()
+    fallbacks.into_iter()
         .find(|mode| caps.present_modes.contains(mode))
         .unwrap_or(PresentMode::Fifo)
 }
@@ -1562,7 +1573,7 @@ fn get_supported_msaa_levels(adapter: &Adapter, format: TextureFormat) -> Vec<u3
     levels
 }
 
-fn clamp_to_supported_msaa(caps: TextureFormatFeatures, requested: u32) -> u32 {
+fn clamp_to_supported_msaa(caps: TextureFormatFeatures, requested: u32, is_runtime: bool) -> u32 {
     let can_render = caps
         .allowed_usages
         .contains(TextureUsages::RENDER_ATTACHMENT);
@@ -1584,37 +1595,37 @@ fn clamp_to_supported_msaa(caps: TextureFormatFeatures, requested: u32) -> u32 {
 
     if supports_8 {
         return if requested < 8 {
-            println!("8x MSAA supported, but using {}x!", requested);
+            if !is_runtime { println!("8x MSAA supported, but using {}x!", requested); }
             requested
         } else {
-            println!("8x MSAA supported, using {}x!", requested);
+            if !is_runtime { println!("8x MSAA supported, using {}x!", requested); }
             8
         };
     }
 
     if supports_4 {
         if requested >= 8 {
-            println!("8x requested but unsupported, falling back to 4x");
+            if !is_runtime { println!("8x requested but unsupported, falling back to 4x"); }
             return 4;
         }
         if requested >= 4 {
-            println!("4x MSAA supported, using 4x");
+            if !is_runtime { println!("4x MSAA supported, using 4x"); }
             return 4;
         }
-        println!("4x MSAA supported, but using {}x!", requested);
+        if !is_runtime { println!("4x MSAA supported, but using {}x!", requested); }
         return requested;
     }
 
     if supports_2 {
         if requested >= 4 {
-            println!("Only 2x MSAA supported, falling back to 2x");
+            if !is_runtime { println!("Only 2x MSAA supported, falling back to 2x"); }
             return 2;
         }
-        println!("2x MSAA supported, using {}x!", requested);
+        if !is_runtime { println!("2x MSAA supported, using {}x!", requested); }
         return requested;
     }
 
-    println!("MSAA not supported, falling back to 1x (WTF is this GPU huh?)");
+    if !is_runtime { println!("MSAA not supported, falling back to 1x (WTF is this GPU huh?)"); }
     1
 }
 
@@ -1631,7 +1642,7 @@ pub fn acquire_frame(
         }
         CurrentSurfaceTexture::Suboptimal(surface_texture) => {
             //println!("[surface] get_current_texture: suboptimal");
-            surface.configure(device, config);
+            //surface.configure(device, config);
             Some(surface_texture)
         }
         CurrentSurfaceTexture::Lost => {

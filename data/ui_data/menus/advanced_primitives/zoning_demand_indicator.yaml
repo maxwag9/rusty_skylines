@@ -4,10 +4,10 @@ elements:
   - !Rect
     id: Zoning Border
     actions:
-      - on:activated button:a, set(str:zoning_demand_indicator_{ap}_border_height, {self.size.y})
-      #- on:activated button:a, print(zoning_demand_indicator_{ap}_border_height)
-      - on:activated button:a, set(str:zoning_demand_indicator_{ap}_border_y, {self.center.y})
-      #- on:activated button:a, print(zoning_demand_indicator_{ap}_border_y)
+      - on:activated, set(str:zoning_demand_indicator_{ap}_border_height, self.size.y)
+      #- on:activated, print(zoning_demand_indicator_{ap}_border_height)
+      - on:activated, set(str:zoning_demand_indicator_{ap}_border_y, self.center.y)
+      #- on:activated, print(zoning_demand_indicator_{ap}_border_y)
     x: 0
     y: 0
     w: 30
@@ -28,9 +28,9 @@ elements:
   - !Rect
     id: Zoning Indicator
     actions:
-      - on:a button:a set(str:self.size.y, {zoning_demand_indicator_{ap}_border_height}*{{ap}})
-      - on:a button:a set(str:self.center.y, ({zoning_demand_indicator_{ap}_border_y} + 0.5 * {zoning_demand_indicator_{ap}_border_height}) - 0.5 * ({zoning_demand_indicator_{ap}_border_height}*{{ap}}))
-      - button:a show_interaction(self.color.fill)
+      - on:a set(str:self.size.y, expr:{zoning_demand_indicator_{ap}_border_height}*{{ap}})
+      - on:a set(str:self.center.y, expr:({zoning_demand_indicator_{ap}_border_y} + 0.5 * {zoning_demand_indicator_{ap}_border_height}) - 0.5 * ({zoning_demand_indicator_{ap}_border_height}*{{ap}}))
+      - show_interaction(self.color.fill)
       #- on:release, ifvareq(str:{ap}, bool:false, set_var(str:self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(str:self.color.fill, [0.0, 0.5, 0.0, 1.0]))
     x: 0
     y: 0
@@ -52,5 +52,5 @@ elements:
       - 0.02
       - 0.09
       - 0.9
-    text: '{float({{ap}}:.2)}'
+    text: '{expr:float({{ap}}:.2)}'
     anchor: Center

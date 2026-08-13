@@ -23,6 +23,8 @@ struct RectGpu {
     glow_misc: vec4<f32>,
     misc: vec4<f32>,
     blur: f32,
+    depth: f32,
+    _pad0: vec2<f32>,
 };
 
 fn rot2(a: f32) -> mat2x2<f32> {
@@ -104,7 +106,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
     out.pos        = vec4<f32>((world.x / screen.size.x) * 2.0 - 1.0,
                                 1.0 - (world.y / screen.size.y) * 2.0,
-                                0.0, 1.0);
+                                p.depth, 1.0);
     out.world_pos  = world;
     out.rect_index = in.instance;
     return out;

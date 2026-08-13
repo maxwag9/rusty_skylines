@@ -1,17 +1,16 @@
 use crate::commands::CommandBuffer;
 use crate::data::Settings;
+use crate::renderer::props::Props;
 use crate::resources::Time;
 use crate::ui::input::Input;
 use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::Zoning;
 use crate::world::cars::car_subsystem::Cars;
-use crate::world::game_state::GameState;
 use crate::world::roads::road_subsystem::Roads;
 use crate::world::statisticals::CityState;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use crate::world::world_state::WorldState;
 use wgpu::{Device, Queue};
-use crate::renderer::props::Props;
 
 pub struct World {
     pub world_state: WorldState,
@@ -23,7 +22,7 @@ pub struct World {
     pub cars: Cars,
     pub buildings: Buildings,
     pub zoning: Zoning,
-    pub city_state: CityState, // ... other sim-only subsystems (economy, citizens, etc.)
+    pub city_state: CityState // ... other sim-only subsystems (economy, citizens, etc.)
 }
 
 impl World {
@@ -31,11 +30,10 @@ impl World {
         device: &Device,
         queue: &Queue,
         settings: &Settings,
-        game_state: &mut GameState,
         props: &Props
     ) -> Self {
         let world_state = WorldState::new();
-        let terrain = Terrain::new(device, queue, settings, &mut game_state.current_save, props);
+        let terrain = Terrain::new(device, queue, settings, props);
         Self {
             world_state,
             time: Time::new(),
@@ -46,7 +44,10 @@ impl World {
             buildings: Buildings::new(),
             zoning: Zoning::new(),
             events: CommandBuffer::new(),
-            city_state: CityState::new(),
+            city_state: CityState::new()
         }
+    }
+    pub fn recreate(&mut self, settings: &Settings, props: &Props) {
+        *self = World::new(&self.terrain.device.clone(), &self.terrain.queue.clone(), settings, props)
     }
 }

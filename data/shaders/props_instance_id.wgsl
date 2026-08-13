@@ -9,11 +9,12 @@ struct InstanceInput {
     @location(6) local_pos: vec3<f32>,
     @location(7) scale: f32,
 
-    @location(8) rotation: f32,
-    @location(9) seed: f32,
-    @location(10) wind_strength: f32,
+    @location(8) rotation_sin: f32,
+    @location(9) rotation_cos: f32,
+    @location(10) seed: f32,
+    @location(11) wind_strength: f32,
 
-    @location(11) color: vec4<f32>,
+    @location(12) color: vec4<f32>,
 };
 
 struct VSOut {
@@ -40,8 +41,8 @@ fn get_instance_position(instance: InstanceInput) -> vec3<f32> {
 
 
 fn transform_vertex(pos: vec3<f32>, instance: InstanceInput) -> vec3<f32> {
-    let c = cos(instance.rotation);
-    let s = sin(instance.rotation);
+    let c = instance.rotation_cos;
+    let s = instance.rotation_sin;
 
     let rotated = vec3<f32>(
         pos.x * c - pos.z * s,

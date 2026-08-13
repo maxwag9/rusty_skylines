@@ -121,7 +121,7 @@ macro_rules! define_commands {
                     }
                 ),*,
                 _ => {
-                    eprintln!("[Warning] Unknown UI command: {}", func_name);
+                    eprintln!("[Warning] Unknown UI command: '{}' in element: {}", func_name, element_ctx.self_element.as_ref().map(|s|s.id.clone()).unwrap_or("Unknown".to_string()));
                     None
                 }
             }
@@ -307,7 +307,20 @@ macro_rules! define_commands {
 
         Some(cmds)
     }};
+    // SPECIAL FIELD: raw String
+    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident,
+        $args:ident, $idx:ident,
+        $element_ctx:ident, $event_kind:ident, $buttons:ident,
+        $field:ident, String) => {{
 
+        let val = $args.get($idx)
+            .cloned()
+            .unwrap_or_default();
+
+        $idx += 1;
+
+        Some(val)
+    }};
     // GENERIC FIELD PARSER
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
         $element_ctx:ident, $event_kind:ident, $buttons:ident, $field:ident, $ftype:ty) => {{
@@ -416,8 +429,7 @@ define_commands! {
     "delete_layer" | "dellayer"
         => DeleteLayer { element_ctx: ElementContext, menu: String, layer: String, undoable: bool},
 
-    "save" | "savegame"
-        => SaveGame,
+    "save" | "savegame" => SaveGame { element_ctx: ElementContext, and_exit: String },
 
     "load" | "loadgame" | "load_save"
         => LoadSave { element_ctx: ElementContext, save_name: String, without_saving: bool  },
@@ -596,16 +608,13 @@ pub fn actions_to_uicommands(ctx: &mut CommandContext, event: &TouchEvent) -> Ve
     };
 
     let mut cmds = Vec::new();
-    let layer_actions = ctx
-        .ui
-        .menus
+    let layer_actions = ctx.ui.menus
         .get(element.menu.as_str())
         .and_then(|m| m.layers.iter().find(|l| l.name == element.layer))
         .map(|l| l.actions.clone())
         .unwrap_or_default();
 
-    for action in actions
-        .iter()
+    for action in actions.iter()
         .chain(ctx.ui.global_actions.element_actions.clone().iter())
         .chain(layer_actions.iter())
     {
@@ -722,77 +731,31 @@ fn process_inner_content(
     inner: &str,
     element_ctx: &ElementContext,
 ) -> Vec<UiCommand> {
-    let s = inner.trim();
+    for part in split_top_level(inner, b',') {
+        let cmds = handle_action_str(
+            settings,
+            ui,
+            event_kind,
+            buttons,
+            part,
+            element_ctx,
+        );
 
-    if s.is_empty() {
-        return vec![];
-    }
-
-    // Split by top-level commas and process each part
-    let bytes = s.as_bytes();
-    let len = s.len();
-    let mut part_start = 0;
-    let mut depth = 0isize;
-
-    for i in 0..len {
-        match bytes[i] {
-            b'(' => depth += 1,
-            b')' => depth -= 1,
-            b',' if depth == 0 => {
-                let last_part = s[part_start..i].trim();
-                if !last_part.is_empty() {
-                    // Try as nested event wrapper first
-                    let cmds = handle_action_str(
-                        settings,
-                        ui,
-                        event_kind,
-                        buttons,
-                        last_part,
-                        element_ctx,
-                    );
-                    if !cmds.is_empty() {
-                        return cmds;
-                    }
-                    // Try as primitive action
-                    let cmds = parse_primitive_action(
-                        settings,
-                        &mut ui.variables,
-                        &ui.menus,
-                        &ui.touch_manager,
-                        last_part,
-                        element_ctx,
-                        event_kind,
-                        buttons,
-                    );
-                    if !cmds.is_empty() {
-                        return cmds;
-                    }
-                }
-                part_start = i + 1;
-            }
-            _ => {}
-        }
-    }
-
-    // Handle last (or only) part
-    let last_part = s[part_start..].trim();
-    if !last_part.is_empty() {
-        // Try as nested event wrapper
-        let cmds = handle_action_str(settings, ui, event_kind, buttons, last_part, element_ctx);
         if !cmds.is_empty() {
             return cmds;
         }
-        // Try as primitive action
+
         let cmds = parse_primitive_action(
             settings,
-            &mut ui.variables,
+            &ui.variables,
             &ui.menus,
             &ui.touch_manager,
-            last_part,
+            part,
             element_ctx,
             event_kind,
             buttons,
         );
+
         if !cmds.is_empty() {
             return cmds;
         }
@@ -964,17 +927,22 @@ fn parse_arguments(args_str: &str) -> Vec<String> {
 }
 
 fn split_top_level_semicolons(s: &str) -> Vec<&str> {
+    split_top_level(s, b';')
+}
+fn split_top_level(s: &str, delimiter: u8) -> Vec<&str> {
     let bytes = s.as_bytes();
-    let len = s.len();
+
     let mut parts = Vec::new();
     let mut start = 0usize;
+
     let mut paren_depth = 0isize;
     let mut bracket_depth = 0isize;
     let mut brace_depth = 0isize;
+
     let mut in_string = false;
     let mut escape = false;
 
-    for i in 0..len {
+    for i in 0..bytes.len() {
         let b = bytes[i];
 
         if in_string {
@@ -982,34 +950,48 @@ fn split_top_level_semicolons(s: &str) -> Vec<&str> {
                 escape = false;
                 continue;
             }
+
             match b {
                 b'\\' => escape = true,
                 b'"' => in_string = false,
                 _ => {}
             }
+
             continue;
         }
 
         match b {
             b'"' => in_string = true,
+
             b'(' => paren_depth += 1,
             b')' => paren_depth -= 1,
+
             b'[' => bracket_depth += 1,
             b']' => bracket_depth -= 1,
+
             b'{' => brace_depth += 1,
             b'}' => brace_depth -= 1,
-            b';' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                let part = s[start..i].trim();
-                if !part.is_empty() {
-                    parts.push(part);
+
+            _ if b == delimiter
+                && paren_depth == 0
+                && bracket_depth == 0
+                && brace_depth == 0 =>
+                {
+                    let part = s[start..i].trim();
+
+                    if !part.is_empty() {
+                        parts.push(part);
+                    }
+
+                    start = i + 1;
                 }
-                start = i + 1;
-            }
+
             _ => {}
         }
     }
 
     let part = s[start..].trim();
+
     if !part.is_empty() {
         parts.push(part);
     }
@@ -1207,7 +1189,7 @@ fn parse_action_filters(
     action: &mut String,
 ) -> ActionFilters {
     let mut filters = ActionFilters::default();
-    let mut consumed = 0;
+    let mut consumed = 0usize;
 
     loop {
         let (rest, ws) = trim_leading_whitespace(&action[consumed..]);
@@ -1220,6 +1202,17 @@ fn parse_action_filters(
         if rest.starts_with(',') {
             consumed += 1;
             continue;
+        }
+
+        // Do not parse filters after entering a command/string.
+        // A filter token can only exist before the first command '('.
+        if let Some(paren) = rest.find('(') {
+            let before = &rest[..paren];
+
+            // "set(" / "if(" etc. means filters are finished.
+            if !before.contains(':') {
+                break;
+            }
         }
 
         let parsed = try_parse_button(rest, &mut filters)

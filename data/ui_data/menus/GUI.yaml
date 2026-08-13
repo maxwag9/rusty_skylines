@@ -6,7 +6,7 @@ layers:
       - !Rect
         id: GUI Upper Background
         actions:
-          - on:screen_resize, set(str:self.size.x, screen.x)
+          - on:screen_resize, set(str:self.size.x, var:screen.x)
         x: 960
         y: 1035
         w: 1920
@@ -40,7 +40,7 @@ layers:
       - !Rect
         id: GUI Background
         actions:
-          - on:screen_resize, set(str:self.size.x, screen.x)
+          - on:screen_resize, set(str:self.size.x, var:screen.x)
         x: 960
         y: 970
         w: 1920
@@ -74,7 +74,7 @@ layers:
       - !Advanced
         name: pause button
         ap_name: pause_button
-        ap_var: sim_running
+        ap_var: str:sim_running
         x: 40
         y: 1040
         scale: 1.0
@@ -93,7 +93,7 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: '{hour}:{minute}'
+        text: '{var:hour}:{var:minute}'
         anchor: TopLeft
       - !Text
         id: money_text
@@ -121,7 +121,7 @@ layers:
           - 0.005
           - 0.003
           - 1.0
-        text: 'World Population: {world_population}'
+        text: 'World Population: {var:world_population}'
         anchor: TopLeft
       - !Text
         id: non_educated_population_text
@@ -133,7 +133,7 @@ layers:
           - 1.0
           - 1.0
           - 0.9
-        text: 'Non Educated Population: {non_educated_population}'
+        text: 'Non Educated Population: {var:non_educated_population}'
       - !Text
         id: low_educated_population_text
         x: 0.9
@@ -144,7 +144,7 @@ layers:
           - 1.0
           - 1.0
           - 0.9
-        text: 'Low Educated Population: {low_educated_population}'
+        text: 'Low Educated Population: {var:low_educated_population}'
       - !Text
         id: medium_educated_population_text
         x: 0.9
@@ -155,7 +155,7 @@ layers:
           - 1.0
           - 1.0
           - 0.9
-        text: 'Medium Educated Population: {medium_educated_population}'
+        text: 'Medium Educated Population: {var:medium_educated_population}'
       - !Text
         id: highly_educated_population_text
         x: 0.9
@@ -166,7 +166,7 @@ layers:
           - 1.0
           - 1.0
           - 0.9
-        text: 'Highly Educated Population: {highly_educated_population}'
+        text: 'Highly Educated Population: {var:highly_educated_population}'
       - !Text
         id: housing_capacity_text
         x: 0.9
@@ -177,7 +177,7 @@ layers:
           - 1.0
           - 1.0
           - 0.9
-        text: 'Housing Capacity: {housing_capacity}'
+        text: 'Housing Capacity: {var:housing_capacity}'
       - !Text
         id: commercial_capacity_text
         x: 0.9
@@ -188,7 +188,7 @@ layers:
           - 1.0
           - 1.0
           - 0.9
-        text: 'Commercial Capacity: {commercial_capacity}'
+        text: 'Commercial Capacity: {var:commercial_capacity}'
       - !Text
         id: industrial_capacity_text
         x: 0.9
@@ -199,7 +199,7 @@ layers:
           - 1.0
           - 1.0
           - 0.9
-        text: 'Industrial Capacity: {industrial_capacity}'
+        text: 'Industrial Capacity: {var:industrial_capacity}'
       - !Text
         id: office_capacity_text
         x: 0.9
@@ -210,7 +210,7 @@ layers:
           - 1.0
           - 1.0
           - 0.9
-        text: 'Office Capacity: {office_capacity}'
+        text: 'Office Capacity: {var:office_capacity}'
       - !Text
         id: prestige_text
         x: 0.9
@@ -221,7 +221,7 @@ layers:
           - 1.0
           - 1.0
           - 0.9
-        text: 'Prestige: {prestige}'
+        text: 'Prestige: {var:prestige}'
       - !Text
         id: residential_attractiveness_text
         x: 0.9
@@ -232,7 +232,7 @@ layers:
           - 1.0
           - 1.0
           - 0.9
-        text: 'Residential Attractiveness: {residential_attractiveness}'
+        text: 'Residential Attractiveness: {var:residential_attractiveness}'
       - !Text
         id: commercial_attractiveness_text
         x: 0.9
@@ -243,7 +243,7 @@ layers:
           - 1.0
           - 1.0
           - 0.9
-        text: 'Commercial Attractiveness: {commercial_attractiveness}'
+        text: 'Commercial Attractiveness: {var:commercial_attractiveness}'
       - !Text
         id: industrial_attractiveness_text
         x: 0.9
@@ -254,22 +254,22 @@ layers:
           - 1.0
           - 1.0
           - 0.9
-        text: 'Industrial Attractiveness: {industrial_attractiveness}'
+        text: 'Industrial Attractiveness: {var:industrial_attractiveness}'
       - !Text
         id: office_attractiveness_text
-        x: 0.9
-        y: 0.74
+        x: 1750
+        y: 900
         pt: 10.0
         color:
           - 1.0
           - 1.0
           - 1.0
           - 0.9
-        text: 'Office Attractiveness: {office_attractiveness}'
+        text: 'Office Attractiveness: {var:office_attractiveness}'
       - !Advanced
         name: residential_demand_indicator
         ap_name: zoning_demand_indicator
-        ap_var: residential_demand
+        ap_var: str:residential_demand
         x: 800
         y: 1040
         scale: 1.0
@@ -281,7 +281,7 @@ layers:
       - !Advanced
         name: commercial_demand_indicator
         ap_name: zoning_demand_indicator
-        ap_var: commercial_demand
+        ap_var: str:commercial_demand
         x: 840
         y: 1040
         scale: 1.0
@@ -293,7 +293,8 @@ layers:
       - !Advanced
         name: industrial_demand_indicator
         ap_name: zoning_demand_indicator
-        ap_var: industrial_demand
+        ap_var:
+          - str:industrial_demand
         x: 880
         y: 1040
         scale: 1.0
@@ -305,7 +306,7 @@ layers:
       - !Advanced
         name: office_demand_indicator
         ap_name: zoning_demand_indicator
-        ap_var: office_demand
+        ap_var: str:office_demand
         x: 920
         y: 1040
         scale: 1.0
@@ -314,229 +315,85 @@ layers:
           touchable: false
           editable: true
         editing_tool: false
-      - !Rect
-        id: set_none_zone
-        actions:
-          - on:r set(str:new_zone_type, none)
-          - on:r set(str:cursor_mode, Zoning)
-          - show_interaction([0.72, 0.72, 0.72, 1.0], true)
+      - !Advanced
+        name: set_none_zone
+        ap_name: set_zoning_type
+        ap_var:
+          - "str:None"
+          - "[0.72, 0.72, 0.72, 1.0]"
         x: 600
         y: 1040
-        w: 30
-        h: 30
-        rotation: 0.0
-        color:
-          - 0.72
-          - 0.72
-          - 0.65
-          - 0.99
-        border_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        texture: null
-        roundness: 0.0
-        border_thickness_percentage: 0.003
-        fade: 0.0
-        blur: 0.0
-        glow_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 0.0
-        glow_misc: { }
+        scale: 1.0
         misc:
           active: true
           touchable: true
           editable: true
-      - !Rect
-        id: set_residential_zone
-        actions:
-          - on:r set(str:new_zone_type, residential)
-          - on:r set(str:cursor_mode, Zoning)
-          - show_interaction([0.005, 0.72, 0.1, 1.0], true)
+        editing_tool: false
+      - !Advanced
+        name: set_residential_zone
+        ap_name: set_zoning_type
+        ap_var:
+          - "Residential"
+          - "[0.005, 0.72, 0.1, 1.0]"
         x: 640
         y: 1040
-        w: 30
-        h: 30
-        rotation: 0.0
-        color:
-          - 0.005
-          - 0.72
-          - 0.1
-          - 0.99
-        border_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        texture: null
-        roundness: 0.0
-        border_thickness_percentage: 0.0
-        fade: 0.0
-        blur: 0.0
-        glow_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 0.0
-        glow_misc: { }
+        scale: 1.0
         misc:
           active: true
           touchable: true
           editable: true
-      - !Rect
-        id: set_commercial_zone
-        actions:
-          - on:r set(str:new_zone_type, commercial)
-          - on:r set(str:cursor_mode, Zoning)
-          - show_interaction([0.005, 0.1, 0.72, 1.0], true)
+        editing_tool: false
+      - !Advanced
+        name: set_commercial_zone
+        ap_name: set_zoning_type
+        ap_var:
+          - "Commercial"
+          - "[0.005, 0.1, 0.72, 1.0]"
         x: 680
         y: 1040
-        w: 30
-        h: 30
-        rotation: 0.0
-        color:
-          - 0.005
-          - 0.1
-          - 0.72
-          - 0.99
-        border_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        texture: null
-        roundness: 0.0
-        border_thickness_percentage: 0.0
-        fade: 0.0
-        blur: 0.0
-        glow_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 0.0
-        glow_misc: { }
+        scale: 1.0
         misc:
           active: true
           touchable: true
           editable: true
-      - !Rect
-        id: set_industrial_zone
-        actions:
-          - on:r set(str:new_zone_type, industrial)
-          - on:r set(str:cursor_mode, Zoning)
-          - show_interaction([0.72, 0.72, 0.1, 1.0], true)
+        editing_tool: false
+      - !Advanced
+        name: set_industrial_zone
+        ap_name: set_zoning_type
+        ap_var:
+          - "Industrial"
+          - "[0.72, 0.72, 0.1, 1.0]"
         x: 720
         y: 1040
-        w: 30
-        h: 30
-        rotation: 0.0
-        color:
-          - 0.72
-          - 0.72
-          - 0.1
-          - 0.99
-        border_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        texture: null
-        roundness: 0.0
-        border_thickness_percentage: 0.0
-        fade: 0.0
-        blur: 0.0
-        glow_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 0.0
-        glow_misc: { }
+        scale: 1.0
         misc:
           active: true
           touchable: true
           editable: true
-      - !Rect
-        id: set_office_zone
-        actions:
-          - on:r set(str:new_zone_type, office)
-          - on:r set(str:cursor_mode, Zoning)
-          - show_interaction([0.72, 0.1, 0.72, 1.0], true)
+        editing_tool: false
+      - !Advanced
+        name: set_office_zone
+        ap_name: set_zoning_type
+        ap_var:
+          - "Office"
+          - "[0.72, 0.1, 0.72, 1.0]"
         x: 760
         y: 1040
-        w: 30
-        h: 30
-        rotation: 0.0
-        color:
-          - 0.72
-          - 0.1
-          - 0.72
-          - 0.99
-        border_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        texture: null
-        roundness: 0.0
-        border_thickness_percentage: 0.0
-        fade: 0.0
-        blur: 0.0
-        glow_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 0.0
-        glow_misc: { }
+        scale: 1.0
         misc:
           active: true
           touchable: true
           editable: true
-      - !Rect
-        id: set_pos_0
-        actions:
-          - on:r, set(str:target_pos.y, 0.0)
-        x: 0.10796875
-        y: 0.96428573
-        w: 0.02
-        h: 0.02
-        rotation: 0.0
-        color:
-          - 0.72
-          - 0.72
-          - 0.65
-          - 0.99
-        border_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        texture: null
-        roundness: 0.0
-        border_thickness_percentage: 0.0
-        fade: 0.0
-        blur: 0.0
-        glow_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 0.0
-        glow_misc: { }
-        misc:
-          active: false
-          touchable: true
-          editable: true
+        editing_tool: false
       - !Rect
         id: set_cursor_to_destruction
         actions:
-          - on:r set(str:cursor_mode, Destruction)
+          - on:r set(str:cursor_mode, str:Destruction)
           - show_interaction([0.72, 0.72, 0.72, 1.0], true)
-        x: 0.65796876
-        y: 0.96428573
-        w: 0.02
-        h: 0.02
+        x: 1560
+        y: 1040
+        w: 30
+        h: 30
         rotation: 0.0
         color:
           - 0.72
@@ -569,12 +426,12 @@ layers:
       - !Rect
         id: set_cursor_to_road
         actions:
-          - on:r set(str:cursor_mode, Roads)
+          - on:r set(str:cursor_mode, str:Roads)
           - show_interaction([0.72, 0.72, 0.72, 1.0], true)
-        x: 0.095
-        y: 0.96428573
-        w: 0.02
-        h: 0.02
+        x: 200
+        y: 1040
+        w: 35
+        h: 35
         rotation: 0.0
         color:
           - 0.02
@@ -606,10 +463,10 @@ layers:
         actions:
           - on:r inc(str:lanes, 1)
           - show_interaction([0.72, 0.72, 0.72, 1.0], true)
-        x: 0.11999999
-        y: 0.96428573
-        w: 0.014999999
-        h: 0.02
+        x: 250
+        y: 960
+        w: 30
+        h: 30
         rotation: 0.0
         color:
           - 0.42
@@ -641,10 +498,10 @@ layers:
         actions:
           - on:r dec(str:lanes, 1)
           - show_interaction([0.72, 0.72, 0.72, 1.0], true)
-        x: 0.07
-        y: 0.96428573
-        w: 0.014999999
-        h: 0.02
+        x: 150
+        y: 1040
+        w: 30
+        h: 30
         rotation: 0.0
         color:
           - 0.82
@@ -680,7 +537,9 @@ layers:
           - "0.0"
           - "1.0"
           - "0.05"
-          - "[]"
+          - "none:None"
+          - "none:None"
+          - "false"
         x: 1600
         y: 800
         scale: 1.5

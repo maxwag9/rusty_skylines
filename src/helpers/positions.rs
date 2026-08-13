@@ -1,5 +1,5 @@
 #![allow(dead_code, unused_variables)]
-use crate::world::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
+use crate::world::roads::road_mesh_manager::{chunk_coord_to_id, ChunkId};
 use glam::{Vec2, Vec3};
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
@@ -34,7 +34,7 @@ pub struct LocalPos {
     pub z: f32,
 }
 #[revisioned(revision = 1)]
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Hash)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WorldPos {
     pub chunk: ChunkCoord,
     pub local: LocalPos,
@@ -878,6 +878,62 @@ impl WorldPos {
 
         result
     }
+
+    /// Returns whether `point` lies inside the polygon on the XZ plane.
+    ///
+    /// The polygon may be either open or explicitly closed. An open polygon is
+    /// implicitly closed by connecting the last vertex back to the first.
+    ///
+    /// Points lying exactly on the polygon boundary are considered inside.
+    pub fn in_polygon(self, polygon: &[WorldPos]) -> bool {
+        if polygon.len() < 3 {
+            return false;
+        }
+
+        let origin = polygon[0];
+
+        // Work entirely in the local coordinate system of the first polygon point
+        // to preserve precision for large world coordinates.
+        let px = origin.dx(self);
+        let pz = origin.dz(self);
+
+        let mut inside = false;
+
+        for i in 0..polygon.len() {
+            let a = polygon[i];
+            let b = polygon[(i + 1) % polygon.len()];
+
+            let ax = origin.dx(a);
+            let az = origin.dz(a);
+            let bx = origin.dx(b);
+            let bz = origin.dz(b);
+
+            // Check whether the point lies exactly on this edge.
+            let cross = (px - ax) * (bz - az) - (pz - az) * (bx - ax);
+
+            if cross.abs() < 1e-10 {
+                let min_x = ax.min(bx);
+                let max_x = ax.max(bx);
+                let min_z = az.min(bz);
+                let max_z = az.max(bz);
+
+                if px >= min_x && px <= max_x && pz >= min_z && pz <= max_z {
+                    return true;
+                }
+            }
+
+            // Ray casting: cast a ray in +X and count edge crossings.
+            if (az > pz) != (bz > pz) {
+                let intersection_x = ax + (pz - az) * (bx - ax) / (bz - az);
+
+                if px < intersection_x {
+                    inside = !inside;
+                }
+            }
+        }
+
+        inside
+    }
 }
 impl Default for WorldPos {
     fn default() -> Self {
@@ -908,3 +964,4 @@ impl Hash for LocalPos {
         self.z.to_bits().hash(state);
     }
 }
+impl Eq for LocalPos {}

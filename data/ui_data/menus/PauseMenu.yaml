@@ -1,4 +1,4 @@
-name: MainMenu
+name: PauseMenu
 layers:
   - name: main_menu_buttons
     order: 2
@@ -68,12 +68,12 @@ layers:
           touchable: true
           editable: true
       - !Advanced
-        name: play_button
+        name: back_to_the_game_button
         ap_name: button
         ap_vars:
-          - "str:str:Play"
+          - "str:str:Back to the Game"
           - "40"
-          - "str:on:r set(str:show_world, true); set(str:editor_mode, false); set(str:override_mode, false); call(open_save_menus);"
+          - "str:on:r, call(back_to_the_game)"
         x: 960
         y: 330
         scale: 1.0

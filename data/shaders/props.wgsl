@@ -25,11 +25,12 @@ struct InstanceInput {
     @location(6) local_pos: vec3<f32>,
     @location(7) scale: f32,
 
-    @location(8) rotation: f32,
-    @location(9) seed: f32,
-    @location(10) wind_strength: f32,
+    @location(8) rotation_sin: f32,
+    @location(9) rotation_cos: f32,
+    @location(10) seed: f32,
+    @location(11) wind_strength: f32,
 
-    @location(11) color: vec4<f32>,
+    @location(12) color: vec4<f32>,
 };
 
 struct VertexOutput {
@@ -77,8 +78,8 @@ fn vs_main(
     local_pos.x += wind_offset;
     local_pos.z += wind_offset * 0.5;
 
-    let c = cos(instance.rotation);
-    let s = sin(instance.rotation);
+    let c = instance.rotation_cos;
+    let s = instance.rotation_sin;
 
     let rotated = vec3<f32>(
         local_pos.x * c - local_pos.z * s,

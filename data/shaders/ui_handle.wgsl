@@ -1,4 +1,4 @@
-// === ui_handle_sdf.wgsl ===
+    // === ui_handle_sdf.wgsl ===
 
 struct ScreenUniform {
     size: vec2<f32>,
@@ -22,6 +22,8 @@ struct HandleParams {
     sub_handle_color: vec4<f32>,
     sub_handle_misc: vec4<f32>,   // (len_ratio_circumf, width_ratio_radius, roundness, _)
     misc: vec4<f32>,
+    depth: f32,
+    _pad0: vec3<f32>
 };
 @group(1) @binding(0)
 var<storage, read> handles: array<HandleParams>;
@@ -78,7 +80,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let x = (world.x / screen.size.x) * 2.0 - 1.0;
     let y = 1.0 - (world.y / screen.size.y) * 2.0;
 
-    out.pos = vec4<f32>(x, y, 0.0, 1.0);
+    out.pos = vec4<f32>(x, y, h.depth, 1.0);
     out.local_pos = world; // pass world pixel coords to FS
     out.handle_index = in.instance;
     return out;

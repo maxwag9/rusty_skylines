@@ -30,7 +30,8 @@ struct RectGpu {
     glow_misc: vec4<f32>,
     misc: vec4<f32>, // active, touched_time, is_down, hash
     blur: f32,
-    //_pad0: vec3<f32>
+    depth: f32,
+    _pad0: vec2<f32>,
 };
 
 fn hash(p: vec2<f32>) -> f32 {
@@ -87,7 +88,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let x = (world.x / screen.size.x) * 2.0 - 1.0;
     let y = 1.0 - (world.y / screen.size.y) * 2.0;
 
-    out.pos = vec4<f32>(x, y, 0.0, 1.0);
+    out.pos = vec4<f32>(x, y, p.depth, 1.0);
     out.world_pos = world;
     out.local_pos = local;
     out.rect_index = in.instance;

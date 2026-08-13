@@ -34,7 +34,7 @@ pub fn run_inputs(resources: &mut Resources) {
     let right = forward.cross(Vec3::Y).normalize();
     let up = Vec3::Y;
 
-    let zooming = input.gameplay_down("Zoom");
+    let zooming = input.action_down("Zoom");
 
     if zooming {
         cam_ctrl.zoom(
@@ -62,22 +62,22 @@ pub fn run_inputs(resources: &mut Resources) {
         && !resources.settings.drive_car
         && !resources.ui.touch_manager.hovered().is_some()
     {
-        if input.gameplay_down("Fly Camera Forward") {
+        if input.action_down("Fly Camera Forward") {
             wish += forward;
         }
-        if input.gameplay_down("Fly Camera Backward") {
+        if input.action_down("Fly Camera Backward") {
             wish -= forward;
         }
-        if input.gameplay_down("Fly Camera Left") {
+        if input.action_down("Fly Camera Left") {
             wish -= right;
         }
-        if input.gameplay_down("Fly Camera Right") {
+        if input.action_down("Fly Camera Right") {
             wish += right;
         }
-        if input.gameplay_down("Fly Camera Up") {
+        if input.action_down("Fly Camera Up") {
             wish += up;
         }
-        if input.gameplay_down("Fly Camera Down") {
+        if input.action_down("Fly Camera Down") {
             wish -= up;
         }
 

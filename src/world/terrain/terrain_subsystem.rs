@@ -5,13 +5,14 @@ use crate::helpers::positions::*;
 use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
+use crate::renderer::props::Props;
 use crate::resources::Time;
 use crate::simulation::Ticker;
 use crate::ui::input::Input;
+use crate::ui::variables::Variables;
 use crate::ui::vertex::Vertex;
 use crate::world::buildings::zoning::ZoningType;
 use crate::world::camera::Camera;
-use crate::world::game_state::SaveState;
 use crate::world::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
 use crate::world::roads::road_structs::RoadType;
 use crate::world::roads::road_subsystem::Roads;
@@ -28,8 +29,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
-use crate::renderer::props::Props;
-use crate::ui::variables::Variables;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChunkCoords {
@@ -168,7 +167,8 @@ impl TerrainJobs {
         let mut far_jobs_sent = 0usize;
 
         let tree_spawning_params = TreeSpawningParams {
-            forest_cluster_strength: variables.get_f64("forest_cluster_strength").unwrap_or(1.0) as f32
+            forest_cluster_strength: variables.get_f64("forest_cluster_strength").unwrap_or(1.0) as f32,
+            dense_forests: variables.get_bool("dense_forests").unwrap_or(false)
         };
 
         for v in visible.iter() {
@@ -402,8 +402,8 @@ pub struct Terrain {
     last_visible: Vec<VisibleChunk>,
 
     pub pending_results: VecDeque<CpuChunkMesh>,
-    device: Device,
-    queue: Queue,
+    pub device: Device,
+    pub queue: Queue
 }
 const VERTEX_SIZE_BYTES: usize = size_of::<Vertex>();
 impl Terrain {
@@ -411,7 +411,6 @@ impl Terrain {
         device: &Device,
         queue: &Queue,
         settings: &Settings,
-        save_state: &mut SaveState,
         props: &Props
     ) -> Self {
         let cs = chunk_size() as f32;
@@ -697,7 +696,7 @@ impl Terrain {
 
             insert_ms += t0.elapsed().as_secs_f32() * 1000.0;
 
-            props.replace_generated_instances(coord, cpu.tree_placements);
+            props.replace_generated_instances(coord, cpu.tree_placements, cpu.archetypes);
         }
 
         self.frame_timings.drain_recv_ms = recv_ms;

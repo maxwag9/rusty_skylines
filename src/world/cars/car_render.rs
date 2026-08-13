@@ -11,16 +11,15 @@ use rayon::iter::ParallelIterator;
 use crate::data::Settings;
 use crate::ui::variables::Variables;
 use crate::world::buildings::buildings::Buildings;
-use crate::world::buildings::zoning::{DistrictId, LotLayout, ParkingSpot, ZoningStorage};
+use crate::world::buildings::zoning::{DistrictId, ZoningStorage};
 use crate::world::cars::car_simulation::CarTrajectory;
 use crate::world::cars::parking::ParkingStorage;
-use crate::world::cars::partitions::PartitionId;
+use crate::world::cars::partitions::{PartitionId};
 use crate::world::cars::signfinding::*;
 use crate::world::roads::road_structs::SegmentId;
-use crate::world::roads::roads::{LaneRef, RoadStorage, Segment};
+use crate::world::roads::roads::{LaneRef, RoadStorage};
 use bytemuck::{Pod, Zeroable};
 use glam::{Quat, Vec3};
-use rand::RngExt;
 use rand::rngs::ThreadRng;
 use rayon::iter::IntoParallelRefIterator;
 use tracing::error;
@@ -117,7 +116,9 @@ pub enum CarChange {
         segment_id: SegmentId,
     },
     CarMode(CarMode),
+    Despawn,
 }
+
 
 fn interpolate_car(
     time: &Time,
@@ -133,6 +134,7 @@ fn interpolate_car(
     const INTERP_BACKTIME: f64 = 0.0;
     const MAX_EXTRAP: f64 = 0.60;
 
+    let rng = &mut ThreadRng::default();
     let mut changes = Vec::new();
     let Some(car) = storage.get(car_id) else {
         return changes;
@@ -143,46 +145,43 @@ fn interpolate_car(
     let traj = match &car.physical_trajectory {
         Some(t) => Some(t),
         None => {
-            let (signfinding, physical, cb) = match make_new_trajectory(
+            let (signfinding, physical, mut callback) = match make_new_trajectory(
                 time,
                 car,
                 storage,
                 road_storage,
                 buildings,
                 zoning,
-                sf_options,
+                parking_storage,
+                sf_options
             ) {
                 Ok(ok) => ok,
                 Err(e) => match e {
-                    MakeNewTrajectoryError::Parked => {
-                        let callback = RoadPathCallback {
+                    MakeNewTrajectoryError::CarModeIsParked
+                    | MakeNewTrajectoryError::ParkingDone => {
+                        let callback = TrajectoryCallback {
                             is_last_turn: false,
                             car_changes: vec![
                                 CarChange::CarMode(CarMode::Parked),
                                 CarChange::LastTurn(None),
                             ],
                         };
-                        (None, None, Some(callback))
+                        (None, None, callback)
                     }
-                    MakeNewTrajectoryError::ParkingDone => {
-                        let callback = RoadPathCallback {
-                            is_last_turn: false,
-                            car_changes: vec![
-                                CarChange::CarMode(CarMode::Parked),
-                                CarChange::LastTurn(None),
-                            ],
-                        };
-                        (None, None, Some(callback))
+
+                    MakeNewTrajectoryError::ParkingPath(ParkingPathError::DespawnTheCar) => {
+                        changes.push(CarChange::Despawn);
+                        (None, None, TrajectoryCallback::default())
                     }
                     _ => {
                         error!("Make new trajectory failed for car_id {}: {:?}", car_id, e);
-                        (None, None, None)
+                        (None, None, TrajectoryCallback::default())
                     }
                 },
             };
-            if let Some(mut cb) = cb {
-                changes.append(&mut cb.car_changes);
-            }
+
+            changes.append(&mut callback.car_changes);
+
 
             if let Some(s) = signfinding {
                 changes.push(CarChange::SignfindingTrajectory(Some(s)));
@@ -196,7 +195,7 @@ fn interpolate_car(
     let Some(traj) = traj else {
         return changes;
     }; // Don't interpolate parked cars
-    println!("Car traj points: {}", traj.points.len());
+    //println!("Car traj points: {}", traj.points.len());
     if traj.points.len() < 2 {
         return changes;
     }
@@ -254,72 +253,101 @@ fn interpolate_car(
             //changes.push(CarChange::LastTurn(None));
         }
 
-        const PARKING_DISTANCE_TO_BUILDING: f64 = 50.0 * 50.0;
+        // const PARKING_DISTANCE_TO_DRIVEWAY: f64 = 10.0 * 10.0;
+        // let gizmo = &mut Gizmo::new_empty();
+        // let mut parked = false;
+        // let mut path = None;
+        // if let Some((drive_way_entrance, parking_spot_id, building_id)) = car.destination.as_ref().map(|d|d.as_parking_spot()).flatten() {
+        //     if let Some(parking_spot) = parking_storage.get(parking_spot_id) {
+        //         if let Some(building) = buildings.storage.get(building_id) {
+        //             if let Some(lot) = zoning.get_lot(building.lot_id) {
+        //                 let p = make_path_to_parking_spot(road_storage, zoning, &parking_spot, car, sf_options, gizmo);
+        //                 match p {
+        //                     Ok(p) => {
+        //                         path = Some(p);
+        //                     }
+        //                     Err(e) => {
+        //                         error!("Parking error for Car {}: {:?}", car.id, e);
+        //                         match e {
+        //                             ParkingPathError::PathAlreadyAtDestination => {
+        //                                 if let Some(partition_id) =
+        //                                     buildings.storage.get_partition_of_building(building.id)
+        //                                 {
+        //                                     changes.push(CarChange::ReachedDestination {
+        //                                         district_id: lot.district_id,
+        //                                         partition_id,
+        //                                         segment_id: building.segment_id,
+        //                                     })
+        //                                 }
+        //                                 changes.push(CarChange::CarMode(CarMode::Parked));
+        //                                 parked = true;
+        //                             }
+        //                             _ => {}
+        //                         }
+        //                     }
+        //                 };
+        //             }
+        //         } // Horrible
+        //     }
+        // }
+        // if let Some(building) = buildings.storage.get(car.destination.as_ref().and_then(|d| d.as_building_id())) {
+        //     if let Some(lot) = zoning.get_lot(building.lot_id) {
+        //         if let Some(driveway_entrances) = lot.layout.as_ref().map(|l|l.driveway_entrances.as_slice()) {
+        //             let driveway_entrance = driveway_entrances[rng.random_range(0..driveway_entrances.len())];
+        //             if driveway_entrance.pos.distance_squared(world_pos) < PARKING_DISTANCE_TO_DRIVEWAY {
+        //                 // if let Some(car_segment_id) = last.lane_ref.and_then(|l|l.as_lane()).and_then(|(lane_id, _)| road_storage.segment_of_lane(lane_id)) {
+        //                 //     if lot.segment_id == car_segment_id {
+        //                 //     }
+        //                 // }
+        //
+        //
+        //                 let car_segment = last.lane_ref
+        //                     .and_then(|l| l.as_lane())
+        //                     .map(|(lane_id, _)| road_storage.segment_of_lane(lane_id))
+        //                     .map(|seg_id| road_storage.segment(seg_id));
+        //                 //let parking_spot = get_parking_spots(parking_storage, lot.layout.as_ref(), car_segment);
+        //
+        //                 if let Some(parking_spot) = None::<ParkingSpot> {
+        //                     changes.push(CarChange::Destination(Destination::ParkingSpot(driveway_entrance, parking_spot.id, building.id)));
+        //                     let p = make_path_to_parking_spot(road_storage, zoning, &parking_spot, car, sf_options, gizmo);
+        //                     match p {
+        //                         Ok(p) => {
+        //                             path = Some(p);
+        //                         }
+        //                         Err(e) => {
+        //                             error!("Parking error for Car {}: {:?}", car.id, e);
+        //                             match e {
+        //                                 ParkingPathError::PathAlreadyAtDestination => {
+        //                                     if let Some(partition_id) =
+        //                                         buildings.storage.get_partition_of_building(building.id)
+        //                                     {
+        //                                         changes.push(CarChange::ReachedDestination {
+        //                                             district_id: lot.district_id,
+        //                                             partition_id,
+        //                                             segment_id: building.segment_id,
+        //                                         })
+        //                                     }
+        //                                     changes.push(CarChange::CarMode(CarMode::Parked));
+        //                                     parked = true;
+        //                                 }
+        //                                 _ => {}
+        //                             }
+        //                         }
+        //                     };
+        //                 };
+        //
+        //
+        //             }
+        //         }
+        //
+        //     }
+        // }
 
-        if let Some(building) = buildings.storage.get(
-            car.destination_addr
-                .as_ref()
-                .and_then(|a| a.destination.as_building_id()),
-        ) {
-            if let Some(lot) = zoning.get_lot(building.lot_id) {
-                if lot.entrance.pos.distance_squared(world_pos) < PARKING_DISTANCE_TO_BUILDING {
-                    // if let Some(car_segment_id) = last.lane_ref.and_then(|l|l.as_lane()).and_then(|(lane_id, _)| road_storage.segment_of_lane(lane_id)) {
-                    //     if lot.segment_id == car_segment_id {
-                    //     }
-                    // }
-                    let mut path = None;
-                    let car_segment = last
-                        .lane_ref
-                        .and_then(|l| l.as_lane())
-                        .and_then(|(lane_id, _)| road_storage.segment_of_lane(lane_id))
-                        .and_then(|seg_id| road_storage.segment_safe(seg_id));
-                    let parking_spot =
-                        get_parking_spots(parking_storage, lot.layout.as_ref(), car_segment);
-                    let mut parked = false;
-                    if let Some(parking_spot) = parking_spot {
-                        let p = make_path_to_parking_spot(road_storage, zoning, &parking_spot, car);
-                        match p {
-                            Ok(p) => {
-                                path = Some(p);
-                            }
-                            Err(e) => {
-                                error!("Parking error for Car {}: {:?}", car.id, e);
-                                match e {
-                                    ParkingPathError::ParkingSpotReached => {
-                                        if let Some(partition_id) =
-                                            buildings.storage.get_partition_of_building(building.id)
-                                        {
-                                            changes.push(CarChange::ReachedDestination {
-                                                district_id: lot.district_id,
-                                                partition_id,
-                                                segment_id: building.segment_id,
-                                            })
-                                        }
-                                        changes.push(CarChange::CarMode(CarMode::Parked));
-                                        parked = true;
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        };
-                    };
-
-                    if !parked {
-                        if let Some(path) = path {
-                            changes.push(CarChange::CarMode(CarMode::Parking { path }))
-                        } else {
-                            changes.push(CarChange::CarMode(CarMode::Driving));
-                        }
-                    }
-                }
-            }
-        }
-
+        //push_gizmo_renders(take(&mut gizmo.pending_renders));
         return changes;
     }
 
-    let idx = traj
-        .points
+    let idx = traj.points
         .binary_search_by(|p| {
             p.time
                 .partial_cmp(&now)
@@ -441,47 +469,7 @@ fn interpolate_car(
     changes
 }
 
-fn get_parking_spots(
-    parking_storage: &ParkingStorage,
-    lot_layout: Option<&LotLayout>,
-    segment: Option<&Segment>,
-) -> Option<ParkingSpot> {
-    // 2 Parking spot possibilities:
-    // Inside a lot
-    // Beside the curb
-    //
-    // I guess a building needs to define parking spaces?
-    // Yes all Parking Spots will be tracked in ParkingStorage
 
-    let mut spot: Option<ParkingSpot>;
-    let rng = &mut ThreadRng::default();
-    let parking_spot_id = lot_layout
-        .map(|layout| {
-            layout
-                .unoccupied_parking_spots
-                .get(rng.random_range(0..layout.unoccupied_parking_spots.len()))
-        })
-        .flatten()
-        .cloned();
-    if let Some(spot) = parking_storage.get(parking_spot_id).cloned() {
-        return Some(spot);
-    }
-
-    let parking_spot_id = segment.map(|s| s.parking_spots.iter());
-
-    //spot
-    None
-
-    // match car.current_lane.and_then(|l|l.as_lane()) {
-    //     Some((lane_id, poly_idx)) => {
-    //         let Some(segment) = road_storage.lane_safe(lane_id).and_then(|l|road_storage.segment_safe(l.segment())) else { return Err(ParkingPathError::DespawnTheCar) };
-    //
-    //
-    //         Ok(Path)
-    //     }
-    //     None => {return Err(ParkingPathError::DespawnTheCar)}
-    // }
-}
 
 fn apply_car_changes(
     terrain: &Terrain,
@@ -492,6 +480,7 @@ fn apply_car_changes(
     delta: Vec<CarChange>,
 ) {
     let mut lane_change = None;
+    let mut despawn_car = false;
     {
         let Some(car) = car_storage.get_mut(car_id) else {
             return;
@@ -576,8 +565,8 @@ fn apply_car_changes(
                             .unwrap_or(trip.start_time);
                         for section in trip.sections.iter() {
                             let Some(arm) = road_storage
-                                .node_mut_safe(section.node_id)
-                                .and_then(|node| node.arm_for_segment_mut(section.segment_id))
+                                .node_mut(section.node_id)
+                                .arm_for_segment_mut(section.segment_id)
                             else {
                                 continue;
                             };
@@ -595,12 +584,18 @@ fn apply_car_changes(
                 CarChange::CarMode(car_mode) => {
                     car.mode = car_mode;
                 }
+                CarChange::Despawn => {
+                    despawn_car = true;
+                }
             }
         }
         conform_car_to_terrain(car, terrain, time.render_dt);
     }
     if let Some(lane_ref) = lane_change {
         car_storage.set_car_lane(car_id, lane_ref, road_storage);
+    }
+    if despawn_car {
+        car_storage.despawn(car_id);
     }
 }
 

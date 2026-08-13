@@ -220,7 +220,7 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: 'Mouse Position: {{mouse_pos.x}:.0}, {{mouse_pos.y}:.0}'
+        text: 'Mouse Position: {{mouse.x}:.0}, {{mouse.y}:.0}'
       - !Text
         id: any_text.being_hovered_text
         x: 0.0574

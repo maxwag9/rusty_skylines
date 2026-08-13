@@ -415,12 +415,11 @@ impl Gizmo {
             let mut positions: Vec<WorldPos> = Vec::new();
 
             for &node_id in node_ids {
-                if let Some(node) = road_storage.node(node_id) {
-                    let pos = node.pos();
-                    positions.push(pos);
-                    self.circle(pos, 4.0, color, thickness, duration);
-                    self.cross(pos, 2.0, secondary_color, thickness, duration);
-                }
+                let node = road_storage.node(node_id);
+                let pos = node.pos();
+                positions.push(pos);
+                self.circle(pos, 4.0, color, thickness, duration);
+                self.cross(pos, 2.0, secondary_color, thickness, duration);
             }
 
             if positions.is_empty() {
@@ -524,8 +523,8 @@ impl Gizmo {
             return;
         }
 
-        if let Some(address) = &car.destination_addr {
-            if let Some(building) = buildings.storage.get(address.destination.as_building_id()) {
+        if let Some(destination) = car.mode.destination() {
+            if let Some(building) = buildings.storage.get(destination.as_building_id()) {
                 if let Some(lot) = zoning.zoning_storage.get_lot(building.lot_id) {
                     let pos = car.pos.add_vec3(Vec3::new(0.0, 5.0, 0.0));
                     self.text(
@@ -586,20 +585,12 @@ impl Gizmo {
                     possible_lanes,
                 } => {
                     for &lane_id in possible_lanes {
-                        let Some(lane) = road_storage.lane_safe(lane_id) else {
-                            continue;
-                        };
+                        let lane = road_storage.lane(lane_id);
                         self.polyline(lane.polyline(), color, 5.0, false, thickness, 0.0);
                     }
-                    let Some(segment) = road_storage.segment_safe(*segment_id) else {
-                        continue;
-                    };
-                    let Some(from_pos) = road_storage.node(segment.start()).map(|p| p.pos()) else {
-                        continue;
-                    };
-                    let Some(to_pos) = road_storage.node(segment.start()).map(|p| p.pos()) else {
-                        continue;
-                    };
+                    let segment = road_storage.segment(*segment_id);
+                    let from_pos = road_storage.node(segment.start()).pos();
+                    let to_pos = road_storage.node(segment.start()).pos();
                     // Midpoint label, lifted a bit so it reads cleanly
                     let mid = from_pos.lerp(to_pos, 0.5);
                     let label_pos = mid.add_vec3(Vec3::new(0.0, 4.45, 0.0));
@@ -626,9 +617,7 @@ impl Gizmo {
                     possible_paths,
                     to_segment_id,
                 } => {
-                    let Some(node) = road_storage.node(*node_id) else {
-                        continue;
-                    };
+                    let node = road_storage.node(*node_id);
                     for path in possible_paths {
                         for &nodelane_id in path.0.iter() {
                             let Some(lane) = node.node_lane(nodelane_id) else {
@@ -927,6 +916,30 @@ impl Gizmo {
         let left_start = start.sub_vec3(right);
         let right_end = start.add_vec3(right);
         self.line(left_start, right_end, color, thickness, duration);
+    }
+
+
+    pub fn tile(&mut self, pos: WorldPos, dir: Vec3, width: f32, length: f32, color: [f32; 4], thickness: f32, duration: f32) {
+        let forward = dir.normalize();
+        let right = Vec3::new(forward.z, 0.0, -forward.x);
+
+        let half_w = width * 0.5;
+        let half_l = length * 0.5;
+
+        let corners = [
+            pos.add_vec3(-forward * half_l - right * half_w), // back left
+            pos.add_vec3(-forward * half_l + right * half_w), // back right
+            pos.add_vec3(forward * half_l + right * half_w),  // front right
+            pos.add_vec3(forward * half_l - right * half_w),  // front left
+        ];
+        self.polyline(
+            corners.as_slice(),
+            color,
+            0.0,
+            true,
+            thickness,
+            duration,
+        );
     }
 
     // Polyline (anchor + relative points for now, or full WorldPos slice)
@@ -1246,25 +1259,15 @@ impl Gizmo {
         if settings.render_parking_gizmo {
             for parking_spot in parking.iter() {
                 let Some(ps) = parking_spot else { continue };
-                let forward = ps.dir.normalize();
-                let right = Vec3::new(forward.z, 0.0, -forward.x);
 
-                let half_w = PARK_W as f32 * 0.5;
-                let half_l = PARK_L as f32 * 0.5;
-
-                let corners = [
-                    ps.pos.add_vec3(-forward * half_l - right * half_w), // back left
-                    ps.pos.add_vec3(-forward * half_l + right * half_w), // back right
-                    ps.pos.add_vec3(forward * half_l + right * half_w),  // front right
-                    ps.pos.add_vec3(forward * half_l - right * half_w),  // front left
-                ];
-                self.polyline(
-                    corners.as_slice(),
+                self.tile(
+                    ps.pos,
+                    ps.dir,
+                    PARK_W as f32,
+                    PARK_L as f32,
                     [1.0, 0.0, 0.0, 0.5],
                     0.0,
-                    true,
-                    0.1,
-                    0.0,
+                    0.0
                 );
             }
         }
@@ -1317,12 +1320,10 @@ impl Gizmo {
                 let node_color = [0.0, 0.0, 0.9, 1.0];
 
                 self.circle(node_pos, 2.0, node_color, 0.0, 0.0);
-
+                //println!("{}", node_pos);
                 // Incoming lanes
                 for &lane_id in node.incoming_lanes() {
-                    let Some(lane) = storage.lane_safe(lane_id) else {
-                        continue;
-                    };
+                    let lane = storage.lane(lane_id);
 
                     let segment = storage.segment(lane.segment());
                     let is_forward = lane.from_node() == segment.start();
@@ -1411,9 +1412,7 @@ impl Gizmo {
                 let mut right_lane = None;
 
                 for &lane_id in segment.lanes() {
-                    let Some(lane) = storage.lane_safe(lane_id) else {
-                        continue;
-                    };
+                    let lane = storage.lane(lane_id);
 
                     let idx = lane.lane_index();
 

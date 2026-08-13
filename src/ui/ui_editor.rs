@@ -24,11 +24,8 @@ use crate::ui::ui_loader::{
     load_advanced_primitives_from_directory, load_global_actions, load_legacy_gui_layout,
     load_menus_from_directory,
 };
-use crate::ui::ui_text_editing::{handle_text_editing, HitResult, MouseSnapshot};
-use crate::ui::ui_touch_manager::{
-    DragCoordinator, ElementRef, HitDetector, InputSnapshot, MouseButtons, NavigationDirection,
-    TouchEvent, UiTouchManager, ZoomState,
-};
+use crate::ui::ui_text_editing::{handle_text_editing, MouseSnapshot};
+use crate::ui::ui_touch_manager::{CurrentHover, DragCoordinator, ElementRef, HitDetector, InputSnapshot, MouseButtons, NavigationDirection, TouchEvent, UiTouchManager, ZoomState};
 use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
 use crate::world::game_state::GameState;
@@ -167,11 +164,11 @@ impl Ui {
                     actions: l.actions,
                     elements,
                     ap_vars: vec![],
-                    cache: LayerCache::default(),
                     gpu: LayerGpu::default(),
                     dirty: LayerDirty::all(),
                     saveable: true,
                     editing_tool: l.editing_tool,
+                    outline_poly_vertices: vec![]
                 });
             }
 
@@ -191,7 +188,7 @@ impl Ui {
                 continue;
             };
             for (ap, order) in aps {
-                let layer = ap.to_layer(settings, &loader.aps, order + 1, window_size);
+                let layer = ap.to_layer(settings, &loader.variables, &loader.aps, order + 1, window_size);
 
                 menu.layers.push(layer);
             }
@@ -231,7 +228,7 @@ impl Ui {
         if !self.touch_manager.options.show_gui {
             return;
         }
-        self.touch_manager.config.snap_enabled = world.input.gameplay_down("UI Snap Modifier");
+        self.touch_manager.config.snap_enabled = world.input.action_down("UI Snap Modifier");
 
         // Update undo manager timing
         self.ui_edit_manager.update(dt);
@@ -343,8 +340,8 @@ impl Ui {
         }
 
         // Execute actions
-        let top_hit = self.get_current_hit_for_actions();
-        if top_hit.is_some() { //|| self.touch_manager.editor.enabled || !settings.show_world {
+        let hover = self.get_current_hit_for_actions();
+        if hover.is_some() { //|| self.touch_manager.editor.enabled || !settings.show_world {
             world.terrain.last_picked = None;
         }
 
@@ -356,7 +353,7 @@ impl Ui {
             self,
             world,
             props,
-            &top_hit,
+            &hover,
             window_size,
             settings,
             event_loop,
@@ -374,10 +371,12 @@ impl Ui {
                             text.id.as_str(),
                             ElementKind::Text
                         );
-                        if self.touch_manager.selection.is_selected(&text_ref) {
-                            //text.being_edited = false; // Wtf?!
+                        if !self.touch_manager.selection.is_selected(&text_ref) {
+                            if text.being_edited {
+                                layer.dirty.mark_texts()
+                            }
+                            text.being_edited = false; // Wtf?!
                             text.clear_selection();
-                            layer.dirty.mark_texts()
                         }
                     }
                 }
@@ -460,7 +459,7 @@ impl Ui {
             world,
             props,
             ui: self,
-            hit: &None,
+            hover: &None,
             window_size,
             settings,
             event_loop,
@@ -618,6 +617,7 @@ impl Ui {
     }
 
     fn handle_hover_enter(&mut self, element: &ElementRef, result: &mut EventProcessingResult) {
+
         // Update text hover state
         if element.kind == ElementKind::Text {
             if !self.is_editable(element) {
@@ -1360,12 +1360,8 @@ impl Ui {
         }
     }
 
-    fn get_current_hit_for_actions(&self) -> Option<HitResult> {
-        // Convert touch manager's current hover to legacy HitResult for action system
-        self.touch_manager.hovered().map(|hover| HitResult {
-            element: hover.element.clone(),
-            actions: hover.actions.clone(),
-        })
+    fn get_current_hit_for_actions(&self) -> Option<CurrentHover> {
+        self.touch_manager.hovered().cloned()
     }
 
     fn handle_text_editing(&mut self, input: &mut Input, snapshot: InputSnapshot) {
@@ -1656,6 +1652,7 @@ impl Ui {
                             border_thickness: 0.08,
                         },
                         yaml_element: None,
+                        cache: None,
                     };
                     editor_layer
                         .elements
@@ -1694,6 +1691,7 @@ impl Ui {
                             editable: Editability::HARDNOTEDITABLE,
                         },
                         yaml_element: None,
+                        cache: None,
                     };
                     editor_layer.elements.push(UiElement::Handle(handle));
                 }
@@ -1729,6 +1727,7 @@ impl Ui {
                                 editable: Editability::HARDNOTEDITABLE,
                             },
                             yaml_element: None,
+                            cache: None,
                         };
                         editor_layer
                             .elements
@@ -1768,6 +1767,7 @@ impl Ui {
                             border_thickness: 0.9,
                         },
                         yaml_element: None,
+                        cache: None,
                     };
 
                     editor_layer
@@ -1810,6 +1810,7 @@ impl Ui {
                             border_thickness: 0.9,
                         },
                         yaml_element: None,
+                        cache: None,
                     };
 
                     editor_layer.elements.push(UiElement::Outline(rect_outline));
@@ -1924,16 +1925,16 @@ impl Ui {
                 let mut dx = 0.0;
                 let mut dy = 0.0;
 
-                if input_state.gameplay_down("Move Element Left") {
+                if input_state.action_down("Move Element Left") {
                     dx -= speed;
                 }
-                if input_state.gameplay_down("Move Element Right") {
+                if input_state.action_down("Move Element Right") {
                     dx += speed;
                 }
-                if input_state.gameplay_down("Move Element Up") {
+                if input_state.action_down("Move Element Up") {
                     dy -= speed;
                 }
-                if input_state.gameplay_down("Move Element Down") {
+                if input_state.action_down("Move Element Down") {
                     dy += speed;
                 }
                 if input_state.ctrl {
@@ -2069,7 +2070,6 @@ impl Ui {
             order: 900,
             active: true,
             ap_vars: vec![],
-            cache: LayerCache::default(),
             actions: vec![],
             elements: vec![],
             dirty: LayerDirty::all(),
@@ -2077,6 +2077,7 @@ impl Ui {
             opaque: true,
             saveable: false,
             editing_tool: false,
+            outline_poly_vertices: vec![]
         });
 
         menu.layers.push(RuntimeLayer {
@@ -2085,7 +2086,6 @@ impl Ui {
             order: 950,
             active: true,
             ap_vars: vec![],
-            cache: LayerCache::default(),
             actions: vec![],
             elements: vec![],
             dirty: LayerDirty::all(),
@@ -2093,6 +2093,7 @@ impl Ui {
             opaque: true,
             saveable: false,
             editing_tool: false,
+            outline_poly_vertices: vec![]
         });
 
         menu.sort_layers();
@@ -2256,7 +2257,7 @@ pub fn get_element_size(
         ElementKind::Text => layer
             .iter_texts()
             .find(|t| t.id == element.id)
-            .map(|t| SizeProperty::Pt(t.pt)),
+            .map(|t| SizeProperty::Text([t.width, t.height], t.pt)),
         ElementKind::Handle => layer
             .iter_handles()
             .find(|h| h.id == element.id)

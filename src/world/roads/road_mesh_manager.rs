@@ -23,10 +23,6 @@ use wgpu::{VertexAttribute, VertexFormat};
 
 pub type ChunkId = u64;
 
-// ============================================================================
-// Constants & Configuration
-// ============================================================================
-
 pub const CLEARANCE: f32 = 0.08;
 const NODE_ANGULAR_SEGMENTS: usize = 32;
 
@@ -192,9 +188,7 @@ fn mesh_segment(
     let mut max_lane: Option<(i8, LaneId)> = None;
 
     for &lane_id in segment.lanes() {
-        let Some(lane) = storage.lane_safe(lane_id) else {
-            continue;
-        };
+        let lane = storage.lane(lane_id);
 
         let lane_idx = lane.lane_index();
 
@@ -1010,11 +1004,9 @@ impl RoadMeshManager {
         // Store intersection results for segment meshing
         let mut intersection_results: HashMap<NodeId, IntersectionMeshResult> = HashMap::new();
 
-        // === PASS 1: Build intersection meshes and collect boundary data ===
+        // PASS 1: Build intersection meshes and collect boundary data
         for node_id in storage.iter_node_ids_optionally_chunked(chunk_id) {
-            let Some(node) = storage.node(node_id) else {
-                continue;
-            };
+            let node = storage.node(node_id);
 
             let Some(road_type) = style.road_type(road_types) else {
                 continue;
@@ -1041,9 +1033,8 @@ impl RoadMeshManager {
                     .iter()
                     .chain(node.outgoing_lanes().iter())
                 {
-                    if let Some(lane) = storage.lane_safe(*lane_id) {
-                        connected_lanes_info.push((lane.lane_index(), road_type.lane_width));
-                    }
+                    let lane = storage.lane(*lane_id);
+                    connected_lanes_info.push((lane.lane_index(), road_type.lane_width));
                 }
 
                 if connected_lanes_info.is_empty() {
@@ -1083,9 +1074,7 @@ impl RoadMeshManager {
         //     }
         // }
         for seg_id in segment_ids {
-            let Some(segment) = storage.segment_safe(seg_id) else {
-                continue;
-            };
+            let segment = storage.segment(seg_id);
 
             let Some(road_type) = road_types.get_road_type(segment.road_type_id) else {
                 continue;
@@ -1192,9 +1181,7 @@ fn compute_cap_direction(
         .iter()
         .chain(node.outgoing_lanes().iter())
     {
-        let Some(lane) = storage.lane_safe(*lane_id) else {
-            continue;
-        };
+        let lane = storage.lane(*lane_id);
         let pts = &lane.geometry().points;
 
         let dir = if lane.from_node() == node_id {
@@ -1233,9 +1220,7 @@ pub fn compute_topo_version(chunk_id: ChunkId, storage: &RoadStorage) -> u64 {
     for seg_id in segs {
         seg_id.hash(&mut hasher);
 
-        let Some(seg) = storage.segment_safe(seg_id) else {
-            continue;
-        };
+        let seg = storage.segment(seg_id);
 
         let (l, r) = storage.lane_counts_for_segment(seg);
 
@@ -1249,17 +1234,16 @@ pub fn compute_topo_version(chunk_id: ChunkId, storage: &RoadStorage) -> u64 {
     for node_id in nodes {
         node_id.hash(&mut hasher);
 
-        if let Some(node) = storage.node(node_id) {
-            let outgoing: Vec<_> = node.outgoing_lanes().iter().copied().collect();
-            let incoming: Vec<_> = node.incoming_lanes().iter().copied().collect();
-            let node_lanes: Vec<_> = node.node_lanes().iter().collect();
+        let node = storage.node(node_id);
+        let outgoing: Vec<_> = node.outgoing_lanes().iter().copied().collect();
+        let incoming: Vec<_> = node.incoming_lanes().iter().copied().collect();
+        let node_lanes: Vec<_> = node.node_lanes().iter().collect();
 
-            // Maybe sort? But if they change, then topology changes, so sorting is kinda stupid...
+        // Maybe sort? But if they change, then topology changes, so sorting is kinda stupid...
 
-            outgoing.hash(&mut hasher);
-            incoming.hash(&mut hasher);
-            node_lanes.hash(&mut hasher);
-        }
+        outgoing.hash(&mut hasher);
+        incoming.hash(&mut hasher);
+        node_lanes.hash(&mut hasher);
     }
 
     hasher.finish()

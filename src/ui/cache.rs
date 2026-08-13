@@ -1,184 +1,90 @@
+use bytemuck::Zeroable;
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
-use crate::renderer::ui_text_rendering::{Anchor, anchor_to};
 use crate::ui::actions::style_to_u32;
 use crate::ui::helper::triangulate_polygon;
 use crate::ui::ui_editor::Ui;
 use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::ui_touch_manager::ElementRef;
+use glyphon::{Attrs, FontSystem, Metrics, Shaping};
+use unicode_segmentation::UnicodeSegmentation;
 use crate::ui::vertex::*;
-use bytemuck::Zeroable;
-use wgpu_text::TextBrush;
-use wgpu_text::glyph_brush::ab_glyph::{Font, Point, Rect};
 
 pub fn rebuild_text_cache(
-    brush: &TextBrush,
+    font_system: &mut FontSystem,
     layer: &mut RuntimeLayer,
     rebuilt: &mut LayerDirty,
     runtime: &UiRuntimes,
 ) {
-    let Some(font) = brush.fonts().first() else {
-        rebuilt.mark_texts();
-        return;
-    };
-    for (element, cache_element) in layer
-        .elements
-        .iter_mut()
-        .zip(layer.cache.elements.iter_mut())
-    {
+    for element in &mut layer.elements {
         if !element.is_active() {
             continue;
         }
-        if let (UiElement::Text(t), UiElementCache::Text(cached)) = (element, cache_element) {
+
+        if let UiElement::Text(t) = element {
             let (rt, hash) = runtime_info(runtime, &t.id);
 
-            let mut glyph_bounds: Vec<Rect> = Vec::new();
-            let mut char_spans: Vec<std::ops::Range<usize>> = Vec::new();
+            let metrics = Metrics::new(t.pt, t.pt * 1.2);
+            t.buffer.set_metrics(metrics);
+            //t.buffer.set_size(Some(t.width*10.0), Some(t.height*10.0));
+            let mut attrs = Attrs::new();
+            let text_deco = &mut attrs.text_decoration;
+            // text_deco.overline = true;
+            // text_deco.overline_color_opt = Some(Color::rgba(255, 0, 0, 255));
+            //attrs.style = Style::Oblique;
+            //attrs.weight = Weight::NORMAL;
+            t.buffer.set_text(&t.text, &attrs, Shaping::Basic, None);
+            t.buffer.shape_until_scroll(font_system, false);
+            let mut text_width: f32 = 0.0;
+            let mut text_height: f32 = 0.0;
 
-            let Some(px_scale) = font.pt_to_px_scale(t.pt) else {
-                continue;
-            };
-            let scale_factor = px_scale.y / font.height_unscaled();
-            let line_height = px_scale.y;
-            let pos = anchor_to(
-                t.anchor.unwrap_or(Anchor::Center),
-                [t.x, t.y],
-                t.width,
-                t.height,
-            );
-            let mut cursor_x = pos[0];
-            let mut cursor_y = pos[1];
-
-            let chars: Vec<(usize, char)> = t.text.char_indices().collect();
-            let mut i = 0;
-
-            while i < chars.len() {
-                let (byte_start, ch) = chars[i];
-
-                // Handle real control chars and escape sequences
-                let (render_char, span_chars) = match ch {
-                    '\n' | '\t' | '\r' => (ch, 1),
-                    '\\' if i + 1 < chars.len() => match chars[i + 1].1 {
-                        'n' => ('\n', 2),
-                        't' => ('\t', 2),
-                        'r' => ('\r', 2),
-                        '\\' => ('\\', 2),
-                        _ => (ch, 1),
-                    },
-                    _ => (ch, 1),
-                };
-
-                let byte_end = if span_chars == 2 {
-                    chars[i + 1].0 + chars[i + 1].1.len_utf8()
-                } else {
-                    byte_start + ch.len_utf8()
-                };
-
-                match render_char {
-                    '\n' => {
-                        glyph_bounds.push(Rect {
-                            min: Point {
-                                x: cursor_x,
-                                y: cursor_y,
-                            },
-                            max: Point {
-                                x: cursor_x + 4.0,
-                                y: cursor_y + line_height,
-                            },
-                        });
-                        char_spans.push(byte_start..byte_end);
-                        cursor_x = pos[0];
-                        cursor_y += line_height;
-                    }
-                    '\t' => {
-                        let space_advance =
-                            font.h_advance_unscaled(font.glyph_id(' ')) * scale_factor;
-                        let tab_width = space_advance * 4.0;
-                        glyph_bounds.push(Rect {
-                            min: Point {
-                                x: cursor_x,
-                                y: cursor_y,
-                            },
-                            max: Point {
-                                x: cursor_x + tab_width,
-                                y: cursor_y + line_height,
-                            },
-                        });
-                        char_spans.push(byte_start..byte_end);
-                        cursor_x += tab_width;
-                    }
-                    '\r' => {
-                        glyph_bounds.push(Rect {
-                            min: Point {
-                                x: cursor_x,
-                                y: cursor_y,
-                            },
-                            max: Point {
-                                x: cursor_x,
-                                y: cursor_y + line_height,
-                            },
-                        });
-                        char_spans.push(byte_start..byte_end);
-                        cursor_x = pos[0];
-                    }
-                    _ => {
-                        let glyph_id = font.glyph_id(render_char);
-                        let advance = font.h_advance_unscaled(glyph_id) * scale_factor;
-                        glyph_bounds.push(Rect {
-                            min: Point {
-                                x: cursor_x,
-                                y: cursor_y,
-                            },
-                            max: Point {
-                                x: cursor_x + advance,
-                                y: cursor_y + line_height,
-                            },
-                        });
-                        char_spans.push(byte_start..byte_end);
-                        cursor_x += advance;
-                    }
-                }
-
-                i += span_chars;
+            for run in t.buffer.layout_runs() {
+                text_width = text_width.max(run.line_w);
+                text_height = text_height.max(run.line_top + run.line_height);
             }
+            //println!("{}", text_width);
+            let cache = t.cache.get_or_insert_with(TextParams::default);
 
-            t.glyph_bounds = glyph_bounds;
-            t.char_spans = char_spans;
-
-            *cached = TextParams {
+            *cache = TextParams {
                 pos: [t.x, t.y],
                 pt: t.pt,
                 color: t.color,
                 id_hash: hash,
                 misc: [
-                    f32::from(t.misc.active),
+                    if t.misc.active { 1.0 } else { 0.0 },
                     rt.touched_time,
-                    f32::from(rt.is_down),
+                    if rt.is_down { 1.0 } else { 0.0 },
                     hash,
                 ],
                 text: t.text.clone(),
-                width: t.width,
-                height: t.height,
+                width: text_width,
+                height: text_height,
                 id: t.id.clone(),
-                caret: t.char_spans.len(),
+                caret: t.caret.min(t.text.graphemes(true).count()),
                 anchor: t.anchor,
+                depth: 0.0,
             };
         }
     }
+
     rebuilt.mark_texts();
 }
+
 pub fn rebuild_circle_cache(
     layer: &mut RuntimeLayer,
     rebuilt: &mut LayerDirty,
     runtime: &UiRuntimes,
 ) {
-    for (element, cache_element) in layer.elements.iter().zip(layer.cache.elements.iter_mut()) {
+    for element in &mut layer.elements {
         if !element.is_active() {
             continue;
         }
-        if let (UiElement::Circle(c), UiElementCache::Circle(cached)) = (element, cache_element) {
+
+        if let UiElement::Circle(c) = element {
             let (rt, hash) = runtime_info(runtime, &c.id);
 
-            *cached = CircleParams {
+            let cache = c.cache.get_or_insert_with(CircleParams::default);
+
+            *cache = CircleParams {
                 center_radius_border: [c.x, c.y, c.radius, c.border_thickness_percentage],
                 fill_color: c.fill_color,
                 inside_border_color: c.inside_border_color,
@@ -191,15 +97,15 @@ pub fn rebuild_circle_cache(
                     1.0,
                 ],
                 misc: [
-                    f32::from(c.misc.active),
+                    if c.misc.active { 1.0 } else { 0.0 },
                     rt.touched_time,
-                    f32::from(rt.is_down),
+                    if rt.is_down { 1.0 } else { 0.0 },
                     hash,
                 ],
                 fade: c.fade,
                 style: style_to_u32(&c.style),
                 inside_border_thickness_percentage: c.inside_border_thickness_percentage,
-                _pad: 1,
+                depth: 0.0,
             };
         }
     }
@@ -216,7 +122,6 @@ fn find_polygon_by_id<'a>(
 
     for layer in before.iter().chain(after.iter()) {
         for element in &layer.elements {
-            //panic!("Yay");
             if let UiElement::Polygon(p) = element {
                 if p.id == target.id {
                     return Some(p);
@@ -224,6 +129,7 @@ fn find_polygon_by_id<'a>(
             }
         }
     }
+
     None
 }
 
@@ -234,35 +140,34 @@ pub fn rebuild_outline_cache(
     rebuilt: &mut LayerDirty,
     runtime: &UiRuntimes,
 ) {
-    layer.cache.outline_poly_vertices.clear();
+    layer.outline_poly_vertices.clear();
 
-    for (element, cache_element) in layer
-        .elements
-        .iter_mut()
-        .zip(layer.cache.elements.iter_mut())
-    {
+    for element in &mut layer.elements {
         if !element.is_active() {
             continue;
         }
-        if let (UiElement::Outline(o), UiElementCache::Outline(cached)) = (element, cache_element) {
+
+        if let UiElement::Outline(o) = element {
             if o.mode == 1.0 {
                 if let Some(poly) = find_polygon_by_id(&o.parent, before, after) {
-                    o.vertex_offset = layer.cache.outline_poly_vertices.len() as u32;
-                    o.vertex_count = poly.scaled_vertices().len() as u32;
+                    let scaled = poly.scaled_vertices();
+                    o.vertex_offset = layer.outline_poly_vertices.len() as u32;
+                    o.vertex_count = scaled.len() as u32;
 
-                    for v in &poly.scaled_vertices() {
-                        layer.cache.outline_poly_vertices.push([v.pos[0], v.pos[1]]);
+                    for v in scaled {
+                        layer.outline_poly_vertices.push([v.pos[0], v.pos[1]]);
                     }
                 }
             }
 
             let (rt, hash) = runtime_info(runtime, &o.id);
+            let cache = o.cache.get_or_insert_with(OutlineParams::default);
 
-            *cached = OutlineParams {
+            *cache = OutlineParams {
                 mode: o.mode,
                 vertex_offset: o.vertex_offset,
                 vertex_count: o.vertex_count,
-                _pad0: 0,
+                depth: 1.0,
                 shape_data: [
                     o.shape_data.x,
                     o.shape_data.y,
@@ -284,12 +189,12 @@ pub fn rebuild_outline_cache(
                     o.sub_dash_misc.dash_speed,
                 ],
                 misc: [
-                    f32::from(o.misc.active),
+                    if o.misc.active { 1.0 } else { 0.0 },
                     rt.touched_time,
-                    f32::from(rt.is_down),
+                    if rt.is_down { 1.0 } else { 0.0 },
                     hash,
-                ],
-            };
+                ]
+            }
         }
     }
 
@@ -301,14 +206,16 @@ pub fn rebuild_handle_cache(
     rebuilt: &mut LayerDirty,
     runtime: &UiRuntimes,
 ) {
-    for (element, cache_element) in layer.elements.iter().zip(layer.cache.elements.iter_mut()) {
+    for element in &mut layer.elements {
         if !element.is_active() {
             continue;
         }
-        if let (UiElement::Handle(h), UiElementCache::Handle(cached)) = (element, cache_element) {
-            let (rt, hash) = runtime_info(runtime, &h.id);
 
-            *cached = HandleParams {
+        if let UiElement::Handle(h) = element {
+            let (rt, hash) = runtime_info(runtime, &h.id);
+            let cache = h.cache.get_or_insert_with(HandleParams::default);
+
+            *cache = HandleParams {
                 center_radius_mode: [h.x, h.y, h.radius, 1.0],
                 handle_color: h.handle_color,
                 handle_misc: [
@@ -325,11 +232,13 @@ pub fn rebuild_handle_cache(
                     h.sub_handle_misc.handle_speed,
                 ],
                 misc: [
-                    f32::from(h.misc.active),
+                    if h.misc.active { 1.0 } else { 0.0 },
                     rt.touched_time,
-                    f32::from(rt.is_down),
+                    if rt.is_down { 1.0 } else { 0.0 },
                     hash,
                 ],
+                depth: 0.0,
+                _pad0: [0.0; 3],
             };
         }
     }
@@ -344,23 +253,18 @@ pub fn rebuild_polygon_cache(
 ) {
     let mut poly_index = 0;
 
-    for (element, cache_element) in layer
-        .elements
-        .iter_mut()
-        .zip(layer.cache.elements.iter_mut())
-    {
+    for element in &mut layer.elements {
         if !element.is_active() {
             continue;
         }
-        if let (UiElement::Polygon(poly), UiElementCache::Polygon(cached_vertices)) =
-            (element, cache_element)
-        {
+
+        if let UiElement::Polygon(poly) = element {
             let (rt, hash) = runtime_info(runtime, &poly.id);
 
             let misc = [
-                f32::from(poly.misc.active),
+                if poly.misc.active { 1.0 } else { 0.0 },
                 rt.touched_time,
-                f32::from(rt.is_down),
+                if rt.is_down { 1.0 } else { 0.0 },
                 hash,
             ];
 
@@ -369,13 +273,17 @@ pub fn rebuild_polygon_cache(
             let tris = triangulate_polygon(&poly.scaled_vertices());
             poly.tri_count = tris.len() as u32 / 3;
 
+            let cached_vertices = poly.cache.get_or_insert_with(Vec::new);
             cached_vertices.clear();
+
             for v in &tris {
                 cached_vertices.push(UiVertexPoly {
                     pos: v.pos,
                     data: [v.roundness, poly_index_f],
                     color: v.color,
                     misc,
+                    depth: 0.0,
+                    _pad0: Default::default()
                 });
             }
 
@@ -385,29 +293,31 @@ pub fn rebuild_polygon_cache(
 
     rebuilt.mark_polygons();
 }
+
 pub fn rebuild_rect_cache(
     layer: &mut RuntimeLayer,
     rebuilt: &mut LayerDirty,
     runtime: &UiRuntimes,
 ) {
-    for (element, cache_element) in layer.elements.iter().zip(layer.cache.elements.iter_mut()) {
+    for element in &mut layer.elements {
         if !element.is_active() {
             continue;
         }
-        if let (UiElement::Rect(rect), UiElementCache::Rect(cached)) = (element, cache_element) {
-            let (rt, hash) = runtime_info(runtime, &rect.id);
 
+        if let UiElement::Rect(rect) = element {
+            let (rt, hash) = runtime_info(runtime, &rect.id);
             let min_dim = rect.w.min(rect.h);
             let border = rect.border_thickness_percentage * min_dim;
+            let cache = rect.cache.get_or_insert_with(RectParams::zeroed);
 
-            *cached = RectGpu {
+            *cache = RectParams {
                 center: [rect.x, rect.y],
                 half_size: [rect.w * 0.5, rect.h * 0.5],
                 color: rect.color,
                 border_color: rect.border_color,
                 roundness: rect.roundness,
                 border_thickness: border,
-                rotation: -rect.rotation.to_radians(), // NEGATIVE so that it feels intuitive for us mere mortal humans who have a preference for positive rotation to go CW instead of CCW!
+                rotation: -rect.rotation.to_radians(),
                 fade: rect.fade,
                 blur: rect.blur,
                 glow_color: rect.glow_color,
@@ -418,18 +328,20 @@ pub fn rebuild_rect_cache(
                     1.0,
                 ],
                 misc: [
-                    f32::from(rect.misc.active),
+                    if rect.misc.active { 1.0 } else { 0.0 },
                     rt.touched_time,
-                    f32::from(rt.is_down),
+                    if rt.is_down { 1.0 } else { 0.0 },
                     hash,
                 ],
-                _pad0: [0.0; 3],
+                _pad0: [0.0; 2],
+                depth: 0.0,
             };
         }
     }
 
     rebuilt.mark_rects();
 }
+
 pub fn runtime_info(runtime: &UiRuntimes, id: &String) -> (ButtonRuntime, f32) {
     let runtime = runtime.get(id);
 
@@ -440,25 +352,4 @@ pub fn runtime_info(runtime: &UiRuntimes, id: &String) -> (ButtonRuntime, f32) {
     };
 
     (runtime, hash)
-}
-
-pub fn init_cache_structure(layer: &mut RuntimeLayer) {
-    // Only rebuild structure if lengths don't match
-    if layer.cache.elements.len() == layer.elements.len() {
-        return;
-    }
-
-    layer.cache.elements.clear();
-
-    for element in &layer.elements {
-        layer.cache.elements.push(match element {
-            UiElement::Text(_) => UiElementCache::Text(TextParams::default()),
-            UiElement::Circle(_) => UiElementCache::Circle(CircleParams::default()),
-            UiElement::Polygon(_) => UiElementCache::Polygon(Vec::new()),
-            UiElement::Outline(_) => UiElementCache::Outline(OutlineParams::default()),
-            UiElement::Handle(_) => UiElementCache::Handle(HandleParams::default()),
-            UiElement::Rect(_) => UiElementCache::Rect(RectGpu::zeroed()),
-            UiElement::Advanced(_) => UiElementCache::Advanced,
-        });
-    }
 }

@@ -22,6 +22,7 @@ struct VertexOutput {
     @location(1) roundness_norm: f32,  // 0..1, interpolated per-fragment
     @location(2) vertex_pos: vec2<f32>,// screen-space position in pixels
     @location(3) poly_index: f32,      // polygon index as float
+    @location(4) depth: f32
 };
 
 struct PolygonInfo {
@@ -58,7 +59,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let x = (in.pos.x / screen.size.x) * 2.0 - 1.0;
     let y = 1.0 - (in.pos.y / screen.size.y) * 2.0;
 
-    out.pos = vec4<f32>(x, y, 0.0, 1.0);
+    out.pos = vec4<f32>(x, y, in.depth, 1.0);
     out.color = in.color;
     out.roundness_norm = in.data.x;  // 0..1
     out.vertex_pos = in.pos;
