@@ -7,9 +7,9 @@ use crate::helpers::paths::data_dir;
 use crate::renderer::props::Props;
 use crate::resources::{CommandQueues, Time};
 use crate::simulation::Simulation;
-use crate::ui::action_parser::{actions_to_uicommands, parse_action, ActionEvent};
+use crate::ui::action_parser::{ActionEvent, actions_to_uicommands, parse_action};
 use crate::ui::actions::{
-    process_commands, CommandContext, CommandQueue, ElementContext, UiCommand,
+    CommandContext, CommandQueue, ElementContext, UiCommand, process_commands,
 };
 use crate::ui::helper::calc_move_speed;
 use crate::ui::input::{Input, Mouse};
@@ -24,8 +24,11 @@ use crate::ui::ui_loader::{
     load_advanced_primitives_from_directory, load_global_actions, load_legacy_gui_layout,
     load_menus_from_directory,
 };
-use crate::ui::ui_text_editing::{handle_text_editing, MouseSnapshot};
-use crate::ui::ui_touch_manager::{CurrentHover, DragCoordinator, ElementRef, HitDetector, InputSnapshot, MouseButtons, NavigationDirection, TouchEvent, UiTouchManager, ZoomState};
+use crate::ui::ui_text_editing::{MouseSnapshot, handle_text_editing};
+use crate::ui::ui_touch_manager::{
+    CurrentHover, DragCoordinator, ElementRef, HitDetector, InputSnapshot, MouseButtons,
+    NavigationDirection, TouchEvent, UiTouchManager, ZoomState,
+};
 use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
 use crate::world::game_state::GameState;
@@ -131,7 +134,8 @@ impl Ui {
             drag_start_state: None,
             element_clipboard: None,
         };
-        let mut advanced_primitive_refs: HashMap<String, Vec<(AdvancedPrimitive, u32)>> = HashMap::new(); // menu name, ap.
+        let mut advanced_primitive_refs: HashMap<String, Vec<(AdvancedPrimitive, u32)>> =
+            HashMap::new(); // menu name, ap.
         // Load menus
         for menu_yaml in menu_files {
             let mut layers: Vec<RuntimeLayer> = Vec::new();
@@ -168,7 +172,7 @@ impl Ui {
                     dirty: LayerDirty::all(),
                     saveable: true,
                     editing_tool: l.editing_tool,
-                    outline_poly_vertices: vec![]
+                    outline_poly_vertices: vec![],
                 });
             }
 
@@ -188,7 +192,13 @@ impl Ui {
                 continue;
             };
             for (ap, order) in aps {
-                let layer = ap.to_layer(settings, &loader.variables, &loader.aps, order + 1, window_size);
+                let layer = ap.to_layer(
+                    settings,
+                    &loader.variables,
+                    &loader.aps,
+                    order + 1,
+                    window_size,
+                );
 
                 menu.layers.push(layer);
             }
@@ -200,7 +210,8 @@ impl Ui {
         loader
     }
     pub fn resize(&mut self, old_size: PhysicalSize<u32>, new_size: PhysicalSize<u32>) {
-        self.menus.values_mut()
+        self.menus
+            .values_mut()
             .flat_map(|m| m.layers.iter_mut())
             .flat_map(|l| {
                 l.dirty.mark_all(); // Dirty all elements so they actually get updated lol
@@ -209,7 +220,8 @@ impl Ui {
             .for_each(|e| {
                 e.rescale_to_window(old_size, new_size);
             });
-        self.variables.set_array("screen", vec![new_size.width, new_size.height]);
+        self.variables
+            .set_array("screen", vec![new_size.width, new_size.height]);
         self.touch_manager.add_screen_resize_event = true;
     }
     pub fn handle_touches(
@@ -246,7 +258,8 @@ impl Ui {
 
         // Collect elements - borrow only self.menus
         let elements = Self::collect_touchable_elements(&self.menus, settings.editor_mode);
-        self.touch_manager.update(dt, input_snapshot, &elements, &world.time);
+        self.touch_manager
+            .update(dt, input_snapshot, &elements, &world.time);
         for (menu_name, menu) in self.menus.iter() {
             for layer in menu.layers.iter() {
                 for element in layer.iter_all() {
@@ -273,39 +286,28 @@ impl Ui {
                             .element_actives
                             .insert(element_ref.clone(), is_active);
                         //println!("Huh {}", element_ref.id);
-                        self.touch_manager.events.push(if is_active {
-                            TouchEvent::Activated {
-                                element: element_ref.clone(),
-                                actions: element.actions().clone(),
-                                buttons: input_snapshot.buttons,
-                            }
-                        } else {
-                            TouchEvent::Deactivated {
-                                element: element_ref.clone(),
-                                actions: element.actions().clone(),
-                                buttons: input_snapshot.buttons,
-                            }
-                        });
+                        self.touch_manager.push_event(
+                            element_ref.clone(),
+                            if is_active {
+                                TouchEvent::Activated
+                            } else {
+                                TouchEvent::Deactivated
+                            },
+                        );
                     }
 
                     if world.time.game_just_started() {
                         // Only on frame 0
-                        self.touch_manager.events.push(TouchEvent::StartUp {
-                            element: element_ref.clone(),
-                            actions: element.actions(),
-                        });
+                        self.touch_manager
+                            .push_event(element_ref.clone(), TouchEvent::StartUp);
                     }
                     if self.touch_manager.add_screen_resize_event {
-                        self.touch_manager.events.push(TouchEvent::ScreenResize {
-                            element: element_ref.clone(),
-                            actions: element.actions(),
-                        });
+                        self.touch_manager
+                            .push_event(element_ref.clone(), TouchEvent::ScreenResize); // Selbstverständlich
                     }
                     // Important for when not hovering and such, super important for always-on functions!
-                    self.touch_manager.events.push(TouchEvent::Nothing {
-                        element: element_ref,
-                        actions: element.actions(),
-                    });
+                    self.touch_manager
+                        .push_event(element_ref, TouchEvent::Nothing);
                 }
             }
         }
@@ -341,7 +343,8 @@ impl Ui {
 
         // Execute actions
         let hover = self.get_current_hit_for_actions();
-        if hover.is_some() { //|| self.touch_manager.editor.enabled || !settings.show_world {
+        if hover.is_some() {
+            //|| self.touch_manager.editor.enabled || !settings.show_world {
             world.terrain.last_picked = None;
         }
 
@@ -358,7 +361,7 @@ impl Ui {
             settings,
             event_loop,
             game_state,
-            simulation
+            simulation,
         );
 
         if self.touch_manager.selection.selection_changed {
@@ -369,7 +372,7 @@ impl Ui {
                             menu_name,
                             layer.name.as_str(),
                             text.id.as_str(),
-                            ElementKind::Text
+                            ElementKind::Text,
                         );
                         if !self.touch_manager.selection.is_selected(&text_ref) {
                             if text.being_edited {
@@ -406,7 +409,10 @@ impl Ui {
     }
 
     /// Collect all touchable elements from menus - return references, not owned Strings
-    fn collect_touchable_elements(menus: &'_ HashMap<String, Menu>, editor_mode: bool) -> Vec<TouchableElement<'_>> {
+    fn collect_touchable_elements(
+        menus: &'_ HashMap<String, Menu>,
+        editor_mode: bool,
+    ) -> Vec<TouchableElement<'_>> {
         let mut elements = Vec::new();
 
         for (menu_name, menu) in menus {
@@ -420,13 +426,14 @@ impl Ui {
                 }
 
                 for (idx, element) in layer.elements.iter().enumerate() {
-                    if element.is_active() && (editor_mode || element.is_touchable()) { // Everything is touchable in editor mode
+                    if element.is_active() && (editor_mode || element.is_touchable()) {
+                        // Everything is touchable in editor mode
                         elements.push(TouchableElement {
                             menu: menu_name.as_str(),   // &'a str - borrows from HashMap key
                             layer: layer.name.as_str(), // &'a str - borrows from Layer in Menu
                             order: layer.order,
                             idx,
-                            element
+                            element,
                         });
                     }
                 }
@@ -450,7 +457,7 @@ impl Ui {
     ) -> EventProcessingResult {
         let mut result = EventProcessingResult::default();
         // Drain events from touch manager
-        let events: Vec<TouchEvent> = self.touch_manager.events.drain().collect();
+
         // println!("events: {:?}", events.iter().flat_map(|e| match e {
         //     TouchEvent::Nothing { .. } => None,
         //     _ => Some(e)
@@ -464,160 +471,120 @@ impl Ui {
             settings,
             event_loop,
             game_state,
-            simulation
+            simulation,
         };
         // COLLECTING ui actions
-        push_commands(ui_command_queue, ctx, &events);
+        push_commands(ui_command_queue, ctx); // BEFORE DRAINING EVENTS!
 
-        for event in events {
-            self.handle_touch_event(&event, &mut result, &world.input.mouse);
-        }
+        // let events: Vec<TouchEvent> = self.touch_manager.events.drain().map(|kv|kv.1).flatten()
+        //     .chain(self.touch_manager.global_events.drain(..)).collect();
+        //for event in events {
+        self.handle_touch_events(&mut result, &world.input.mouse);
+        //}
 
         result
     }
 
     /// Handle a single touch event
-    fn handle_touch_event(
-        &mut self,
-        event: &TouchEvent,
-        result: &mut EventProcessingResult,
-        mouse: &Mouse,
-    ) {
+    fn handle_touch_events(&mut self, result: &mut EventProcessingResult, mouse: &Mouse) {
         //println!("handle_touch_event: {:?}", event);
+        for (element_ref, events) in self.touch_manager.events.clone().iter() {
+            // Bruh... I don't like this Clone!
+            for event in events {
+                match event {
+                    // HOVER EVENTS
+                    TouchEvent::HoverEnter => {
+                        self.handle_hover_enter(element_ref, result);
+                    }
+                    TouchEvent::Hovering { .. } => {}
+                    TouchEvent::HoverExit => {
+                        self.handle_hover_exit(element_ref, result);
+                    }
 
-        match event {
-            // ----------------------------------------------------------------
-            // HOVER EVENTS
-            // ----------------------------------------------------------------
-            TouchEvent::HoverEnter { element, actions } => {
-                self.handle_hover_enter(element, result);
-            }
-            TouchEvent::Hovering { .. } => {}
-            TouchEvent::HoverExit { element, actions } => {
-                self.handle_hover_exit(element, result);
-            }
+                    TouchEvent::Nothing { .. } => {}
+                    TouchEvent::Activated { .. } => {}
+                    TouchEvent::Deactivated { .. } => {}
+                    // PRESS/RELEASE EVENTS
+                    TouchEvent::Press {
+                        position,
+                        vertex_index,
+                    } => {
+                        self.handle_press(element_ref, *position, *vertex_index, result);
+                    }
+                    TouchEvent::Down { .. } => {}
+                    TouchEvent::Release { .. } => {
+                        self.handle_release(element_ref, result);
+                    }
+                    TouchEvent::Click { .. } => {
+                        self.handle_click(element_ref, result);
+                    }
+                    TouchEvent::DoubleClick { position } => {
+                        self.handle_double_click(element_ref, *position, result);
+                    }
 
-            TouchEvent::Nothing { .. } => {}
-            TouchEvent::Activated { .. } => {}
-            TouchEvent::Deactivated { .. } => {}
-            // PRESS/RELEASE EVENTS
-            TouchEvent::Press {
-                element,
-                position,
-                vertex_index,
-                actions,
-                buttons,
-            } => {
-                self.handle_press(element, *position, *vertex_index, result);
-            }
-            TouchEvent::Down { .. } => {}
-            TouchEvent::Release {
-                element,
-                position,
-                was_drag,
-                actions,
-                buttons,
-            } => {
-                self.handle_release(element, *position, *was_drag, actions.clone(), result);
-            }
-            TouchEvent::Click {
-                element,
-                position,
-                actions,
-                buttons,
-            } => {
-                self.handle_click(element, *position, actions.clone(), result);
-            }
-            TouchEvent::DoubleClick {
-                element,
-                position,
-                actions,
-                buttons,
-            } => {
-                self.handle_double_click(element, *position, result);
-            }
+                    // DRAG EVENTS
+                    TouchEvent::DragStart {
+                        start_position,
+                        vertex_index,
+                    } => {
+                        self.handle_drag_start(element_ref, *start_position, *vertex_index, result);
+                    }
+                    TouchEvent::DragMove {
+                        current_position,
+                        delta,
+                        total_delta,
+                    } => {
+                        self.handle_drag_move(element_ref, *current_position, result, mouse);
+                    }
+                    TouchEvent::DragEnd {
+                        start_position,
+                        end_position,
+                        vertex_index,
+                    } => {
+                        self.handle_drag_end(element_ref, *vertex_index, result);
+                    }
 
-            // ----------------------------------------------------------------
-            // DRAG EVENTS
-            // ----------------------------------------------------------------
-            TouchEvent::DragStart {
-                element,
-                actions,
-                buttons,
-                start_position,
-                vertex_index,
-            } => {
-                self.handle_drag_start(element, *start_position, *vertex_index, result);
-            }
-            TouchEvent::DragMove {
-                element,
-                current_position,
-                actions,
-                buttons,
-                delta,
-                total_delta,
-            } => {
-                self.handle_drag_move(element, *current_position, result, mouse);
-            }
-            TouchEvent::DragEnd {
-                element,
-                actions,
-                buttons,
-                start_position,
-                end_position,
-                vertex_index,
-            } => {
-                self.handle_drag_end(element, *vertex_index, result);
-            }
+                    // ----------------------------------------------------------------
+                    // SELECTION EVENTS
+                    // ----------------------------------------------------------------
+                    TouchEvent::SelectionRequested { additive, multi } => {
+                        self.handle_selection_requested(element_ref, *additive, *multi, result);
+                    }
+                    TouchEvent::DeselectAllRequested => {
+                        self.handle_deselect_all(result, mouse);
+                    }
+                    TouchEvent::BoxSelectStart { start } => {
+                        self.handle_box_select_start(*start, result);
+                    }
+                    TouchEvent::BoxSelectMove { current } => {
+                        self.handle_box_select_move(*current, result);
+                    }
+                    TouchEvent::BoxSelectEnd { start, end } => {
+                        self.handle_box_select_end(*start, *end, result);
+                    }
 
-            // ----------------------------------------------------------------
-            // SELECTION EVENTS
-            // ----------------------------------------------------------------
-            TouchEvent::SelectionRequested {
-                element,
-                additive,
-                multi,
-            } => {
-                self.handle_selection_requested(element, *additive, *multi, result);
-            }
-            TouchEvent::DeselectAllRequested => {
-                self.handle_deselect_all(result, mouse);
-            }
-            TouchEvent::BoxSelectStart { start } => {
-                self.handle_box_select_start(*start, result);
-            }
-            TouchEvent::BoxSelectMove { current } => {
-                self.handle_box_select_move(*current, result);
-            }
-            TouchEvent::BoxSelectEnd { start, end } => {
-                self.handle_box_select_end(*start, *end, result);
-            }
+                    TouchEvent::ScrollOnElement { delta } => {
+                        // self.handle_scroll_on_element(element, *delta, result);
+                    }
 
-            TouchEvent::ScrollOnElement {
-                element,
-                delta,
-                actions,
-            } => {
-                // self.handle_scroll_on_element(element, *delta, result);
-            }
+                    TouchEvent::TextEditRequested { element } => {
+                        self.handle_text_edit_requested(element, result);
+                    }
+                    TouchEvent::TextEditEnded { element } => {
+                        self.handle_text_edit_ended(element, result);
+                    }
 
-            TouchEvent::TextEditRequested { element } => {
-                self.handle_text_edit_requested(element, result);
+                    TouchEvent::NavigateDirection { direction } => {
+                        self.handle_navigate_direction(*direction, result);
+                    }
+                    TouchEvent::StartUp { .. } => {}
+                    _ => {}
+                }
             }
-            TouchEvent::TextEditEnded { element } => {
-                self.handle_text_edit_ended(element, result);
-            }
-
-            TouchEvent::NavigateDirection { direction } => {
-                self.handle_navigate_direction(*direction, result);
-            }
-            TouchEvent::StartUp { .. } => {}
-            _ => {}
         }
     }
 
     fn handle_hover_enter(&mut self, element: &ElementRef, result: &mut EventProcessingResult) {
-
         // Update text hover state
         if element.kind == ElementKind::Text {
             if !self.is_editable(element) {
@@ -673,14 +640,7 @@ impl Ui {
         result.mark_dirty = true;
     }
 
-    fn handle_release(
-        &mut self,
-        element: &ElementRef,
-        _position: [f32; 2],
-        was_drag: bool,
-        actions: Vec<String>,
-        result: &mut EventProcessingResult,
-    ) {
+    fn handle_release(&mut self, element: &ElementRef, result: &mut EventProcessingResult) {
         if !self.is_editable(element) {
             return;
         };
@@ -695,10 +655,9 @@ impl Ui {
     }
 
     fn handle_click(
+        // Useless Stub, huh?
         &mut self,
         element: &ElementRef,
-        _position: [f32; 2],
-        actions: Vec<String>,
         result: &mut EventProcessingResult,
     ) {
         if !self.is_editable(element) {
@@ -944,11 +903,14 @@ impl Ui {
         result: &mut EventProcessingResult,
     ) {
         // Find all elements in box
-        let elements: Vec<TouchableElement> = Self::collect_touchable_elements(&self.menus, self.touch_manager.editor.enabled);
+        let elements: Vec<TouchableElement> =
+            Self::collect_touchable_elements(&self.menus, self.touch_manager.editor.enabled);
 
         let selected = HitDetector::find_in_box(start, end, &elements);
 
-        self.touch_manager.selection.set_from_box(selected, &mut self.menus);
+        self.touch_manager
+            .selection
+            .set_from_box(selected, &mut self.menus);
         result.update_selection = true;
     }
 
@@ -1389,7 +1351,7 @@ impl Ui {
         &mut self,
         menus_dir: PathBuf,
         ap_dir: PathBuf,
-        window_size: PhysicalSize<u32>
+        window_size: PhysicalSize<u32>,
     ) -> anyhow::Result<()> {
         fs::create_dir_all(&menus_dir)?;
         fs::create_dir_all(&ap_dir)?;
@@ -1433,7 +1395,9 @@ impl Ui {
         menu: &Menu,
         window_size: PhysicalSize<u32>,
     ) -> MenuYaml {
-        let layers = menu.layers.iter()
+        let layers = menu
+            .layers
+            .iter()
             .filter(|l| l.saveable)
             .map(|l| UiLayerYaml {
                 name: l.name.clone(),
@@ -1448,7 +1412,8 @@ impl Ui {
                         .collect(),
                 ),
                 editing_tool: l.editing_tool,
-            }).collect();
+            })
+            .collect();
 
         MenuYaml {
             name: menu_name.to_string(),
@@ -1898,7 +1863,10 @@ impl Ui {
         let mut changed: bool = false;
         let now = time.total_time;
 
-        self.touch_manager.config.zoom_states.retain(|_, state| now - state.last_used <= 2.0);
+        self.touch_manager
+            .config
+            .zoom_states
+            .retain(|_, state| now - state.last_used <= 2.0);
         let do_resize_bigger_scroll = input_state.action_repeat("Resize Element Bigger Scroll");
         let do_resize_smaller_scroll = input_state.action_repeat("Resize Element Smaller Scroll");
         let do_resize_bigger = input_state.action_repeat("Resize Element Bigger");
@@ -2077,7 +2045,7 @@ impl Ui {
             opaque: true,
             saveable: false,
             editing_tool: false,
-            outline_poly_vertices: vec![]
+            outline_poly_vertices: vec![],
         });
 
         menu.layers.push(RuntimeLayer {
@@ -2093,7 +2061,7 @@ impl Ui {
             opaque: true,
             saveable: false,
             editing_tool: false,
-            outline_poly_vertices: vec![]
+            outline_poly_vertices: vec![],
         });
 
         menu.sort_layers();
@@ -2128,47 +2096,34 @@ impl Ui {
     }
 }
 
-fn push_commands(
-    ui_command_queue: &mut CommandQueue,
-    ctx: &mut CommandContext,
-    events: &Vec<TouchEvent>,
-) {
+fn push_commands(ui_command_queue: &mut CommandQueue, ctx: &mut CommandContext) {
     //let dont = "Don't use element things in global actions, only in global element actions or inside elements' actions";
     let buttons = &ctx.world.input.mouse.buttons.clone();
+    let mut global_action_events = Vec::new();
+    global_action_events.push(ActionEvent::Always);
+    if ctx.world.time.game_just_started() {
+        global_action_events.push(ActionEvent::StartUp);
+    }
+    let global_action_events = global_action_events.as_slice();
     for action in ctx.ui.global_actions.global_actions.clone().iter() {
         let element_ctx = ElementContext {
             self_element: None,
             as_element: None,
         };
 
-        if ctx.world.time.game_just_started() {
-            ui_command_queue.push_many(parse_action(
-                action,
-                ctx,
-                &ActionEvent::StartUp,
-                buttons,
-                element_ctx.clone(),
-            ));
-        }
-        ui_command_queue.push_many(parse_action(
-            action,
-            ctx,
-            &ActionEvent::Always,
-            buttons,
-            element_ctx,
-        ));
+        ui_command_queue.push_many(parse_action(action, ctx, global_action_events, element_ctx));
     }
-    for event in events {
-        let commands = actions_to_uicommands(ctx, event);
-
+    for (element_ref, mut events) in ctx.ui.touch_manager.events.clone().into_iter() {
+        //println!("{:?}", events);
+        let Some(actions) = get_element_actions(&ctx.ui.menus, &element_ref) else {
+            continue;
+        };
+        //let mut events = events.clone();
+        events.extend(ctx.ui.touch_manager.global_events.clone());
+        let events: &[TouchEvent] = events.as_slice();
+        let commands = actions_to_uicommands(ctx, &element_ref, actions.as_slice(), events);
         ui_command_queue.push_many(commands);
     }
-}
-
-// HELPER FUNCTIONS
-fn colors_equal(a: &[f32; 4], b: &[f32; 4]) -> bool {
-    const EPSILON: f32 = 0.001;
-    a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < EPSILON)
 }
 
 pub fn get_element(menus: &HashMap<String, Menu>, element: &ElementRef) -> Option<UiElement> {
@@ -2241,7 +2196,12 @@ pub fn get_element_position(
 ) -> Option<[f32; 2]> {
     Some(get_element(menus, element)?.center())
 }
-
+pub fn get_element_actions(
+    menus: &HashMap<String, Menu>,
+    element: &ElementRef,
+) -> Option<Vec<String>> {
+    Some(get_element(menus, element)?.actions())
+}
 pub fn get_element_size(
     menus: &HashMap<String, Menu>,
     element: &ElementRef,
@@ -2278,12 +2238,14 @@ pub fn get_element_kind(
     menus: &HashMap<String, Menu>,
     menu: &str,
     layer: &str,
-    id: &str
+    id: &str,
 ) -> Option<ElementKind> {
     let menu = menus.get(menu)?;
     let layer = menu.layers.iter().find(|l| l.name == layer)?;
 
-    layer.elements.iter()
+    layer
+        .elements
+        .iter()
         .find(|e| e.id() == id)
         .map(|e| e.kind())
 }
@@ -2293,5 +2255,5 @@ pub struct TouchableElement<'a> {
     pub layer: &'a str,
     pub order: u32,
     pub idx: usize,
-    pub element: &'a UiElement
+    pub element: &'a UiElement,
 }

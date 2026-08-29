@@ -5,7 +5,9 @@ elements:
     id: Button_Background
     actions:
       - "in:any, as:[str:button_text], set(str:as.pt, {ap.1}); set(str:self.size, expr:{as.size}*1.4); call(str:{ap.2});"
-      - "in:any, set(str:x, expr:{self.center.x}/{screen.x}); set(str:y, expr:{self.center.y}/{screen.y}); set(str:corner, expr:exp(-8.0*({x}*{x} + {y}*{y}))); set(str:self.color.border, [corner, expr:1-{corner}, expr:1-{corner}, 1])"
+      - "on:hovering, set(str:self.color.border, [1.0, 1.0, 1.0, 1.0])"
+      - "on:hover_exit on:activated, set(str:self.color.border, [0.1, 0.1, 0.1, 1.0])"
+      #- "in:any, set(str:x, expr:{self.center.x}/{screen.x}); set(str:y, expr:{self.center.y}/{screen.y}); set(str:corner, expr:exp(-8.0*({x}*{x} + {y}*{y}))); set(str:self.color.border, [corner, expr:1-{corner}, expr:1-{corner}, 1])"
     x: 0
     y: 0
     w: 150
@@ -16,9 +18,9 @@ elements:
       - 0.8
       - 0.05
     border_color:
-      - 0.0
-      - 1.0
-      - 1.0
+      - 0.1
+      - 0.1
+      - 0.1
       - 1.0
     roundness: 0.20
     border_thickness_percentage: 0.04

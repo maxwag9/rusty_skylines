@@ -2,7 +2,9 @@ use crate::data::Settings;
 use crate::helpers::mouse_ray::PickUniform;
 use crate::helpers::paths::data_dir;
 use crate::renderer::gtao::gtao::{GtaoBlurParams, GtaoParams, GtaoUpsampleApplyParams};
-use crate::renderer::pipelines::{FogUniforms, MeshBuffers, ToneMappingUniforms, make_dummy_buf, ColorGrade};
+use crate::renderer::pipelines::{
+    ColorGrade, FogUniforms, MeshBuffers, PostProcessUniforms, make_dummy_buf,
+};
 use crate::resources::Uniforms;
 use crate::world::camera::Camera;
 use crate::world::terrain::sky::SkyUniform;
@@ -51,7 +53,7 @@ pub fn create_fog_buffer(device: &Device) -> Buffer {
 pub fn create_tonemapping_buffer(device: &Device) -> Buffer {
     let buffer = device.create_buffer(&BufferDescriptor {
         label: Some("Tonemapping Uniform Buffer"),
-        size: size_of::<ToneMappingUniforms>() as u64,
+        size: size_of::<PostProcessUniforms>() as u64,
         usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });

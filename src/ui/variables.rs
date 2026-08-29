@@ -130,7 +130,18 @@ impl Variables {
             _ => s.parse::<usize>().ok(),
         }
     }
-
+    pub fn get_or_set_f64(&mut self, name: &str, default: f64) -> f64 {
+        match self.vars.get(name) {
+            None => {
+                self.set_f64(name, default);
+                default
+            }
+            Some(v) => match v {
+                Value::F64(v) => *v,
+                _ => unreachable!(),
+            },
+        }
+    }
     pub fn get(&self, name: &str) -> Option<Cow<'_, Value>> {
         //println!("In variables.get(): {}", name);
         let mut base = name;

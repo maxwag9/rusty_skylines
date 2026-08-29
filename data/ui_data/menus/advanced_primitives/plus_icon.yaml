@@ -18,7 +18,7 @@ elements:
       - 0.01
       - 1.0
     texture: null
-      roundness: 0.7
+    roundness: 0.7
     border_thickness_percentage: 0.2
     fade: 0.0
     blur: 4.0

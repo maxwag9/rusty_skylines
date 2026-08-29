@@ -109,7 +109,7 @@ macro_rules! define_commands {
             func_name: &str,
             args: Vec<String>,
             element_ctx: &ElementContext,
-            event_kind: &ActionEvent,
+            events: &[ActionEvent],
             buttons: &MouseButtons
         ) -> Option<UiCommand> {
             let name = func_name.to_ascii_lowercase();
@@ -117,7 +117,7 @@ macro_rules! define_commands {
             match name.as_str() {
                 $(
                     $( $name )|+ => {
-                        define_commands!(@build settings, variables, menus, touch_manager, args, element_ctx, event_kind, buttons, $variant $( { $( $field : $ftype ),* } )?)
+                        define_commands!(@build settings, variables, menus, touch_manager, args, element_ctx, events, buttons, $variant $( { $( $field : $ftype ),* } )?)
                     }
                 ),*,
                 _ => {
@@ -129,47 +129,44 @@ macro_rules! define_commands {
     };
 
     // unit variant
-    (@build $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $element_ctx:ident, $event_kind:ident, $buttons:ident, $variant:ident) => {
+    (@build $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $element_ctx:ident, $events:ident, $buttons:ident, $variant:ident) => {
     Some(UiCommand::$variant)
     };
 
     // struct variant
-    (@build $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $element_ctx:ident, $event_kind:ident, $buttons:ident, $variant:ident { $( $field:ident : $ftype:ty ),* }) => {{
+    (@build $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $element_ctx:ident, $events:ident, $buttons:ident, $variant:ident { $( $field:ident : $ftype:ty ),* }) => {{
         let mut idx = 0usize;
 
         $(
             let $field = define_commands!(
-                @parse $settings, $vars, $menus, $tm, $args, idx, $element_ctx, $event_kind, $buttons, $field, $ftype
+                @parse $settings, $vars, $menus, $tm, $args, idx, $element_ctx, $events, $buttons, $field, $ftype
             )?;
         )*
 
         Some(UiCommand::$variant { $( $field ),* })
     }};
 
-    // -----------------------------
-    // SPECIAL FIELD: element_ref
-    // -----------------------------
-
+    // SPECIAL FIELD: element_ctx
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element_ctx:ident, $event_kind:ident, $buttons:ident, element_ctx, $ftype:ty) => {{
+        $element_ctx:ident, $events:ident, $buttons:ident, element_ctx, $ftype:ty) => {{
         Some($element_ctx.clone())
     }};
 
-    // SPECIAL FIELD: event_kind
+    // SPECIAL FIELD: events
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element_ctx:ident, $event_kind:ident, $buttons:ident, event_kind, $ftype:ty) => {{
-        Some($event_kind.clone())
+        $element_ctx:ident, $events:ident, $buttons:ident, events, $ftype:ty) => {{
+        Some($events.to_vec())
     }};
 
     // SPECIAL FIELD: buttons
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element_ctx:ident, $event_kind:ident, $buttons:ident, buttons, $ftype:ty) => {{
+        $element_ctx:ident, $events:ident, $buttons:ident, buttons, $ftype:ty) => {{
         Some($buttons.clone())
     }};
 
     // SPECIAL FIELD: commands
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element_ctx:ident, $event_kind:ident, $buttons:ident, commands, $ftype:ty) => {{
+        $element_ctx:ident, $events:ident, $buttons:ident, commands, $ftype:ty) => {{
         if let Some(raw) = $args.get($idx) {
             #[allow(unused_assignments)]
             {
@@ -189,7 +186,7 @@ macro_rules! define_commands {
                         // Only split on ';' if we are not inside brackets/parens
                         let part = raw[start..i].trim();
                         if !part.is_empty() {
-                            cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $event_kind, $buttons))
+                            cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $events, $buttons))
                         }
                         start = i + 1;
                     }
@@ -200,7 +197,7 @@ macro_rules! define_commands {
             // Don't forget the last command after the final ';'
             let part = raw[start..].trim();
             if !part.is_empty() {
-                cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $event_kind, $buttons))
+                cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $events, $buttons))
             }
 
             Some(cmds)
@@ -211,7 +208,7 @@ macro_rules! define_commands {
 
     // SPECIAL FIELD: then / else_branch
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element_ctx:ident, $event_kind:ident, $buttons:ident, then, $ftype:ty) => {{
+        $element_ctx:ident, $events:ident, $buttons:ident, then, $ftype:ty) => {{
         if let Some(raw) = $args.get($idx) {
             #[allow(unused_assignments)]
             {
@@ -231,7 +228,7 @@ macro_rules! define_commands {
                         // Only split on ';' if we are not inside brackets/parens
                         let part = raw[start..i].trim();
                         if !part.is_empty() {
-                            cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $event_kind, $buttons))
+                            cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $events, $buttons))
                         }
                         start = i + 1;
                     }
@@ -242,7 +239,7 @@ macro_rules! define_commands {
             // Don't forget the last command after the final ';'
             let part = raw[start..].trim();
             if !part.is_empty() {
-                cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $event_kind, $buttons))
+                cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $events, $buttons))
             }
 
             Some(cmds)
@@ -252,7 +249,7 @@ macro_rules! define_commands {
     }};
 
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element_ctx:ident, $event_kind:ident, $buttons:ident, else_branch, $ftype:ty) => {{
+        $element_ctx:ident, $events:ident, $buttons:ident, else_branch, $ftype:ty) => {{
         if let Some(raw) = $args.get($idx) {
             #[allow(unused_assignments)]
             {
@@ -272,7 +269,7 @@ macro_rules! define_commands {
                         // Only split on ';' if we are not inside brackets/parens
                         let part = raw[start..i].trim();
                         if !part.is_empty() {
-                            cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $event_kind, $buttons))
+                            cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $events, $buttons))
                         }
                         start = i + 1;
                     }
@@ -283,7 +280,7 @@ macro_rules! define_commands {
             // Don't forget the last command after the final ';'
             let part = raw[start..].trim();
             if !part.is_empty() {
-                cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $event_kind, $buttons))
+                cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $events, $buttons))
             }
 
             Some(cmds)
@@ -292,7 +289,7 @@ macro_rules! define_commands {
         }
     }};
 
-    (@branch $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident, $element_ctx:ident, $event_kind:ident, $buttons:ident) => {{
+    (@branch $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident, $element_ctx:ident, $events:ident, $buttons:ident) => {{
         let raw = $args.get($idx)?;
         #[allow(unused_assignments)]
         {
@@ -302,7 +299,7 @@ macro_rules! define_commands {
         let cmds = raw.split(';')
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element_ctx, $event_kind, $buttons)).flatten()
+            .map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element_ctx, $events, $buttons)).flatten()
             .collect();
 
         Some(cmds)
@@ -310,7 +307,7 @@ macro_rules! define_commands {
     // SPECIAL FIELD: raw String
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident,
         $args:ident, $idx:ident,
-        $element_ctx:ident, $event_kind:ident, $buttons:ident,
+        $element_ctx:ident, $events:ident, $buttons:ident,
         $field:ident, String) => {{
 
         let val = $args.get($idx)
@@ -323,7 +320,7 @@ macro_rules! define_commands {
     }};
     // GENERIC FIELD PARSER
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element_ctx:ident, $event_kind:ident, $buttons:ident, $field:ident, $ftype:ty) => {{
+        $element_ctx:ident, $events:ident, $buttons:ident, $field:ident, $ftype:ty) => {{
 
         let val = <$ftype as ParseArg>::parse_arg(&$args, &mut $idx)?;
         Some(val)
@@ -437,7 +434,7 @@ define_commands! {
     "exit_game" | "leave_game"
         => ExitGame,
 
-    "show_interaction" => ShowInteraction { element_ctx: ElementContext, event_kind: TouchEventKind, buttons: MouseButtons, color: String, shadow: bool },
+    "show_interaction" => ShowInteraction { element_ctx: ElementContext, events: Vec<ActionEvent>, buttons: MouseButtons, color: String, shadow: bool },
     // ===== DEBUG COMMANDS =====
     "print" | "log" | "echo"
         => Print { element_ctx: ElementContext, statement: String },
@@ -448,7 +445,7 @@ define_commands! {
     "debug_menus" | "debugmenus"
         => DebugMenus,
 
-    "call" => Call { element_ctx: ElementContext, event_kind: TouchEventKind, buttons: MouseButtons, function_name: String, args: Option<String> },
+    "call" => Call { element_ctx: ElementContext, events: Vec<ActionEvent>, buttons: MouseButtons, function_name: String, args: Option<String> },
 
     // ===== UTILITY =====
     "noop" | "no_op" | "none"
@@ -477,179 +474,99 @@ pub enum ActionEvent {
     DragStart,
     DragEnd,
 }
-pub fn actions_to_uicommands(ctx: &mut CommandContext, event: &TouchEvent) -> Vec<UiCommand> {
-    let (event_kind, actions, element, buttons) = match event {
-        TouchEvent::HoverEnter { actions, element } => (
-            ActionEvent::HoverEnter,
-            actions,
-            element,
-            MouseButtons::default(),
-        ),
-        TouchEvent::Hovering { actions, element } => (
-            ActionEvent::Hovering,
-            actions,
-            element,
-            MouseButtons::default(),
-        ),
-        TouchEvent::HoverExit { actions, element } => (
-            ActionEvent::HoverExit,
-            actions,
-            element,
-            MouseButtons::default(),
-        ),
-        TouchEvent::Press {
-            actions,
-            element,
-            buttons,
-            ..
-        } => (ActionEvent::Press, actions, element, *buttons),
-        TouchEvent::Down {
-            actions,
-            element,
-            buttons,
-            ..
-        } => (ActionEvent::Down, actions, element, *buttons),
-        TouchEvent::Release {
-            actions,
-            element,
-            buttons,
-            ..
-        } => (ActionEvent::Release, actions, element, *buttons),
-        TouchEvent::Click {
-            actions,
-            element,
-            buttons,
-            ..
-        } => (ActionEvent::Click, actions, element, *buttons),
-        TouchEvent::DoubleClick {
-            actions,
-            element,
-            buttons,
-            ..
-        } => (ActionEvent::DoubleClick, actions, element, *buttons),
-        TouchEvent::DragStart {
-            element,
-            actions,
-            buttons,
-            ..
-        } => (ActionEvent::DragStart, actions, element, *buttons),
-        TouchEvent::DragMove {
-            element,
-            actions,
-            buttons,
-            ..
-        } => (ActionEvent::DragMove, actions, element, *buttons),
-        TouchEvent::DragEnd {
-            element,
-            actions,
-            buttons,
-            ..
-        } => (ActionEvent::DragEnd, actions, element, *buttons),
-        TouchEvent::ScrollOnElement {
-            actions,
-            element,
-            delta,
-        } => {
-            //println!("SCROLLED!!");
-            ctx.ui.variables.set_f64("scroll_delta", *delta);
-            (
-                ActionEvent::ScrollOnElement,
-                actions,
-                element,
-                MouseButtons::default(),
-            )
-        }
-        TouchEvent::SelectionRequested { element, .. } => {
-            //println!("{:?}", element);
-            (
-                ActionEvent::Select,
-                &vec![],
-                element,
-                MouseButtons::default(),
-            )
-        }
-        TouchEvent::DeselectAllRequested {} => (
-            ActionEvent::DeSelect,
-            &vec![],
-            &ElementRef::default(),
-            MouseButtons::default(),
-        ),
-        TouchEvent::Nothing { element, actions } => (
-            ActionEvent::Nothing,
-            actions,
-            element,
-            MouseButtons::default(),
-        ),
-        TouchEvent::Activated {
-            actions,
-            element,
-            buttons,
-            ..
-        } => (ActionEvent::Activated, actions, element, *buttons),
-        TouchEvent::Deactivated {
-            actions,
-            element,
-            buttons,
-            ..
-        } => (ActionEvent::Deactivated, actions, element, *buttons),
-        TouchEvent::StartUp { actions, element } => (
-            ActionEvent::StartUp,
-            actions,
-            element,
-            MouseButtons::default(),
-        ),
-        TouchEvent::ScreenResize { actions, element } => (
-            ActionEvent::ScreenResize,
-            actions,
-            element,
-            MouseButtons::default(),
-        ),
-        _ => return vec![],
-    };
+fn touch_event_to_action_event(ctx: &mut CommandContext, event: &TouchEvent) -> ActionEvent {
+    match event {
+        TouchEvent::HoverEnter { .. } => ActionEvent::HoverEnter,
 
-    let mut cmds = Vec::new();
-    let layer_actions = ctx.ui.menus
+        TouchEvent::Hovering { .. } => ActionEvent::Hovering,
+
+        TouchEvent::HoverExit { .. } => ActionEvent::HoverExit,
+
+        TouchEvent::Press { .. } => ActionEvent::Press,
+
+        TouchEvent::Down { .. } => ActionEvent::Down,
+
+        TouchEvent::Release { .. } => ActionEvent::Release,
+
+        TouchEvent::Click { .. } => ActionEvent::Click,
+
+        TouchEvent::DoubleClick { .. } => ActionEvent::DoubleClick,
+
+        TouchEvent::DragStart { .. } => ActionEvent::DragStart,
+
+        TouchEvent::DragMove { .. } => ActionEvent::DragMove,
+
+        TouchEvent::DragEnd { .. } => ActionEvent::DragEnd,
+
+        TouchEvent::ScrollOnElement { delta, .. } => {
+            ctx.ui.variables.set_f64("scroll_delta", *delta);
+            ActionEvent::ScrollOnElement
+        }
+
+        TouchEvent::SelectionRequested { .. } => ActionEvent::Select,
+
+        TouchEvent::DeselectAllRequested {} => ActionEvent::DeSelect,
+
+        TouchEvent::Nothing { .. } => ActionEvent::Nothing,
+
+        TouchEvent::Activated { .. } => ActionEvent::Activated,
+
+        TouchEvent::Deactivated { .. } => ActionEvent::Deactivated,
+
+        TouchEvent::StartUp { .. } => ActionEvent::StartUp,
+
+        TouchEvent::ScreenResize { .. } => ActionEvent::ScreenResize,
+
+        _ => ActionEvent::Nothing,
+    }
+}
+pub fn actions_to_uicommands(
+    ctx: &mut CommandContext,
+    element: &ElementRef,
+    actions: &[String],
+    events: &[TouchEvent],
+) -> Vec<UiCommand> {
+    let layer_actions = ctx
+        .ui
+        .menus
         .get(element.menu.as_str())
         .and_then(|m| m.layers.iter().find(|l| l.name == element.layer))
         .map(|l| l.actions.clone())
         .unwrap_or_default();
 
-    for action in actions.iter()
-        .chain(ctx.ui.global_actions.element_actions.clone().iter())
+    let events: Vec<ActionEvent> = events
+        .iter()
+        .map(|event| touch_event_to_action_event(ctx, event))
+        .collect();
+    let events = events.as_slice();
+    let mut cmds = Vec::new();
+    let all_actions: Vec<String> = actions
+        .iter()
+        .chain(ctx.ui.global_actions.element_actions.iter())
         .chain(layer_actions.iter())
-    {
-        let element_ctx = ElementContext {
+        .cloned()
+        .collect::<Vec<String>>();
+    for action in all_actions.iter() {
+        let element = ElementContext {
             self_element: Some(element.clone()),
             as_element: None,
         };
-        cmds.extend(parse_action(
-            action,
-            ctx,
-            &event_kind,
-            &buttons,
-            element_ctx,
-        ))
+        cmds.extend(parse_action(action, ctx, events, element));
     }
+
     cmds
 }
 pub fn parse_action(
     action: &String,
     ctx: &mut CommandContext,
-    event_kind: &ActionEvent,
-    buttons: &MouseButtons,
+    events: &[ActionEvent],
     mut element_ctx: ElementContext,
 ) -> Vec<UiCommand> {
     let mut action_owned = action.clone();
 
     let filters = parse_action_filters(ctx, &mut element_ctx, &mut action_owned);
 
-    if filters_match(
-        &mut ctx.world.input,
-        ctx.settings,
-        &filters,
-        &event_kind,
-        &buttons,
-    ) {
+    if filters_match(&mut ctx.world.input, ctx.settings, &filters, events) {
         // Now action_owned only contains the actual command
         return parse_primitive_action(
             ctx.settings,
@@ -658,8 +575,8 @@ pub fn parse_action(
             &ctx.ui.touch_manager,
             action_owned.trim(),
             &element_ctx,
-            event_kind,
-            buttons,
+            events,
+            &ctx.world.input.mouse.buttons,
         );
     };
     vec![]
@@ -668,7 +585,7 @@ pub fn parse_action(
 fn handle_action_str(
     settings: &Settings,
     ui: &mut Ui,
-    event_kind: &ActionEvent,
+    events: &[ActionEvent],
     buttons: &MouseButtons,
     action: &str,
     element_ctx: &ElementContext,
@@ -719,27 +636,20 @@ fn handle_action_str(
     };
 
     let inner = s[open_paren + 1..close_paren].trim();
-    process_inner_content(settings, ui, event_kind, buttons, inner, element_ctx)
+    process_inner_content(settings, ui, events, buttons, inner, element_ctx)
 }
 
 /// Process the inner content of a matched event wrapper
 fn process_inner_content(
     settings: &Settings,
     ui: &mut Ui,
-    event_kind: &ActionEvent,
+    events: &[ActionEvent],
     buttons: &MouseButtons,
     inner: &str,
     element_ctx: &ElementContext,
 ) -> Vec<UiCommand> {
     for part in split_top_level(inner, b',') {
-        let cmds = handle_action_str(
-            settings,
-            ui,
-            event_kind,
-            buttons,
-            part,
-            element_ctx,
-        );
+        let cmds = handle_action_str(settings, ui, events, buttons, part, element_ctx);
 
         if !cmds.is_empty() {
             return cmds;
@@ -752,7 +662,7 @@ fn process_inner_content(
             &ui.touch_manager,
             part,
             element_ctx,
-            event_kind,
+            events,
             buttons,
         );
 
@@ -972,19 +882,15 @@ fn split_top_level(s: &str, delimiter: u8) -> Vec<&str> {
             b'{' => brace_depth += 1,
             b'}' => brace_depth -= 1,
 
-            _ if b == delimiter
-                && paren_depth == 0
-                && bracket_depth == 0
-                && brace_depth == 0 =>
-                {
-                    let part = s[start..i].trim();
+            _ if b == delimiter && paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                let part = s[start..i].trim();
 
-                    if !part.is_empty() {
-                        parts.push(part);
-                    }
-
-                    start = i + 1;
+                if !part.is_empty() {
+                    parts.push(part);
                 }
+
+                start = i + 1;
+            }
 
             _ => {}
         }
@@ -1006,7 +912,7 @@ fn parse_primitive_action(
     touch_manager: &UiTouchManager,
     action: &str,
     element_ctx: &ElementContext,
-    event_kind: &ActionEvent,
+    events: &[ActionEvent],
     buttons: &MouseButtons,
 ) -> Vec<UiCommand> {
     let s = action.trim();
@@ -1027,7 +933,7 @@ fn parse_primitive_action(
                     touch_manager,
                     part,
                     element_ctx,
-                    event_kind,
+                    events,
                     buttons,
                 )
             })
@@ -1068,7 +974,7 @@ fn parse_primitive_action(
                 func_name,
                 args,
                 element_ctx,
-                event_kind,
+                events,
                 buttons,
             ) {
                 out.push(cmd);
@@ -1083,7 +989,7 @@ fn parse_primitive_action(
                     touch_manager,
                     rest,
                     element_ctx,
-                    event_kind,
+                    events,
                     buttons,
                 ));
             }
@@ -1100,7 +1006,7 @@ fn parse_primitive_action(
         s,
         Vec::new(),
         element_ctx,
-        event_kind,
+        events,
         buttons,
     ) {
         out.push(cmd);
@@ -1112,9 +1018,9 @@ fn parse_primitive_action(
 fn button_matches(
     input: &mut Input,
     button: ParsedButton,
-    buttons: &MouseButtons,
     keybind_trigger: KeyBindTrigger,
 ) -> bool {
+    let buttons = &input.mouse.buttons;
     let state = match button {
         ParsedButton::Any => return true,
         ParsedButton::Left => &buttons.left,
@@ -1519,15 +1425,14 @@ fn filters_match(
     input: &mut Input,
     settings: &Settings,
     filters: &ActionFilters,
-    event_kind: &ActionEvent,
-    buttons: &MouseButtons,
+    events: &[ActionEvent],
 ) -> bool {
     // Check button filters (if any specified, at least one must match)
     if !filters.buttons.is_empty() {
         let any_button_matches = filters
             .buttons
             .iter()
-            .any(|b| button_matches(input, b.clone(), buttons, filters.keybind_trigger));
+            .any(|b| button_matches(input, b.clone(), filters.keybind_trigger));
         if !any_button_matches {
             return false;
         }
@@ -1535,7 +1440,7 @@ fn filters_match(
 
     // Check event filters (if any specified, at least one must match)
     if !filters.events.is_empty() {
-        let any_event_matches = filters.events.iter().any(|e| e == event_kind);
+        let any_event_matches = filters.events.iter().any(|e| events.contains(e));
         if !any_event_matches {
             if !filters.events.iter().any(|e| e == &ActionEvent::Always) {
                 return false;
@@ -1593,12 +1498,15 @@ fn testing_slider() {
     let num_steps: f64 = (min - max).abs();
     let px_per_step: f64 = slider_bar_width / num_steps;
 
-
     let target_x = mouse_x;
     let left_step = target_x - px_per_step;
     let right_step = target_x + px_per_step;
     let abs_left = (target_x - left_step).abs();
     let abs_right = (target_x - right_step).abs();
 
-    let knob_x = if abs_left < abs_right { left_step } else { right_step };
+    let knob_x = if abs_left < abs_right {
+        left_step
+    } else {
+        right_step
+    };
 }

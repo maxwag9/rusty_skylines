@@ -1,4 +1,3 @@
-// tonemap.wgsl
 struct VSOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -22,95 +21,209 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VSOut {
     out.pos = vec4(positions[i], 0.0, 1.0);
     out.uv = uvs[i];
     out.uv.y = 1.0 - out.uv.y;
+
     return out;
 }
-@group(0) @binding(0) var hdr_sampler: sampler;
-@group(0) @binding(2) var hdr_tex: texture_2d<f32>;
-@group(0) @binding(3) var ui_tex: texture_2d<f32>;
 
-struct ToneMappingUniforms {
+// Post processing uniforms
+//
+// tone_abcd = ACES parameters a,b,c,d
+// tone_e.x  = ACES parameter e
+// tone_e.y  = exposure
+// tone_e.z  = brightness
+// tone_e.w  = contrast
+//
+// lift      = RGB lift
+// gamma     = RGB gamma
+// gain      = RGB gain
+//
+// color_adj.x = saturation
+// color_adj.y = vignette strength
+// color_adj.z = vignette radius
+// color_adj.w = vignette softness
+//
+// vignette.x = center X
+// vignette.y = center Y
+
+struct PostProcessUniforms {
+    tone_abcd: vec4<f32>,
+    tone_e: vec4<f32>,
+
+    lift: vec4<f32>,
+    gamma: vec4<f32>,
+    gain: vec4<f32>,
+
+    color_adj: vec4<f32>,
+    vignette: vec4<f32>,
+};
+
+@group(1) @binding(0)
+var<uniform> post: PostProcessUniforms;
+
+fn tonemap_aces(
     a: f32,
     b: f32,
     c: f32,
     d: f32,
-    e: f32
+    e: f32,
+    x: vec3<f32>,
+) -> vec3<f32> {
+    return clamp(
+        (x * (a * x + b)) /
+        (x * (c * x + d) + e),
+        vec3(0.0),
+        vec3(1.0)
+    );
 }
-@group(1) @binding(0)
-var<uniform> tm_uniforms: ToneMappingUniforms;
-
-fn tonemap_aces(a: f32, b: f32, c: f32, d: f32, e: f32, x: vec3<f32>) -> vec3<f32> {
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3(0.0), vec3(1.0));
-}
-struct ColorGrade {
-    lift: vec4<f32>,
-    gamma: vec4<f32>,
-    gain: vec4<f32>,
-}
-
-@group(1) @binding(1)
-var<uniform> color_grade: ColorGrade;
 
 fn apply_color_grade(color: vec3<f32>) -> vec3<f32> {
     var c = color;
 
     // Lift shadows
-    c += color_grade.lift.xyz;
+    c += post.lift.xyz;
 
     // Gamma controls midtones
     c = pow(
         max(c, vec3(0.0)),
-        vec3(1.0) / color_grade.gamma.xyz
+        vec3(1.0) / max(post.gamma.xyz, vec3(0.0001))
     );
 
     // Gain controls highlights
-    c *= color_grade.gain.xyz;
+    c *= post.gain.xyz;
 
     return c;
 }
+
+fn apply_saturation(color: vec3<f32>, saturation: f32) -> vec3<f32> {
+    let luminance = dot(
+        color,
+        vec3(0.2126, 0.7152, 0.0722)
+    );
+
+    return mix(
+        vec3(luminance),
+        color,
+        saturation
+    );
+}
+fn vignette(uv: vec2<f32>, aspect: f32) -> f32 {
+    let center = vec2(
+        post.vignette.x,
+        post.vignette.y
+    );
+
+    let p = (uv - center) * vec2(aspect, 1.0);
+
+    let max_dist = length(vec2(aspect, 1.0) * 0.5);
+    let dist = length(p) / max_dist;
+
+    let t = smoothstep(
+        post.color_adj.z,
+        post.color_adj.z + post.color_adj.w,
+        dist
+    );
+
+    return 1.0 - t * post.color_adj.y;
+}
+
 struct FSOut {
     @location(0) surface: vec4<f32>,
     @location(1) screenshot: vec4<f32>,
 };
+
+
 @fragment
 fn fs_main(in: VSOut) -> FSOut {
     var out: FSOut;
+
     let uv = in.uv;
 
-    let hdr = textureSample(hdr_tex, hdr_sampler, uv).rgb;
+    let hdr = textureSample(
+        hdr_tex,
+        hdr_sampler,
+        uv
+    ).rgb;
 
     #ifdef TONEMAP_UI
-        // UI participates in tonemapping
-        let ui = textureSample(ui_tex, hdr_sampler, uv);
-        let processed_input = mix(hdr, ui.rgb, ui.a);
+        // UI gets HDR post processing
+        let ui = textureSample(
+            ui_tex,
+            hdr_sampler,
+            uv
+        );
+
+        let processed_input = mix(
+            hdr,
+            ui.rgb,
+            ui.a
+        );
     #else
-        // Keep UI out of HDR post processing
+        // UI doesn't get HDR post processing
         let processed_input = hdr;
     #endif
 
-    let dims = vec2<f32>(textureDimensions(hdr_tex, 0));
+    let exposed = processed_input * pow(
+        2.0,
+        post.tone_e.y
+    );
+
+    let dims = vec2<f32>(
+        textureDimensions(hdr_tex, 0)
+    );
+
     let aspect = dims.x / dims.y;
 
-    let v = vignette(uv, 0.70, 0.65, 0.40, aspect);
+    let v = vignette(
+        uv,
+        aspect
+    );
 
-    // HDR post processing
-    let hdr_v = processed_input * v;
-    let graded = apply_color_grade(hdr_v);
+    let vignetted = exposed * v;
+
+    let graded = apply_color_grade(
+        vignetted
+    );
+
+    let brightness = graded + vec3(
+        post.tone_e.z
+    );
+
+    let contrasted =
+        (brightness - vec3(0.5)) *
+        post.tone_e.w +
+        vec3(0.5);
+
+    let adjusted = apply_saturation(
+        contrasted,
+        post.color_adj.x
+    );
 
     let color = tonemap_aces(
-        tm_uniforms.a,
-        tm_uniforms.b,
-        tm_uniforms.c,
-        tm_uniforms.d,
-        tm_uniforms.e,
-        graded
+        post.tone_abcd.x,
+        post.tone_abcd.y,
+        post.tone_abcd.z,
+        post.tone_abcd.w,
+        post.tone_e.x,
+        adjusted
     );
+
 
     #ifdef TONEMAP_UI
         let final_color = color;
     #else
-        let ui = textureSample(ui_tex, hdr_sampler, uv);
-        let final_color = mix(color, ui.rgb, ui.a);
+        let ui = textureSample(
+            ui_tex,
+            hdr_sampler,
+            uv
+        );
+
+        let final_color = mix(
+            color,
+            ui.rgb,
+            ui.a
+        );
     #endif
+
 
     out.surface = vec4(final_color, 1.0);
     out.screenshot = vec4(final_color, 1.0);
@@ -118,13 +231,11 @@ fn fs_main(in: VSOut) -> FSOut {
     return out;
 }
 
-fn vignette(uv: vec2<f32>, strength: f32, radius: f32, softness: f32, aspect: f32) -> f32 {
-    let p = (uv - vec2(0.5, 0.5)) * vec2(aspect, 1.0);
+@group(0) @binding(0)
+var hdr_sampler: sampler;
 
-    let max_dist = length(vec2(aspect, 1.0) * 0.5);
-    let dist = length(p) / max_dist;
+@group(0) @binding(2)
+var hdr_tex: texture_2d<f32>;
 
-    let t = smoothstep(radius, radius + softness, dist);
-
-    return 1.0 - t * strength;
-}
+@group(0) @binding(3)
+var ui_tex: texture_2d<f32>;

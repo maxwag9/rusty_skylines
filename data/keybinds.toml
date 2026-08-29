@@ -168,3 +168,6 @@ keys = ["ESC", "MouseBack"]
 keys = ["ESC", "MouseBack"]
 ["Exit to Main Menu"]
 keys = ["ESC", "MouseBack"]
+
+["Toggle Fullscreen"]
+keys = ["F11"]

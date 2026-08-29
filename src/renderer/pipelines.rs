@@ -84,10 +84,12 @@ impl ToneMappingUniforms {
             ToneMappingState::Night => Self::night(),
             ToneMappingState::Cinematic => Self::cinematic(),
             ToneMappingState::Mexico => Self::mexico(),
-            ToneMappingState::Off => Self::off()
+            ToneMappingState::Off => Self::off(),
         }
     }
-
+    pub fn as_slice(&self) -> [f32; 5] {
+        [self.a, self.b, self.c, self.d, self.e]
+    }
     /// Crisp midday sun — clean ACES with gently lifted shadows and a slightly
     /// earlier shoulder so blown-out rooftops don't go paper-white.
     fn sunny_day() -> Self {
@@ -172,6 +174,117 @@ impl ToneMappingUniforms {
     }
 }
 
+use crate::ui::variables::Variables;
+use bytemuck::{Pod, Zeroable};
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct PostProcessUniforms {
+    // x = a
+    // y = b
+    // z = c
+    // w = d
+    pub tone_abcd: [f32; 4],
+
+    // x = e
+    // y = exposure
+    // z = brightness
+    // w = contrast
+    pub tone_e: [f32; 4],
+
+    // RGB color grade lift
+    // w unused
+    pub lift: [f32; 4],
+
+    // RGB color grade gamma
+    // w unused
+    pub gamma: [f32; 4],
+
+    // RGB color grade gain
+    // w unused
+    pub gain: [f32; 4],
+
+    // x = saturation
+    // y = vignette strength
+    // z = vignette radius
+    // w = vignette softness
+    pub color_adj: [f32; 4],
+
+    // x = vignette center X
+    // y = vignette center Y
+    // z/w unused
+    pub vignette: [f32; 4],
+}
+impl Default for PostProcessUniforms {
+    fn default() -> Self {
+        Self {
+            // a, b, c, d
+            tone_abcd: [2.51, 0.03, 2.43, 0.59],
+
+            // e, exposure, brightness, contrast
+            tone_e: [
+                0.14, 0.0, // exposure
+                0.0, // brightness
+                1.0, // contrast
+            ],
+
+            // lift
+            lift: [0.0, 0.0, 0.0, 0.0],
+
+            // gamma
+            gamma: [1.0, 1.0, 1.0, 1.0],
+
+            // gain
+            gain: [1.0, 1.0, 1.0, 1.0],
+
+            // saturation, vignette strength, radius, softness
+            color_adj: [1.0, 0.40, 0.60, 0.70],
+
+            // vignette center
+            vignette: [0.50, 0.50, 0.0, 0.0],
+        }
+    }
+}
+
+impl PostProcessUniforms {
+    pub fn new(tonemap: [f32; 5], color_grade: ColorGrade, variables: &mut Variables) -> Self {
+        let mut pp_uniforms = Self::default();
+
+        pp_uniforms.tone_abcd = [tonemap[0], tonemap[1], tonemap[2], tonemap[3]];
+
+        let exposure = variables.get_or_set_f64("exposure", 0.0);
+        let brightness = variables.get_or_set_f64("brightness", 0.0);
+        let contrast = variables.get_or_set_f64("contrast", 1.0);
+        let saturation = variables.get_or_set_f64("saturation", 1.0);
+
+        let vignette_strength = variables.get_or_set_f64("vignette_strength", 0.0);
+        let vignette_radius = variables.get_or_set_f64("vignette_radius", 0.60);
+        let vignette_softness = variables.get_or_set_f64("vignette_softness", 0.70);
+
+        pp_uniforms.tone_e = [
+            tonemap[4],
+            exposure as f32,
+            brightness as f32,
+            contrast as f32,
+        ];
+
+        pp_uniforms.lift = color_grade.lift;
+        pp_uniforms.gamma = color_grade.gamma;
+        pp_uniforms.gain = color_grade.gain;
+
+        pp_uniforms.color_adj = [
+            saturation as f32,
+            vignette_strength as f32,
+            vignette_radius as f32,
+            vignette_softness as f32,
+        ];
+
+        pp_uniforms.vignette = [0.5, 0.5, 0.0, 0.0];
+
+        pp_uniforms
+    }
+}
+
 #[derive(
     Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize, Display, EnumString,
 )]
@@ -209,7 +322,7 @@ impl ColorGrade {
             ColorGradeState::Cold => Self::cold(),
             ColorGradeState::Vintage => Self::vintage(),
             ColorGradeState::HighContrast => Self::high_contrast(),
-            ColorGradeState::Off => Self::off()
+            ColorGradeState::Off => Self::off(),
         }
     }
 
@@ -312,8 +425,7 @@ pub struct UniformBuffers {
     pub sky: Buffer,
     pub water: Buffer,
     pub fog: Buffer,
-    pub tonemapping: Buffer,
-    pub color_grading: Buffer,
+    pub post_processing: Buffer,
     pub pick: Buffer,
     pub gtao: Buffer,
     pub gtao_blur: Buffer,
@@ -372,8 +484,7 @@ impl Pipelines {
             sky: create_sky_buffer(device),
             water: create_water_buffer(device),
             fog: create_fog_buffer(device),
-            tonemapping: create_tonemapping_buffer(device),
-            color_grading: create_color_grade_buffer(device),
+            post_processing: create_tonemapping_buffer(device),
             pick: create_pick_buffer(device),
             gtao: create_gtao_buffer(device, settings),
             gtao_blur: create_gtao_blur_buffer(device, settings),
@@ -388,7 +499,7 @@ impl Pipelines {
             resolved,
             post_fx,
             buffers: uniforms,
-            resources
+            resources,
         })
     }
 

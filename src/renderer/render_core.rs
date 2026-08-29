@@ -11,13 +11,17 @@ use crate::renderer::ray_tracing::rt_pass::render_ray_tracing;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::render_passes::*;
 use crate::renderer::shader_watcher::ShaderWatcher;
-use crate::renderer::shadows::{render_buildings_shadows, render_cars_shadows, render_roads_shadows, render_terrain_shadows, ShadowMatUniform, CSM_CASCADES};
+use crate::renderer::shadows::{
+    CSM_CASCADES, ShadowMatUniform, render_buildings_shadows, render_cars_shadows,
+    render_roads_shadows, render_terrain_shadows,
+};
 use crate::renderer::ui::{ScreenUniform, UiRenderer};
 use crate::renderer::ui_pipelines::multisample_state;
 use crate::renderer::uniform_updates::UniformUpdater;
 use crate::resources::{FrameTimeCheckpointType, Time};
 use crate::ui::input::Input;
 use crate::ui::ui_editor::Ui;
+use crate::ui::variables::Variables;
 use crate::world::astronomy::*;
 use crate::world::buildings::buildings::{BuildingRenderer, Buildings};
 use crate::world::buildings::zoning::Zoning;
@@ -29,15 +33,15 @@ use crate::world::terrain::terrain_gen::TerrainGenerator;
 use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
 use crate::world::world::World;
 use glam::UVec2;
+use glyphon::Resolution;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
-use glyphon::Resolution;
-use wgpu::wgt::PollType;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
+use wgpu::wgt::PollType;
 use wgpu::*;
 use wgpu_render_manager::compute_system::{BufferSet, ComputePipelineOptions};
 use wgpu_render_manager::fullscreen::{DebugVisualization, DepthDebugParams};
@@ -47,7 +51,6 @@ use wgpu_render_manager::renderer::RenderManager;
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
-use crate::ui::variables::Variables;
 
 pub struct Renderer {
     // gpu objects
@@ -70,7 +73,7 @@ pub struct Renderer {
     pub car_renderer: CarRenderSubsystem,
     pub building_renderer: BuildingRenderer,
     pub gizmo: Gizmo,
-    pub props: Props
+    pub props: Props,
 }
 
 impl Renderer {
@@ -82,7 +85,7 @@ impl Renderer {
         adapter: Adapter,
         settings: &Settings,
         camera: &Camera,
-        props: Props
+        props: Props,
     ) -> Self {
         let shader_watcher = ShaderWatcher::new().ok();
 
@@ -157,7 +160,10 @@ impl Renderer {
         self.ui_renderer.pipelines.resize(&self.config);
         self.render_manager.invalidate_bind_groups();
         ui.resize(self.old_window_size, new_size);
-        let res = Resolution { width: self.old_window_size.width, height: self.old_window_size.height };
+        let res = Resolution {
+            width: self.old_window_size.width,
+            height: self.old_window_size.height,
+        };
         self.ui_renderer.viewport.update(&self.queue, res);
     }
 
@@ -195,7 +201,8 @@ impl Renderer {
         let buildings = &world.buildings;
         let surface_view = frame.texture.create_view(&TextureViewDescriptor::default());
 
-        let mut encoder = self.device
+        let mut encoder = self
+            .device
             .create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
@@ -210,7 +217,7 @@ impl Renderer {
                     time,
                     settings,
                     terrain,
-                    buildings
+                    buildings,
                 );
             });
             self.execute_main_pass(
@@ -225,7 +232,7 @@ impl Renderer {
                 terrain,
                 &world.buildings,
                 &world.cars.car_storage(),
-                settings
+                settings,
             );
         });
 
@@ -242,13 +249,14 @@ impl Renderer {
         if settings.render_debug_print {
             print!(" [render] after present");
         }
-        self.profiler.end_frame(&self.device, &self.queue, &mut ui.variables);
+        self.profiler
+            .end_frame(&self.device, &self.queue, &mut ui.variables);
     }
 
     pub fn update_render(
         &mut self,
         world: &mut World,
-        ui_loader: &mut Ui,
+        ui: &mut Ui,
         settings: &Settings,
         aspect: f32,
         screen_size: UVec2,
@@ -259,7 +267,7 @@ impl Renderer {
         let terrain = &mut world.terrain;
         self.update_defines(settings);
 
-        self.check_shader_changes(ui_loader);
+        self.check_shader_changes(ui);
 
         let (view, proj, view_proj) = camera.matrices();
         let prev_view_proj = camera.prev_view_proj;
@@ -270,7 +278,15 @@ impl Renderer {
             reversed_z: settings.reversed_depth_z as u32,
             msaa_samples: self.msaa_samples,
         });
-        self.update_uniforms(camera, astronomy, time, aspect, terrain, settings);
+        self.update_uniforms(
+            camera,
+            astronomy,
+            time,
+            aspect,
+            terrain,
+            settings,
+            &mut ui.variables,
+        );
 
         // upload per-cascade shadow uniforms ONCE (outside encoder)
         for i in 0..CSM_CASCADES {
@@ -292,7 +308,7 @@ impl Renderer {
             settings,
             &mut world.input,
             time,
-            ui_loader,
+            ui,
             terrain,
             &mut world.roads,
             &world.cars,
@@ -310,6 +326,7 @@ impl Renderer {
         aspect: f32,
         terrain_subsystem: &Terrain,
         settings: &Settings,
+        variables: &mut Variables,
     ) {
         let mut updater = UniformUpdater::new(&self.queue, &mut self.pipelines);
         updater.update_camera_uniforms(
@@ -324,7 +341,11 @@ impl Renderer {
         updater.update_fog_uniforms(&self.config, camera);
         updater.update_sky_uniforms(astronomy);
         updater.update_water_uniforms();
-        updater.update_tonemapping_uniforms(settings.tonemapping_state, settings.color_grading_state);
+        updater.update_tonemapping_uniforms(
+            settings.tonemapping_state,
+            settings.color_grading_state,
+            variables,
+        );
         updater.update_ssao_uniforms(time, settings, camera.prev_view_proj);
     }
 
@@ -532,7 +553,7 @@ impl Renderer {
         terrain: &Terrain,
         buildings: &Buildings,
         car_storage: &CarStorage,
-        settings: &Settings
+        settings: &Settings,
     ) {
         self.execute_world_pass(
             encoder,
@@ -1079,7 +1100,7 @@ impl Renderer {
             &self.queue,
             ui_loader,
             &self.pipelines,
-            settings
+            settings,
         );
     }
 
@@ -1361,7 +1382,7 @@ impl Renderer {
             &[&self.pipelines.resolved.hdr, &self.pipelines.resolved.ui], // Sample FROM non-msaa hdr and FROM non-msaa UI
             shader_dir().join("tonemap.wgsl").as_path(),
             &options,
-            &[&self.pipelines.buffers.tonemapping, &self.pipelines.buffers.color_grading],
+            &[&self.pipelines.buffers.post_processing],
             &mut pass,
         );
 
@@ -1384,7 +1405,8 @@ impl Renderer {
     pub fn update_msaa(&mut self, settings: &Settings) {
         //println!("Updating msaa");
         self.msaa_samples = settings.msaa_samples;
-        self.render_manager.update_define("MSAA".to_string(), self.msaa_samples > 1);
+        self.render_manager
+            .update_define("MSAA".to_string(), self.msaa_samples > 1);
         self.pipelines.resize(&self.config, self.msaa_samples);
         self.ui_renderer.pipelines.msaa_samples = self.msaa_samples;
 
@@ -1428,14 +1450,16 @@ impl Renderer {
 
     fn update_defines(&mut self, settings: &Settings) {
         let msaa_on = self.msaa_samples > 1;
-        self.render_manager.update_define("MSAA".to_string(), msaa_on);
-        self.render_manager.update_define("TONEMAP_UI".to_string(), settings.tonemap_ui);
+        self.render_manager
+            .update_define("MSAA".to_string(), msaa_on);
+        self.render_manager
+            .update_define("TONEMAP_UI".to_string(), settings.tonemap_ui);
     }
 }
 
 pub fn create_surface_and_adapter(
     window: Arc<Box<dyn Window>>,
-    event_loop: &dyn ActiveEventLoop
+    event_loop: &dyn ActiveEventLoop,
 ) -> (Surface<'static>, Adapter, PhysicalSize<u32>) {
     let display_handle = event_loop.owned_display_handle();
 
@@ -1471,7 +1495,7 @@ pub fn create_surface_config(
     settings: &mut Settings,
     variables: &mut Variables,
     size: PhysicalSize<u32>,
-    is_runtime: bool
+    is_runtime: bool,
 ) -> (SurfaceConfiguration, u32) {
     let surface_caps = surface.get_capabilities(adapter);
 
@@ -1491,7 +1515,9 @@ pub fn create_surface_config(
         .unwrap_or(CompositeAlphaMode::Opaque);
 
     let present_mode = pick_present_mode(surface, adapter, settings.present_mode.clone().to_wgpu());
-    if is_runtime { println!("Switched to Present mode: {:?}", present_mode) }
+    if is_runtime {
+        println!("Switched to Present mode: {:?}", present_mode)
+    }
     let config = SurfaceConfiguration {
         usage: TextureUsages::RENDER_ATTACHMENT,
         format,
@@ -1551,11 +1577,12 @@ fn pick_present_mode(surface: &Surface, adapter: &Adapter, user_mode: PresentMod
         _ => [
             PresentMode::Mailbox,
             PresentMode::Immediate,
-            PresentMode::Fifo
-        ]
+            PresentMode::Fifo,
+        ],
     };
 
-    fallbacks.into_iter()
+    fallbacks
+        .into_iter()
         .find(|mode| caps.present_modes.contains(mode))
         .unwrap_or(PresentMode::Fifo)
 }
@@ -1595,37 +1622,53 @@ fn clamp_to_supported_msaa(caps: TextureFormatFeatures, requested: u32, is_runti
 
     if supports_8 {
         return if requested < 8 {
-            if !is_runtime { println!("8x MSAA supported, but using {}x!", requested); }
+            if !is_runtime {
+                println!("8x MSAA supported, but using {}x!", requested);
+            }
             requested
         } else {
-            if !is_runtime { println!("8x MSAA supported, using {}x!", requested); }
+            if !is_runtime {
+                println!("8x MSAA supported, using {}x!", requested);
+            }
             8
         };
     }
 
     if supports_4 {
         if requested >= 8 {
-            if !is_runtime { println!("8x requested but unsupported, falling back to 4x"); }
+            if !is_runtime {
+                println!("8x requested but unsupported, falling back to 4x");
+            }
             return 4;
         }
         if requested >= 4 {
-            if !is_runtime { println!("4x MSAA supported, using 4x"); }
+            if !is_runtime {
+                println!("4x MSAA supported, using 4x");
+            }
             return 4;
         }
-        if !is_runtime { println!("4x MSAA supported, but using {}x!", requested); }
+        if !is_runtime {
+            println!("4x MSAA supported, but using {}x!", requested);
+        }
         return requested;
     }
 
     if supports_2 {
         if requested >= 4 {
-            if !is_runtime { println!("Only 2x MSAA supported, falling back to 2x"); }
+            if !is_runtime {
+                println!("Only 2x MSAA supported, falling back to 2x");
+            }
             return 2;
         }
-        if !is_runtime { println!("2x MSAA supported, using {}x!", requested); }
+        if !is_runtime {
+            println!("2x MSAA supported, using {}x!", requested);
+        }
         return requested;
     }
 
-    if !is_runtime { println!("MSAA not supported, falling back to 1x (WTF is this GPU huh?)"); }
+    if !is_runtime {
+        println!("MSAA not supported, falling back to 1x (WTF is this GPU huh?)");
+    }
     1
 }
 

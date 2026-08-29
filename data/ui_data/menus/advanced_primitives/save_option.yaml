@@ -4,6 +4,24 @@ elements:
     id: World Background
     actions:
       - as:["SavesScreen", "Backgrounds", "Left_Buttons_Background"], set(str:self.size.x, as.size.x*0.9); set(str:self.size.y, as.size.x*0.05); set(str:self.center.x, as.center.x);
+      - on:press, set(str:selected_save, {ap.all})
+      - if(expr:{selected_save.0}=="{ap.0}",
+        set(str:self.color.border, [0.0, 1.0, 0.0, 1.0]); set(str:self.color.fill, [0.0, 0.0, 0.05, 1.0]),
+        set(str:self.color.border, [0.1, 0.1, 0.1, 1.0]); set(str:self.color.fill, [0.01, 0.01, 0.01, 1.0]) )
+
+      - on:hovering,
+        if(expr:{selected_save.0}=="{ap.0}",
+        set(str:self.color.border, [0.0, 1.0, 1.0, 1.0]),
+        set(str:self.color.border, [1.0, 1.0, 1.0, 1.0])
+        )
+
+      - on:hover_exit,
+        if(expr:{selected_save.0}=="{ap.0}",
+        set(str:self.color.border, [0.0, 1.0, 0.0, 1.0]),
+        set(str:self.color.border, [0.1, 0.1, 0.1, 1.0])
+        )
+
+
     x: 0
     y: 0
     w: 300
@@ -14,10 +32,10 @@ elements:
       - 0.00
       - 0.8
     border_color:
+      - 0.1
+      - 0.1
+      - 0.1
       - 1.0
-      - 1.0
-      - 1.0
-      - 0.2
     roundness: 0.05
     border_thickness_percentage: 0.04
 
@@ -25,16 +43,16 @@ elements:
   - !Text
     id: world_name_text
     actions: [ ]
-    x: 0
-    y: -15
-    pt: 10.0
+    x: -290
+    y: 0
+    pt: 14.0
     color:
       - 1.0
       - 1.0
       - 1.0
       - 0.9
-    text: '"{ap.0}"'
-    anchor: Center
+    text: '{ap.0}'
+    anchor: CenterLeft
     misc:
       active: true
       pressable: false
@@ -59,7 +77,7 @@ elements:
   - !Text
     id: world_info_text
     actions: [ ]
-    x: 75
+    x: 150
     y: 15
     pt: 6.0
     color:
@@ -67,8 +85,8 @@ elements:
       - 1.0
       - 1.0
       - 0.9
-    text: '{expr:elapsed({ap.2}, true)}, {ap.3}'
-    anchor: Center
+    text: '{expr:elapsed({ap.2}, true)}, Chunk Size: {ap.3}'
+    anchor: TopLeft
     misc:
       active: true
       pressable: false

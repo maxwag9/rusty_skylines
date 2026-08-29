@@ -10,7 +10,7 @@ use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::variables::Variables;
 use glyphon::Metrics;
 use serde::de::Visitor;
-use serde::{de, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use std::collections::HashMap;
 use std::fmt;
 use std::mem::size_of;
@@ -19,7 +19,8 @@ use winit::dpi::PhysicalSize;
 
 const SCALING_EPSILON: f32 = 0.1; // pixels, 0.1 is good because You probably won't move an element by just 0.1 pixels willingly, impossible.
 fn snap(value: f32, original: f32) -> f32 {
-    if (value - original).abs() < SCALING_EPSILON { // pixels
+    if (value - original).abs() < SCALING_EPSILON {
+        // pixels
         original
     } else {
         value
@@ -138,7 +139,6 @@ pub enum TouchState {
     Released,
     Idle,
 }
-
 
 #[derive(Debug, Clone, Copy)]
 pub struct LayerDirty {
@@ -259,9 +259,18 @@ pub struct AdvancedPrimitiveYaml {
     #[serde(default)]
     pub ap_name: String,
 
-    #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "ap_var", deserialize_with = "deserialize_string_or_vec")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        alias = "ap_var",
+        deserialize_with = "deserialize_string_or_vec"
+    )]
     pub ap_vars: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "deserialize_string_or_vec")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_string_or_vec"
+    )]
     pub actions: Vec<String>,
     #[serde(deserialize_with = "deserialize_i16_from_number")]
     pub x: i16,
@@ -272,7 +281,7 @@ pub struct AdvancedPrimitiveYaml {
     pub scale: f32,
     pub misc: MiscButtonSettingsYaml,
     #[serde(default, skip_serializing_if = "is_false")]
-    pub editing_tool: bool
+    pub editing_tool: bool,
 }
 #[derive(Debug, Clone)]
 pub struct AdvancedPrimitive {
@@ -286,7 +295,7 @@ pub struct AdvancedPrimitive {
     pub misc: MiscButtonSettings,
     pub editing_tool: bool,
     pub is_temporary: bool,
-    pub scale_my_coords: bool
+    pub scale_my_coords: bool,
 }
 
 impl AdvancedPrimitive {
@@ -308,7 +317,7 @@ impl AdvancedPrimitive {
             },
             editing_tool: yaml.editing_tool,
             is_temporary: false,
-            scale_my_coords: true
+            scale_my_coords: true,
         }
     }
     pub fn to_yaml(&self) -> AdvancedPrimitiveYaml {
@@ -334,15 +343,27 @@ impl AdvancedPrimitive {
         variables: &Variables,
         advanced_primitives: &HashMap<String, UiLayerYaml>,
         order: u32,
-        window_size: PhysicalSize<u32>
+        window_size: PhysicalSize<u32>,
     ) -> RuntimeLayer {
         let x_scale = window_size.width as f32 / 1920.0;
         let y_scale = window_size.height as f32 / 1080.0;
-        let x = if self.scale_my_coords { self.x * x_scale } else { self.x };
-        let y = if self.scale_my_coords { self.y * y_scale } else { self.y };
+        let x = if self.scale_my_coords {
+            self.x * x_scale
+        } else {
+            self.x
+        };
+        let y = if self.scale_my_coords {
+            self.y * y_scale
+        } else {
+            self.y
+        };
 
         let elements = if let Some(ap_template) = advanced_primitives.get(&self.ap_name) {
-            ap_template.elements.clone().unwrap_or_default().into_iter()
+            ap_template
+                .elements
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
                 .filter_map(|e| UiElement::from_yaml(e, window_size))
                 .map(|mut el| {
                     el.scale_by(self.scale * y_scale);
@@ -386,7 +407,11 @@ pub struct UiButtonRectYaml {
     )]
     pub id: String,
 
-    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "deserialize_string_or_vec")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_string_or_vec"
+    )]
     pub actions: Vec<String>,
 
     #[serde(
@@ -448,7 +473,7 @@ pub struct UiButtonRect {
     pub glow_misc: GlowMisc,
     pub misc: MiscButtonSettings,
     pub yaml_element: Option<UiButtonRectYaml>,
-    pub cache: Option<RectParams>
+    pub cache: Option<RectParams>,
 }
 
 impl UiButtonRect {
@@ -503,7 +528,9 @@ impl UiButtonRect {
             let w = snap(w, yaml_element.w as f32);
             let h = snap(h, yaml_element.h as f32);
             (x as i16, y as i16, w as u16, h as u16)
-        } else { (x as i16, y as i16, w as u16, h as u16) };
+        } else {
+            (x as i16, y as i16, w as u16, h as u16)
+        };
         UiButtonRectYaml {
             id: self.id.clone(),
             actions: self.actions.clone(),
@@ -847,13 +874,13 @@ impl UiElement {
     pub fn text(&self) -> Option<String> {
         match self {
             UiElement::Text(t) => Some(t.text.clone()),
-            _ => None
+            _ => None,
         }
     }
     pub fn template(&self) -> Option<String> {
         match self {
             UiElement::Text(t) => Some(t.template.clone()),
-            _ => None
+            _ => None,
         }
     }
     pub fn size(&self) -> SizeProperty {
@@ -1043,8 +1070,11 @@ impl UiElement {
         }
     }
 
-    pub fn set_aps(&mut self, settings: &Settings, variables: &Variables, ap_vars: &[String]) { // TODO: from_str() the Strings! For text, use the ap_vars values and convert them into_string(), for actions do the same
-        let ap_vars = ap_vars.iter().map(|var| Value::from_str(settings, variables, var, true, true).into_string()).collect::<Vec<String>>();
+    pub fn set_aps(&mut self, settings: &Settings, variables: &Variables, ap_vars: &[String]) {
+        let ap_vars = ap_vars
+            .iter()
+            .map(|var| Value::from_str(settings, variables, var, true, true).into_string())
+            .collect::<Vec<String>>();
         let ap_vars = ap_vars.as_slice();
         match self {
             UiElement::Circle(e) => Self::replace_actions(&mut e.actions, ap_vars),
@@ -1069,14 +1099,18 @@ impl UiElement {
         while let Some(start) = text.find("{ap") {
             let rest = &text[start..];
 
-            let (end, idx) = if rest.starts_with("{ap}") {
-                (start + 4, 0)
+            let (end, replacement) = if rest.starts_with("{ap}") {
+                (start + 4, ap_vars.first().cloned().unwrap_or("None".into()))
+            } else if rest.starts_with("{ap.all}") {
+                let end = start + 8;
+                (end, format!("[{}]", ap_vars.join(", ")))
             } else if rest.starts_with("{ap.") {
                 if let Some(close_rel) = rest.find('}') {
                     let end = start + close_rel + 1;
-                    let component = &text[start + 4..end - 1]; // between "{ap." and "}"
+                    let component = &text[start + 4..end - 1];
                     let idx = Variables::component_index(component).unwrap_or(0);
-                    (end, idx)
+
+                    (end, ap_vars.get(idx).cloned().unwrap_or("None".into()))
                 } else {
                     break;
                 }
@@ -1084,7 +1118,7 @@ impl UiElement {
                 break;
             };
 
-            text.replace_range(start..end, ap_vars.get(idx).unwrap_or(&"None".to_string()));
+            text.replace_range(start..end, &replacement);
         }
     }
     fn replace_actions(actions: &mut Vec<String>, ap_vars: &[String]) {
@@ -1570,7 +1604,11 @@ pub struct UiLayerYaml {
     #[serde(default, skip_serializing_if = "is_default")] // Skips if 0
     pub order: u32,
 
-    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "deserialize_string_or_vec")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_string_or_vec"
+    )]
     pub actions: Vec<String>,
 
     // Skips if None or Empty Vector
@@ -1884,7 +1922,7 @@ pub struct UiButtonText {
     pub anchor: Option<Anchor>,
     pub yaml_element: Option<UiButtonTextYaml>,
 
-    pub cache: Option<TextParams>
+    pub cache: Option<TextParams>,
 }
 
 #[derive(Debug, Clone)]
@@ -1902,7 +1940,7 @@ pub struct UiButtonPolygon {
     pub tri_count: u32,
     pub yaml_element: Option<UiButtonPolygonYaml>,
 
-    pub cache: Option<Vec<UiVertexPoly>>
+    pub cache: Option<Vec<UiVertexPoly>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1925,7 +1963,7 @@ pub struct UiButtonCircle {
     pub misc: MiscButtonSettings,
     pub yaml_element: Option<UiButtonCircleYaml>,
 
-    pub cache: Option<CircleParams>
+    pub cache: Option<CircleParams>,
 }
 
 #[derive(Debug, Clone)]
@@ -1946,7 +1984,7 @@ pub struct UiButtonOutline {
 
     pub misc: MiscButtonSettings,
     pub yaml_element: Option<UiButtonOutlineYaml>,
-    pub cache: Option<OutlineParams>
+    pub cache: Option<OutlineParams>,
 }
 
 #[derive(Debug, Clone)]
@@ -1963,7 +2001,7 @@ pub struct UiButtonHandle {
     pub parent: Option<ElementRef>,
     pub yaml_element: Option<UiButtonHandleYaml>,
 
-    pub cache: Option<HandleParams>
+    pub cache: Option<HandleParams>,
 }
 
 impl UiButtonText {
@@ -2021,7 +2059,9 @@ impl UiButtonText {
             let y = snap(y, yaml_element.y as f32);
             let pt = snap(pt, self.original_pt);
             (x as i16, y as i16, pt)
-        } else { (x as i16, y as i16, pt) };
+        } else {
+            (x as i16, y as i16, pt)
+        };
         UiButtonTextYaml {
             id: self.id.clone(),
             actions: self.actions.clone(),
@@ -2094,7 +2134,9 @@ impl UiButtonCircle {
             let y = snap(y, yaml_element.y as f32);
             let r = snap(r, yaml_element.radius);
             (x as i16, y as i16, r)
-        } else { (x as i16, y as i16, r) };
+        } else {
+            (x as i16, y as i16, r)
+        };
         UiButtonCircleYaml {
             id: self.id.clone(),
             actions: self.actions.clone(),
@@ -2164,7 +2206,9 @@ impl UiButtonHandle {
             let y = snap(y, yaml_element.y as f32);
             let r = snap(r, yaml_element.radius);
             (x as i16, y as i16, r)
-        } else { (x as i16, y as i16, r) };
+        } else {
+            (x as i16, y as i16, r)
+        };
         UiButtonHandleYaml {
             id: self.id.clone(),
             x,
@@ -2235,7 +2279,9 @@ impl UiButtonOutline {
             let y = snap(y, yaml_element.shape_data.y);
             let r = snap(r, yaml_element.shape_data.radius);
             (x, y, r)
-        } else { (x, y, r) };
+        } else {
+            (x, y, r)
+        };
         UiButtonOutlineYaml {
             id: self.id.clone(),
             parent: self.parent.clone(),
@@ -2318,7 +2364,9 @@ impl UiButtonPolygon {
             let y = snap(y, yaml_element.y as f32);
             let scale = snap(scale, yaml_element.scale);
             (x as i16, y as i16, scale)
-        } else { (x as i16, y as i16, scale) };
+        } else {
+            (x as i16, y as i16, scale)
+        };
         UiButtonPolygonYaml {
             id: self.id.clone(),
             actions: self.actions.clone(),
@@ -2326,7 +2374,8 @@ impl UiButtonPolygon {
             x,
             y,
             scale,
-            vertices: self.unscaled_vertices
+            vertices: self
+                .unscaled_vertices
                 .iter()
                 .map(|v| v.to_yaml(window_size))
                 .collect(),
@@ -2427,7 +2476,7 @@ impl Default for UiButtonText {
             anchor: None,
             yaml_element: None,
             cache: None,
-            buffer: glyphon::Buffer::new_empty(Metrics::new(14.0, 20.0))
+            buffer: glyphon::Buffer::new_empty(Metrics::new(14.0, 20.0)),
         }
     }
 }
@@ -2568,7 +2617,7 @@ impl Default for UiButtonRect {
             glow_misc: GlowMisc::default(),
             misc: MiscButtonSettings::default(),
             yaml_element: None,
-            cache: None
+            cache: None,
         }
     }
 }
@@ -2585,7 +2634,7 @@ impl Default for AdvancedPrimitive {
             misc: MiscButtonSettings::default(),
             editing_tool: false,
             is_temporary: false,
-            scale_my_coords: true
+            scale_my_coords: true,
         }
     }
 }
@@ -2645,7 +2694,11 @@ pub struct UiButtonTextYaml {
     )]
     pub id: String,
 
-    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "deserialize_string_or_vec")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_string_or_vec"
+    )]
     pub actions: Vec<String>,
 
     #[serde(
@@ -2705,7 +2758,11 @@ pub struct UiButtonCircleYaml {
     )]
     pub id: String,
 
-    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "deserialize_string_or_vec")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_string_or_vec"
+    )]
     pub actions: Vec<String>,
 
     #[serde(
@@ -2847,7 +2904,7 @@ pub struct UiButtonOutlineYaml {
     pub sub_dash_misc: DashMisc,
 
     #[serde(skip_serializing_if = "is_default")]
-    pub misc: MiscButtonSettingsYaml
+    pub misc: MiscButtonSettingsYaml,
 }
 
 impl Default for UiButtonOutlineYaml {
@@ -2876,7 +2933,11 @@ pub struct UiButtonPolygonYaml {
     )]
     pub id: String,
 
-    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "deserialize_string_or_vec")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_string_or_vec"
+    )]
     pub actions: Vec<String>,
 
     #[serde(
@@ -3007,7 +3068,7 @@ where
                 Err(de::Error::custom("invalid number"))
             }
         }
-        _ => Err(de::Error::custom("expected number"))
+        _ => Err(de::Error::custom("expected number")),
     }
 }
 fn deserialize_u16_from_number<'de, D>(deserializer: D) -> Result<u16, D::Error>
@@ -3026,7 +3087,7 @@ where
                 Err(de::Error::custom("invalid number"))
             }
         }
-        _ => Err(de::Error::custom("expected number"))
+        _ => Err(de::Error::custom("expected number")),
     }
 }
 

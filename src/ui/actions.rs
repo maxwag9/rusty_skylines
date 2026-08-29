@@ -12,8 +12,8 @@ use crate::ui::ui_edit_manager::{
     ChangeColorCommand, ColorComponent, CreateAPCommand, CreateElementCommand, DeleteAPCommand,
     DeleteElementCommand, DuplicateElementCommand, MoveElementCommand, ResizeElementCommand,
 };
-use crate::ui::ui_editor::{Ui,
-                           get_element, get_element_mut, get_element_position, get_element_size,
+use crate::ui::ui_editor::{
+    Ui, get_element, get_element_mut, get_element_position, get_element_size,
 };
 use crate::ui::ui_edits::{SizeProperty, create_element, delete_element};
 use crate::ui::ui_touch_manager::{CurrentHover, ElementRef, MouseButtons};
@@ -23,7 +23,9 @@ use crate::ui::vertex::{
     UiButtonPolygon, UiButtonRect, UiButtonText, UiElement,
 };
 use crate::world::buildings::zoning::ZoningType;
-use crate::world::game_state::{get_available_saves, make_safe_save_name, GameState, LoadResult, SaveInfo, SaveResult};
+use crate::world::game_state::{
+    GameState, LoadResult, SaveInfo, SaveResult, get_available_saves, make_safe_save_name,
+};
 use crate::world::roads::road_structs::{LeftLaneCount, RightLaneCount};
 use crate::world::world::World;
 use glam::Vec2;
@@ -206,7 +208,7 @@ pub enum UiCommand {
     ExitGame,
     ShowInteraction {
         element_ctx: ElementContext,
-        event_kind: ActionEvent,
+        events: Vec<ActionEvent>,
         buttons: MouseButtons,
         color: String,
         shadow: bool,
@@ -220,7 +222,7 @@ pub enum UiCommand {
 
     Call {
         element_ctx: ElementContext,
-        event_kind: ActionEvent,
+        events: Vec<ActionEvent>,
         buttons: MouseButtons,
         function_name: String,
         args: Option<String>,
@@ -444,6 +446,22 @@ impl CommandQueue {
                     CommandResult::AnnoyingError(msg) => {
                         //eprintln!("[CommandQueue] Annoying Error inside for loop: {}", msg);
                     }
+                }
+            }
+        }
+    }
+    fn execute_multiple(&mut self, commands: Vec<UiCommand>, ctx: &mut CommandContext) {
+        for cmd in commands.iter() {
+            match self.execute_one(cmd.clone(), ctx) {
+                CommandResult::Ok => {}
+                CommandResult::Stop => {}
+                CommandResult::Skip(n) => {}
+                CommandResult::Delay { seconds, remaining } => {}
+                CommandResult::Error(msg) => {
+                    eprintln!("[CommandQueue] Error inside if() command: {}", msg);
+                }
+                CommandResult::AnnoyingError(msg) => {
+                    //eprintln!("[CommandQueue] Annoying Error inside if() command: {}", msg);
                 }
             }
         }
@@ -745,7 +763,8 @@ impl CommandQueue {
                     //println!("In setvar setting key: {:?}", key);
                     if let Some(setting_value) = key.from_value(&value) {
                         //println!("Value: {:?}", setting_value);
-                        ctx.settings.apply_setting(key, SettingOp::Set(setting_value));
+                        ctx.settings
+                            .apply_setting(key, SettingOp::Set(setting_value));
 
                         return CommandResult::Ok;
                     }
@@ -915,7 +934,7 @@ impl CommandQueue {
 
                 let new_val = match ctx.ui.variables.get(&name).as_deref() {
                     Some(Value::Bool(b)) => Value::Bool(!b),
-                    _ => Value::Bool(true),
+                    _ => return CommandResult::Ok,
                 };
 
                 set_variable_or_property(ctx, element_ctx, &name, new_val)
@@ -993,13 +1012,9 @@ impl CommandQueue {
                 let condition = string_to_value(ctx, element_ctx, condition);
                 //println!("After: {}", condition);
                 if condition.is_truthy() {
-                    for cmd in then.into_iter().rev() {
-                        self.queue.push_front(cmd);
-                    }
+                    self.execute_multiple(then, ctx);
                 } else {
-                    for cmd in else_branch.into_iter().rev() {
-                        self.queue.push_front(cmd);
-                    }
+                    self.execute_multiple(else_branch, ctx);
                 }
                 CommandResult::Ok
             }
@@ -1025,13 +1040,9 @@ impl CommandQueue {
                 let compare_value = string_to_value(ctx, element_ctx, value);
                 //println!("{} {}", var_value, compare_value);
                 if var_value == compare_value {
-                    for cmd in then.into_iter().rev() {
-                        self.queue.push_front(cmd);
-                    }
+                    self.execute_multiple(then, ctx);
                 } else {
-                    for cmd in else_branch.into_iter().rev() {
-                        self.queue.push_front(cmd);
-                    }
+                    self.execute_multiple(else_branch, ctx);
                 }
                 CommandResult::Ok
             }
@@ -1126,7 +1137,7 @@ impl CommandQueue {
                 ap_var,
                 center,
                 scale,
-                is_temporary
+                is_temporary,
             } => {
                 let element_ctx = &element_ctx;
                 let center = string_to_value(ctx, element_ctx, center);
@@ -1146,9 +1157,13 @@ impl CommandQueue {
                 let name = string_to_value(ctx, element_ctx, name).into_string();
                 let ap_name = string_to_value(ctx, element_ctx, ap_name).into_string();
                 let ap_vars = string_to_value(ctx, element_ctx, ap_var);
-                let Some(ap_vars) = ap_vars.as_array().map(|arr| arr.iter().map(|v| v.to_string()).collect()).or(ap_vars.as_string().map(|str| vec![str.to_string()])) else {
+                let Some(ap_vars) = ap_vars
+                    .as_array()
+                    .map(|arr| arr.iter().map(|v| v.to_string()).collect())
+                    .or(ap_vars.as_string().map(|str| vec![str.to_string()]))
+                else {
                     return CommandResult::Error(
-                        "AP Vars in AddAP was not an array or single argument".to_string()
+                        "AP Vars in AddAP was not an array or single argument".to_string(),
                     );
                 };
                 //println!("Adding AP: {} {} {} {:?} {}", name, ap_name, ap_var, center, scale);
@@ -1180,7 +1195,7 @@ impl CommandQueue {
                     &mut ctx.ui.touch_manager,
                     &mut ctx.ui.menus,
                     &mut ctx.ui.variables,
-                    &ctx.world.input.mouse
+                    &ctx.world.input.mouse,
                 );
                 CommandResult::Ok
             }
@@ -1352,13 +1367,13 @@ impl CommandQueue {
                         menu.layers.remove(idx);
                         menu.sort_layers();
                     } else {
-                        return CommandResult::Error(
+                        return CommandResult::AnnoyingError(
                             "Couldn't find layer in menu to delete...".to_string(),
                         );
                     }
                     CommandResult::Ok
                 } else {
-                    CommandResult::Error("Couldn't find Menu to delete...".to_string())
+                    CommandResult::AnnoyingError("Couldn't find Menu to delete...".to_string())
                 }
             }
             UiCommand::DeleteElement {
@@ -1401,15 +1416,25 @@ impl CommandQueue {
                 }
             }
 
-            UiCommand::SaveGame { element_ctx, and_exit } => {
+            UiCommand::SaveGame {
+                element_ctx,
+                and_exit,
+            } => {
                 let and_exit = string_to_value(ctx, &element_ctx, and_exit).is_truthy();
-                save_game(ctx.game_state, ctx.world, ctx.props, ctx.settings, &mut ctx.ui.variables, and_exit);
+                save_game(
+                    ctx.game_state,
+                    ctx.world,
+                    ctx.props,
+                    ctx.settings,
+                    &mut ctx.ui.variables,
+                    and_exit,
+                );
                 CommandResult::Ok
             }
             UiCommand::LoadSave {
                 element_ctx,
                 save_name,
-                without_saving
+                without_saving,
             } => {
                 let element_ctx = &element_ctx;
                 let save_name = string_to_value(ctx, element_ctx, save_name);
@@ -1419,9 +1444,23 @@ impl CommandQueue {
                     );
                 };
                 if !without_saving {
-                    save_game(ctx.game_state, ctx.world, ctx.props, ctx.settings, &mut ctx.ui.variables, false);
+                    save_game(
+                        ctx.game_state,
+                        ctx.world,
+                        ctx.props,
+                        ctx.settings,
+                        &mut ctx.ui.variables,
+                        false,
+                    );
                 }
-                load_save(ctx.game_state, ctx.world, ctx.props, ctx.settings, &mut ctx.ui.variables, save_name);
+                load_save(
+                    ctx.game_state,
+                    ctx.world,
+                    ctx.props,
+                    ctx.settings,
+                    &mut ctx.ui.variables,
+                    save_name,
+                );
                 CommandResult::Ok
             }
             UiCommand::ExitGame => {
@@ -1437,7 +1476,7 @@ impl CommandQueue {
             }
             UiCommand::ShowInteraction {
                 element_ctx,
-                event_kind,
+                events,
                 buttons,
                 color,
                 shadow,
@@ -1454,39 +1493,40 @@ impl CommandQueue {
                 let shadow_name = format!("{}_shadow", element.id);
                 let shadow_master_command = format!(r#"as:"[{}]" set(str:as.center, [expr:{{self.center.x}}+5, expr:{{self.center.y}}+3]); set(str:as.color.fill, [expr:{{self.color.fill.r}}*0.01, expr:{{self.color.fill.g}}*0.01, expr:{{self.color.fill.b}}*0.01, expr:{{self.color.fill.a}}*0.7]); set(str:as.idx, self.idx); ifvareq(self.active, bool:false, delete(as.menu, as.layer, as.id, false)); if(expr:!{{as.exists}}, clone(self.menu, self.layer, self.id, self.menu, self.layer, str:{}, [expr:{{self.center.x}}+10, {{self.center.y}}], [], false);); if(expr:({{as.idx}}+1) != {{self.idx}}, set(str:as.offset_order, expr:{{self.idx}} - ({{as.idx}} + 1) ) )"#, shadow_name, shadow_name).to_string();
 
-
-                let color = if let Some(color) = string_to_value(ctx, element_ctx, color).as_color4() {
-                    color
-                } else {
-                    let mut hasher = DefaultHasher::new();
-                    element.hash(&mut hasher);
-                    let element_hash = hasher.finish();
-
-                    let key = format!("original_color_fill_{}", element_hash);
-
-                    // Only store if it doesn't exist yet
-                    if ctx.ui.variables.get(&key).is_none() {
-                        let current_color = string_to_value(ctx, element_ctx, "self.color.fill".to_string());
-                        ctx.ui.variables.set_var(&key, current_color);
-                    }
-
-                    let Some(color_value) = ctx.ui.variables.get(&key) else {
-                        return CommandResult::Error(
-                            format!("Couldn't get value from variables, variable key: {}", key)
-                                .to_string(),
-                        );
-                    };
-                    if let Some(color) = color_value.as_color4() {
+                let color =
+                    if let Some(color) = string_to_value(ctx, element_ctx, color).as_color4() {
                         color
                     } else {
-                        return CommandResult::Error(
+                        let mut hasher = DefaultHasher::new();
+                        element.hash(&mut hasher);
+                        let element_hash = hasher.finish();
+
+                        let key = format!("original_color_fill_{}", element_hash);
+
+                        // Only store if it doesn't exist yet
+                        if ctx.ui.variables.get(&key).is_none() {
+                            let current_color =
+                                string_to_value(ctx, element_ctx, "self.color.fill".to_string());
+                            ctx.ui.variables.set_var(&key, current_color);
+                        }
+
+                        let Some(color_value) = ctx.ui.variables.get(&key) else {
+                            return CommandResult::Error(
+                                format!("Couldn't get value from variables, variable key: {}", key)
+                                    .to_string(),
+                            );
+                        };
+                        if let Some(color) = color_value.as_color4() {
+                            color
+                        } else {
+                            return CommandResult::Error(
                             format!(
                                 "Couldn't unpack value as color, tried to unpack: {} as vec4 color",
                                 color_value
                             ).to_string(),
                         );
-                    }
-                };
+                        }
+                    };
 
                 fn clamp(v: f32) -> f32 {
                     v.max(0.0).min(1.0)
@@ -1495,14 +1535,8 @@ impl CommandQueue {
                     "set(str:self.color.fill, [{}, {}, {}, {}])",
                     color[0], color[1], color[2], color[3]
                 );
-                let return_color = format!(
-                    "on:h_exit on:r {}",
-                    normal_color
-                );
-                let activated_color = format!(
-                    "on:activated {}",
-                    normal_color
-                );
+                let return_color = format!("on:h_exit on:r {}", normal_color);
+                let activated_color = format!("on:activated {}", normal_color);
                 // noticeable hover: brighter + more visible
                 let hover_color = format!(
                     "on:h set(str:self.color.fill, [{}, {}, {}, {}])",
@@ -1524,38 +1558,33 @@ impl CommandQueue {
                 commands.extend(parse_action(
                     &activated_color,
                     ctx,
-                    &event_kind,
-                    &buttons,
+                    &events,
                     element_ctx.clone(),
                 ));
                 commands.extend(parse_action(
                     &return_color,
                     ctx,
-                    &event_kind,
-                    &buttons,
+                    &events,
                     element_ctx.clone(),
                 ));
                 commands.extend(parse_action(
                     &hover_color,
                     ctx,
-                    &event_kind,
-                    &buttons,
+                    &events,
                     element_ctx.clone(),
                 ));
                 commands.extend(parse_action(
                     &press_color,
                     ctx,
-                    &event_kind,
-                    &buttons,
+                    &events,
                     element_ctx.clone(),
                 ));
                 if shadow {
                     commands.extend(parse_action(
-                    &shadow_master_command,
-                    ctx,
-                    &event_kind,
-                    &buttons,
-                    element_ctx.clone(),
+                        &shadow_master_command,
+                        ctx,
+                        &events,
+                        element_ctx.clone(),
                     ))
                 };
 
@@ -1597,14 +1626,18 @@ impl CommandQueue {
 
             UiCommand::Call {
                 element_ctx,
-                event_kind,
+                events,
                 buttons,
                 function_name,
                 args,
             } => {
                 let element_ctx = &element_ctx;
 
-                fn parse_args_call(ctx: &mut CommandContext, element_ctx: &ElementContext, args: Option<String>) -> Vec<Value> {
+                fn parse_args_call(
+                    ctx: &mut CommandContext,
+                    element_ctx: &ElementContext,
+                    args: Option<String>,
+                ) -> Vec<Value> {
                     if let Some(args) = args {
                         let args = string_to_value(ctx, element_ctx, args);
                         args.as_array().unwrap_or(vec![])
@@ -1616,7 +1649,7 @@ impl CommandQueue {
                     cq: &mut CommandQueue,
                     ctx: &mut CommandContext,
                     element_ctx: &ElementContext,
-                    event_kind: &ActionEvent,
+                    events: &[ActionEvent],
                     buttons: &MouseButtons,
                     function_name: String,
                     args: Option<String>,
@@ -1652,8 +1685,7 @@ impl CommandQueue {
 
                     ctx.ui.variables.set_array("args", args); // So I can use args.4 for example.
                     for action in actions.iter() {
-                        let commands =
-                            parse_action(action, ctx, &event_kind, &buttons, element_ctx.clone());
+                        let commands = parse_action(action, ctx, &events, element_ctx.clone());
                         for command in commands {
                             cq.execute_one(command, ctx);
                         }
@@ -1685,17 +1717,14 @@ impl CommandQueue {
 
                 if let Some((left, right)) = function_name.split_once(':') {
                     match left {
-                        "rust" | "RUST" => parse_rust_call(
-                            ctx,
-                            element_ctx,
-                            right.to_string(),
-                            args,
-                        ),
+                        "rust" | "RUST" => {
+                            parse_rust_call(ctx, element_ctx, right.to_string(), args)
+                        }
                         _ => parse_action_call(
                             self,
                             ctx,
                             element_ctx,
-                            &event_kind,
+                            &events,
                             &buttons,
                             function_name,
                             args,
@@ -1706,7 +1735,7 @@ impl CommandQueue {
                         self,
                         ctx,
                         element_ctx,
-                        &event_kind,
+                        &events,
                         &buttons,
                         function_name,
                         args,
@@ -1722,7 +1751,10 @@ impl CommandQueue {
 fn call_rust(ctx: &mut CommandContext, function_name: &str, args: Vec<Value>) {
     match function_name {
         "get_saves" => {
-            let saves: Vec<Value> = get_available_saves().into_iter().map(|save| Value::Array(save.to_values())).collect();
+            let saves: Vec<Value> = get_available_saves()
+                .into_iter()
+                .map(|save| Value::Array(save.to_values()))
+                .collect();
             ctx.ui.variables.set_array("saves", saves);
         }
         _ => {}
@@ -1810,12 +1842,12 @@ pub fn exit_game(
     variables: &mut Variables,
     world: &mut World,
     props: &Props,
-    event_loop: &dyn ActiveEventLoop
+    event_loop: &dyn ActiveEventLoop,
 ) {
     settings.total_game_time = world.time.total_game_time;
     match settings.save(rusty_skylines_dir("settings.toml")) {
         Ok(_) => println!("Settings saved"),
-        Err(e) => eprintln!("Failed to save Settings: {e}")
+        Err(e) => eprintln!("Failed to save Settings: {e}"),
     }
     save_colors(rusty_skylines_dir("colors.toml"), variables);
     save_game(game_state, world, props, settings, variables, false);
@@ -1823,12 +1855,31 @@ pub fn exit_game(
     event_loop.exit();
     //std::process::exit(69); // Die.
 }
-pub fn save_game(game_state: &mut GameState, world: &mut World, props: &Props, settings: &Settings, variables: &mut Variables, and_exit: bool) {
+pub fn save_game(
+    game_state: &mut GameState,
+    world: &mut World,
+    props: &Props,
+    settings: &Settings,
+    variables: &mut Variables,
+    and_exit: bool,
+) {
     match game_state.save(world, props, settings, variables, and_exit) {
-        SaveResult::Success => println!("World '{}' saved", game_state.current_save_info.as_ref().map(|s| s.name.as_str()).unwrap_or("No save!!! Report to maxwag9!!")),
+        SaveResult::Success => println!(
+            "World '{}' saved",
+            game_state
+                .current_save_info
+                .as_ref()
+                .map(|s| s.name.as_str())
+                .unwrap_or("No save!!! Report to maxwag9!!")
+        ),
         e => eprintln!(
             "Failed to save World '{}': {:?}",
-            game_state.current_save_info.as_ref().map(|s| s.name.as_str()).unwrap_or("No save!"), e
+            game_state
+                .current_save_info
+                .as_ref()
+                .map(|s| s.name.as_str())
+                .unwrap_or("No save!"),
+            e
         ),
     }
 }
@@ -1838,7 +1889,7 @@ pub fn load_save(
     props: &mut Props,
     settings: &mut Settings,
     variables: &mut Variables,
-    save_name: &str
+    save_name: &str,
 ) {
     let save_name = make_safe_save_name(save_name);
     match game_state.load(save_name.as_str(), world, props, settings, variables) {
@@ -1855,9 +1906,16 @@ pub fn load_save(
             save_info.name = save_name.clone();
             game_state.current_save_info = Some(save_info);
             game_state.save(world, props, settings, variables, false);
-            load_save(game_state, world, props, settings, variables, save_name.as_str());
+            load_save(
+                game_state,
+                world,
+                props,
+                settings,
+                variables,
+                save_name.as_str(),
+            );
         }
-        e => eprintln!("Failed to load World '{}': {:?}", save_name, e)
+        e => eprintln!("Failed to load World '{}': {:?}", save_name, e),
     }
 }
 /// ONLY USE EXECUTE_COMMAND SO IT EXECUTES IMMEDIATELY!!
@@ -2249,7 +2307,9 @@ pub fn set_element_property(
                 } else {
                     return CommandResult::Error(format!(
                         "set_element_property: {}.{} expected string value, but got: {}",
-                        base, property, new_val.to_string()
+                        base,
+                        property,
+                        new_val.to_string()
                     ));
                 }
                 new_val.clone()
@@ -2267,7 +2327,9 @@ pub fn set_element_property(
                 } else {
                     return CommandResult::Error(format!(
                         "set_element_property: {}.{} expected string value, but got: {}",
-                        base, property, new_val.to_string()
+                        base,
+                        property,
+                        new_val.to_string()
                     ));
                 }
                 new_val.clone()
@@ -2344,7 +2406,7 @@ pub fn make_element(id: String, kind: ElementKind, center: [f32; 2]) -> Option<U
 pub fn send_element_properties_to_variables(
     menus: &HashMap<String, Menu>,
     variables: &mut Variables,
-    element_ctx: &ElementContext
+    element_ctx: &ElementContext,
 ) {
     fn clear_properties(prefix: &str, variables: &mut Variables) {
         for property in [
@@ -2406,29 +2468,33 @@ pub fn send_element_properties_to_variables(
 
                     variables.set_array(&format!("{prefix}.center"), element.center());
 
-                    variables.set_var(&format!("{prefix}.radius"),
-                                      element
+                    variables.set_var(
+                        &format!("{prefix}.radius"),
+                        element
                             .size()
                             .radius()
                             .map(|r| Value::F64(r as f64))
-                                          .unwrap_or(Value::None),
+                            .unwrap_or(Value::None),
                     );
 
-                    variables.set_var(&format!("{prefix}.pt"),
-                                      element
+                    variables.set_var(
+                        &format!("{prefix}.pt"),
+                        element
                             .size()
                             .pt()
                             .map(|r| Value::F64(r as f64))
-                                          .unwrap_or(Value::None),
+                            .unwrap_or(Value::None),
                     );
 
-                    variables.set_var(&format!("{prefix}.size"),
-                                      element.size().value_size2().unwrap_or(Value::None),
+                    variables.set_var(
+                        &format!("{prefix}.size"),
+                        element.size().value_size2().unwrap_or(Value::None),
                     );
 
                     let color_components = element.color_components();
 
-                    variables.set_array(&format!("{prefix}.color_components"),
+                    variables.set_array(
+                        &format!("{prefix}.color_components"),
                         color_components
                             .iter()
                             .map(|c| Value::String(c.to_string()))
@@ -2508,7 +2574,7 @@ fn test_send_properties_to_variables() {
                 opaque: false,
                 saveable: false,
                 editing_tool: false,
-                outline_poly_vertices: vec![]
+                outline_poly_vertices: vec![],
             }],
             active: true,
         },

@@ -15,7 +15,7 @@ use crate::world::camera::Camera;
 use crate::world::cars::car_structs::{Car, CarId, CarMode, CarStorage, SimTime};
 use crate::world::cars::car_subsystem::make_random_car;
 use crate::world::cars::parking::{PARK_L, PARK_W, ParkingSpotId, ParkingStorage};
-use crate::world::cars::partitions::{Destination};
+use crate::world::cars::partitions::Destination;
 use crate::world::roads::road_mesh_manager::{
     ChunkId, Edges, RoadEdgeStorage, RoadEdges, RoadMeshManager, chunk_id_to_coord,
     world_pos_chunk_to_id,
@@ -64,7 +64,7 @@ pub struct District {
     raw_points: Vec<WorldPos>,
 
     // Cached convex hull of raw_points
-    points: Vec<WorldPos>,
+    pub points: Vec<WorldPos>,
     pub lot_ids: Vec<LotId>,
     pub zoning_demand: ZoningDemand,
 }
@@ -142,7 +142,7 @@ impl District {
                         &buildings.storage,
                         car.pos,
                         car_trip_type,
-                        rng
+                        rng,
                     ) {
                         car.mode = CarMode::Driving(destination);
                         callback.new_cars.push((lot_id, Some(car)));
@@ -945,7 +945,8 @@ impl ZoningType {
             _ => ZoningType::None,
         }
     }
-    pub fn is_workplace(&self) -> bool { // TODO: Too black and white for later... Later, I want buildings with multiple zoning types in percentages stored in the building (Or rather, lot layout?). So a Residential building with small shops on the ground floor can work, like in Baltimor, California. (New Hampshire)
+    pub fn is_workplace(&self) -> bool {
+        // TODO: Too black and white for later... Later, I want buildings with multiple zoning types in percentages stored in the building (Or rather, lot layout?). So a Residential building with small shops on the ground floor can work, like in Baltimor, California. (New Hampshire)
         match self {
             ZoningType::None => false,
             ZoningType::Residential => false,
@@ -2736,7 +2737,9 @@ impl ZoningStorage {
 
         for lot_id in lot_ids_to_consider {
             let lot = self.get_lot(lot_id)?;
-            if lot.layout.is_none() { continue; };
+            if lot.layout.is_none() {
+                continue;
+            };
             if !lot.zoning_type.is_workplace() {
                 continue;
             }
@@ -3070,12 +3073,13 @@ impl ZoningStorage {
     }
     pub fn get_closest_district(&self, position: WorldPos) -> Option<&District> {
         self.iter_districts().min_by(|a, b| {
-            let da = a.center.distance_squared(position);
-            let db = b.center.distance_squared(position);
+            let da = position.polygon_distance_squared(&a.points);
+            let db = position.polygon_distance_squared(&b.points);
 
             da.partial_cmp(&db).unwrap()
         })
     }
+
     // pub fn get_closest_lots(&self, position: WorldPos) -> Option<&Lot> {
     //     self.iter_lots().min_by(|a, b| {
     //         let da = a.center.distance_squared(position);

@@ -78,6 +78,11 @@ impl fmt::Display for ElementRef {
         )
     }
 }
+impl From<&ElementRef> for ElementRef {
+    fn from(value: &ElementRef) -> Self {
+        value.clone()
+    }
+}
 impl ElementRef {
     pub fn action(&self, ui: &Ui) -> Vec<String> {
         match get_element(&ui.menus, self) {
@@ -121,7 +126,7 @@ pub struct HitTestResult {
     pub distance: f32,
     /// For polygon: which vertex was hit, if any
     pub vertex_index: Option<usize>,
-    pub text_being_edited: Option<bool>
+    pub text_being_edited: Option<bool>,
 }
 
 impl HitTestResult {
@@ -192,78 +197,41 @@ pub struct InputSnapshot {
 #[derive(Clone, Debug)]
 pub enum TouchEvent {
     // Hover events
-    HoverEnter {
-        element: ElementRef,
-        actions: Vec<String>,
-    },
-    Hovering {
-        element: ElementRef,
-        actions: Vec<String>,
-    },
-    HoverExit {
-        element: ElementRef,
-        actions: Vec<String>,
-    },
-
-    Nothing {
-        element: ElementRef,
-        actions: Vec<String>,
-    },
+    HoverEnter,
+    Hovering,
+    HoverExit,
+    Nothing,
     // Press/release events
     Press {
-        element: ElementRef,
         position: [f32; 2],
         vertex_index: Option<usize>,
-        actions: Vec<String>,
-        buttons: MouseButtons,
     },
     Down {
-        element: ElementRef,
         position: [f32; 2],
         vertex_index: Option<usize>,
-        actions: Vec<String>,
-        buttons: MouseButtons,
     },
     Release {
-        element: ElementRef,
         position: [f32; 2],
         was_drag: bool,
-        actions: Vec<String>,
-        buttons: MouseButtons,
     },
     Click {
-        element: ElementRef,
         position: [f32; 2],
-        actions: Vec<String>,
-        buttons: MouseButtons,
     },
     DoubleClick {
-        element: ElementRef,
         position: [f32; 2],
-        actions: Vec<String>,
-        buttons: MouseButtons,
     },
 
     // Drag events
     DragStart {
-        element: ElementRef,
-        actions: Vec<String>,
-        buttons: MouseButtons,
         start_position: [f32; 2],
         vertex_index: Option<usize>,
     },
     DragMove {
-        element: ElementRef,
-        actions: Vec<String>,
-        buttons: MouseButtons,
         current_position: [f32; 2],
         delta: [f32; 2],
         total_delta: [f32; 2],
     },
     DragEnd {
-        element: ElementRef,
-        actions: Vec<String>,
-        buttons: MouseButtons,
         start_position: [f32; 2],
         end_position: [f32; 2],
         vertex_index: Option<usize>,
@@ -271,11 +239,10 @@ pub enum TouchEvent {
 
     // Selection events
     SelectionRequested {
-        element: ElementRef,
         additive: bool,
         multi: bool,
     },
-    DeselectAllRequested,
+    DeselectAllRequested, // TODO: Have two event queues: One for each element and one for all elements and ADD THE GLOBAL ONE IN THE PARSE ACTIONS!!
     BoxSelectStart {
         start: [f32; 2],
     },
@@ -289,9 +256,7 @@ pub enum TouchEvent {
 
     // Scroll/resize events
     ScrollOnElement {
-        element: ElementRef,
         delta: f32,
-        actions: Vec<String>,
     },
 
     // Text editing events
@@ -306,24 +271,10 @@ pub enum TouchEvent {
     NavigateDirection {
         direction: NavigationDirection,
     },
-    Activated {
-        element: ElementRef,
-        actions: Vec<String>,
-        buttons: MouseButtons,
-    },
-    Deactivated {
-        element: ElementRef,
-        actions: Vec<String>,
-        buttons: MouseButtons,
-    },
-    StartUp {
-        element: ElementRef,
-        actions: Vec<String>,
-    },
-    ScreenResize {
-        element: ElementRef,
-        actions: Vec<String>,
-    },
+    Activated,
+    Deactivated,
+    StartUp,
+    ScreenResize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1018,9 +969,6 @@ impl DragCoordinator {
             let drag_element = drag.element.clone();
             if drag_element.kind != ElementKind::Handle {
                 events.push(TouchEvent::DragStart {
-                    element: drag_element,
-                    actions: drag.actions.clone(),
-                    buttons: drag.buttons,
                     start_position: drag.start_position,
                     vertex_index: drag.vertex_index,
                 });
@@ -1035,9 +983,6 @@ impl DragCoordinator {
             ];
 
             events.push(TouchEvent::DragMove {
-                element: drag.element.clone(),
-                actions: drag.actions.clone(),
-                buttons: drag.buttons,
                 current_position: drag.current_position,
                 delta,
                 total_delta,
@@ -1050,18 +995,18 @@ impl DragCoordinator {
     }
 
     /// End drag operation, returns DragEnd event if threshold was exceeded
-    pub fn end(&mut self) -> Option<TouchEvent> {
+    pub fn end(&mut self) -> Option<(ElementRef, TouchEvent)> {
         let drag = self.active_drag.take()?;
 
         if drag.threshold_exceeded {
-            Some(TouchEvent::DragEnd {
-                element: drag.element,
-                actions: drag.actions,
-                buttons: drag.buttons,
-                start_position: drag.start_position,
-                end_position: drag.current_position,
-                vertex_index: drag.vertex_index,
-            })
+            Some((
+                drag.element,
+                TouchEvent::DragEnd {
+                    start_position: drag.start_position,
+                    end_position: drag.current_position,
+                    vertex_index: drag.vertex_index,
+                },
+            ))
         } else {
             None
         }
@@ -1118,7 +1063,7 @@ pub struct EditorTouchExtension {
     /// Original radius when resize started
     pub original_radius: f32,
     /// Active vertex being dragged (for polygons)
-    pub active_vertex: Option<usize>
+    pub active_vertex: Option<usize>,
 }
 
 impl EditorTouchExtension {
@@ -1165,9 +1110,7 @@ impl EditorTouchExtension {
         }
 
         Some(TouchEvent::ScrollOnElement {
-            element: element.clone(),
             delta: scroll_delta,
-            actions: action.clone(),
         })
     }
 }
@@ -1250,7 +1193,7 @@ pub enum InteractionMode {
     Pressing,
     Dragging,
     BoxSelecting,
-    TextEditing
+    TextEditing,
 }
 
 impl Default for InteractionMode {
@@ -1274,7 +1217,8 @@ pub struct UiTouchManager {
     pub selection: SelectionManager,
     pub drag: DragCoordinator,
     pub editor: EditorTouchExtension,
-    pub events: TouchEventQueue,
+    pub events: HashMap<ElementRef, Vec<TouchEvent>>,
+    pub global_events: Vec<TouchEvent>,
     pub runtimes: UiRuntimes,
     // State
     element_states: HashMap<String, ElementTouchData>,
@@ -1286,7 +1230,7 @@ pub struct UiTouchManager {
     accumulated_time: f32,
     pub options: GuiOptions,
     pub element_actives: HashMap<ElementRef, bool>,
-    pub add_screen_resize_event: bool
+    pub add_screen_resize_event: bool,
 }
 
 impl UiTouchManager {
@@ -1296,7 +1240,8 @@ impl UiTouchManager {
             selection: SelectionManager::new(),
             drag: DragCoordinator::new(),
             editor: EditorTouchExtension::new(settings.editor_mode),
-            events: TouchEventQueue::new(64),
+            events: HashMap::new(),
+            global_events: vec![],
             runtimes: UiRuntimes::new(),
             element_states: HashMap::new(),
             current_hover: None,
@@ -1311,14 +1256,22 @@ impl UiTouchManager {
             add_screen_resize_event: true,
         }
     }
-
+    pub fn push_event<E>(&mut self, element_ref: E, event: TouchEvent)
+    where
+        E: Into<ElementRef>,
+    {
+        self.events
+            .entry(element_ref.into())
+            .or_default()
+            .push(event);
+    }
     /// Update touch manager with new input
     pub fn update(
         &mut self,
         dt: f32,
         input: InputSnapshot,
         elements: &Vec<TouchableElement>,
-        time: &Time
+        time: &Time,
     ) {
         self.accumulated_time += dt;
         self.selection.reset_frame_flags();
@@ -1349,9 +1302,9 @@ impl UiTouchManager {
 
         // Handle box selection if active
         if self.selection.is_box_selecting() && input.buttons.pressed() {
-            self.events.push(TouchEvent::BoxSelectMove {
-                current: input.position,
-            });
+            // self.events.get_mut().push(TouchEvent::BoxSelectMove {
+            //     current: input.position,
+            // }); TODO: IDK!!
         }
 
         self.last_input = input;
@@ -1367,11 +1320,8 @@ impl UiTouchManager {
         // Check if hover target changed
         if self.current_hover != new_hover {
             // Exit old hover
-            if let Some(old) = &self.current_hover {
-                self.events.push(TouchEvent::HoverExit {
-                    element: old.element.clone(),
-                    actions: old.actions.clone(),
-                });
+            if let Some(old) = self.current_hover.clone() {
+                self.push_event(old.element.clone(), TouchEvent::HoverExit);
                 if let Some(state) = self.element_states.get_mut(&old.element.id) {
                     if state.state == ElementTouchState::Hovered {
                         state.state = ElementTouchState::Idle;
@@ -1381,10 +1331,7 @@ impl UiTouchManager {
 
             // Enter new hover
             if let Some(new) = &new_hover {
-                self.events.push(TouchEvent::HoverEnter {
-                    element: new.element.clone(),
-                    actions: new.actions.clone(),
-                });
+                self.push_event(new.element.clone(), TouchEvent::HoverEnter);
                 let state = self
                     .element_states
                     .entry(new.element.id.clone())
@@ -1407,11 +1354,8 @@ impl UiTouchManager {
                 };
             }
         } else {
-            if let Some(current_hover) = &self.current_hover {
-                self.events.push(TouchEvent::Hovering {
-                    element: current_hover.element.clone(),
-                    actions: current_hover.actions.clone(),
-                });
+            if let Some(current_hover) = self.current_hover.clone() {
+                self.push_event(current_hover.element, TouchEvent::Hovering);
             }
         }
     }
@@ -1447,20 +1391,20 @@ impl UiTouchManager {
             state.vertex_index = hit.vertex_index;
 
             // Emit press event
-            self.events.push(TouchEvent::Press {
-                element: element.clone(),
-                position: input.position,
-                vertex_index: hit.vertex_index,
-                actions: hit.actions.clone(),
-                buttons: input.buttons,
-            });
-            self.events.push(TouchEvent::Down {
-                element: element.clone(),
-                position: input.position,
-                vertex_index: hit.vertex_index,
-                actions: hit.actions.clone(),
-                buttons: input.buttons,
-            });
+            self.push_event(
+                element,
+                TouchEvent::Press {
+                    position: input.position,
+                    vertex_index: hit.vertex_index,
+                },
+            );
+            self.push_event(
+                element,
+                TouchEvent::Down {
+                    position: input.position,
+                    vertex_index: hit.vertex_index,
+                },
+            );
             // Begin potential drag
             if !hit.text_being_edited.unwrap_or(false) {
                 let anchor = input.position; // Could get from element's drag anchor
@@ -1478,36 +1422,33 @@ impl UiTouchManager {
             // Handle selection
             let selection_event = if self.config.multi_select_active {
                 TouchEvent::SelectionRequested {
-                    element: element.clone(),
                     additive: false,
                     multi: true,
                 }
             } else if self.config.additive_select_active {
                 TouchEvent::SelectionRequested {
-                    element: element.clone(),
                     additive: true,
                     multi: false,
                 }
             } else {
                 TouchEvent::SelectionRequested {
-                    element: element.clone(),
                     additive: false,
                     multi: false,
                 }
             };
-            self.events.push(selection_event);
+            self.global_events.push(selection_event);
 
             self.interaction_mode = InteractionMode::Pressing;
         } else {
             // Clicked on empty space
             if !self.config.additive_select_active {
-                self.events.push(TouchEvent::DeselectAllRequested);
+                self.global_events.push(TouchEvent::DeselectAllRequested);
             }
 
             // Begin box select if in editor mode
             if self.editor.enabled {
                 self.selection.begin_box_select(input.position);
-                self.events.push(TouchEvent::BoxSelectStart {
+                self.global_events.push(TouchEvent::BoxSelectStart {
                     start: input.position,
                 });
                 self.interaction_mode = InteractionMode::BoxSelecting;
@@ -1522,37 +1463,47 @@ impl UiTouchManager {
 
         if !drag_events.is_empty() {
             self.interaction_mode = InteractionMode::Dragging;
-            self.events.push_all(drag_events);
+            if let Some(active_drag) = self.drag.active_drag.as_ref() {
+                self.events
+                    .get_mut(&active_drag.element)
+                    .map(|events| events.extend(drag_events));
+            }
         }
 
         // Update pressed element state
+        let mut events = Vec::new();
+
         for state in self.element_states.values_mut() {
             if let ElementTouchState::Pressed { frame_count } = &mut state.state {
                 *frame_count += 1;
+
                 if let Some(hit) = top_hit {
-                    let element = &hit.element_ref;
-                    self.events.push(TouchEvent::Down {
-                        element: element.clone(),
-                        position: input.position,
-                        vertex_index: hit.vertex_index,
-                        actions: hit.actions.clone(),
-                        buttons: input.buttons,
-                    });
+                    events.push((
+                        hit.element_ref.clone(),
+                        TouchEvent::Down {
+                            position: input.position,
+                            vertex_index: hit.vertex_index,
+                        },
+                    ));
                 }
             }
+        }
+
+        for (element, event) in events {
+            self.push_event(element, event);
         }
     }
 
     /// Handle mouse release
     fn handle_release(&mut self, input: &InputSnapshot) {
         // End drag
-        if let Some(drag_end) = self.drag.end() {
-            self.events.push(drag_end);
+        if let Some((drag_element, drag_end)) = self.drag.end() {
+            self.push_event(drag_element, drag_end);
         }
 
         // End box select
         if let Some(start) = self.selection.end_box_select() {
-            self.events.push(TouchEvent::BoxSelectEnd {
+            self.global_events.push(TouchEvent::BoxSelectEnd {
                 start,
                 end: input.position,
             });
@@ -1569,15 +1520,15 @@ impl UiTouchManager {
         }
 
         for (id, _press_pos, was_drag) in releases {
-            if let Some(hover) = &self.current_hover {
+            if let Some(hover) = self.current_hover.clone() {
                 if hover.element.id == id {
-                    self.events.push(TouchEvent::Release {
-                        element: hover.element.clone(),
-                        position: input.position,
-                        was_drag,
-                        actions: hover.actions.clone(),
-                        buttons: input.buttons,
-                    });
+                    self.push_event(
+                        hover.element.clone(),
+                        TouchEvent::Release {
+                            position: input.position,
+                            was_drag,
+                        },
+                    );
 
                     // If it wasn't a drag, it's a click
                     if !was_drag {
@@ -1587,19 +1538,19 @@ impl UiTouchManager {
                             .unwrap_or(f32::MAX);
 
                         if time_since_last_click < self.config.double_click_time.as_secs_f32() {
-                            self.events.push(TouchEvent::DoubleClick {
-                                element: hover.element.clone(),
-                                position: input.position,
-                                actions: hover.actions.clone(),
-                                buttons: input.buttons,
-                            });
+                            self.push_event(
+                                hover.element,
+                                TouchEvent::DoubleClick {
+                                    position: input.position,
+                                },
+                            );
                         } else {
-                            self.events.push(TouchEvent::Click {
-                                element: hover.element.clone(),
-                                position: input.position,
-                                actions: hover.actions.clone(),
-                                buttons: input.buttons,
-                            });
+                            self.push_event(
+                                hover.element,
+                                TouchEvent::Click {
+                                    position: input.position,
+                                },
+                            );
                         }
 
                         // Update last click time
@@ -1625,14 +1576,14 @@ impl UiTouchManager {
                 .editor
                 .process_scroll(&hover.element, &hover.actions, delta)
             {
-                self.events.push(event);
+                self.push_event(hover.element.clone(), event);
             }
         }
     }
 
     /// Process keyboard navigation
     pub fn process_navigation(&mut self, direction: NavigationDirection) {
-        self.events
+        self.global_events
             .push(TouchEvent::NavigateDirection { direction });
     }
 

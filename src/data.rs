@@ -93,21 +93,20 @@ pub enum DebugViewState {
     Motion,
     Texture,
 }
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Display, EnumString, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize, Display, EnumString, Default)]
 pub enum FullScreenMode {
     Windowed,
+    Fullscreen,
     #[default]
     Borderless,
-    Fullscreen
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Display, EnumString, Default)]
 pub enum InternalMenu {
     None,
     #[default]
-    MainMenu
+    MainMenu,
 }
-
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Display, EnumString, Default)]
 pub enum LodCenterType {
@@ -116,12 +115,14 @@ pub enum LodCenterType {
     Target,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Display, EnumString, Default)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Display, EnumString, Default,
+)]
 pub enum ShadowType {
     OFF,
     #[default]
     CSM,
-    RT
+    RT,
 }
 
 impl_cycle!(BendMode: BendMode::Strict, BendMode::Bent);
@@ -153,7 +154,7 @@ impl_cycle!(ToneMappingState: ToneMappingState::Off, ToneMappingState::Cinematic
 
 impl_cycle!(ColorGradeState: ColorGradeState::Off, ColorGradeState::Mexico, ColorGradeState::Vintage, ColorGradeState::Cold, ColorGradeState::HighContrast);
 
-impl_cycle!(FullScreenMode: FullScreenMode::Borderless, FullScreenMode::Fullscreen, FullScreenMode::Windowed);
+impl_cycle!(FullScreenMode: FullScreenMode::Borderless, FullScreenMode::Windowed, FullScreenMode::Fullscreen);
 
 // ============ Simplified SettingValue ============
 
@@ -542,7 +543,9 @@ macro_rules! apply_setting_arm {
                     $s.$field = val;
                 }
             }
-            _ => {}
+            SettingOp::Toggle => {
+                $s.$field = Cycle::next(&$s.$field); // IS an alias for CycleNext in Enums for example.
+            }
         }
     };
     (Val, $s:ident, $field:ident, $op:ident) => {
@@ -811,7 +814,6 @@ impl Settings {
         Ok(())
     }
 }
-
 
 #[derive(Debug, Default)]
 pub struct SettingsTracker {

@@ -1,0 +1,242 @@
+name: CreateSave
+layers:
+  - name: Difficulty
+    order: 2
+    elements:
+      - !Rect
+        id: Menu Background
+        x: 960
+        y: 540
+        w: 1920
+        h: 1080
+        rotation: 0.0
+        color:
+          - 0.01
+          - 0.01
+          - 0.01
+          - 0.01
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.00
+        fade: 0.0
+        blur: 5.5
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: false
+          touchable: false
+          editable: true
+      - !Rect
+        id: Easy_Background
+        x: 510
+        y: 600
+        w: 860
+        h: 900
+        rotation: 0.0
+        color:
+          - 0.02
+          - 0.02
+          - 0.02
+          - 0.98
+        border_color:
+          - 0.0
+          - 1.0
+          - 0.0
+          - 1.0
+        texture: null
+        roundness: 0.02
+        border_thickness_percentage: 0.002
+        fade: 0.0
+        blur: 5.5
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          touchable: false
+          editable: true
+      - !Rect
+        id: Hard_Background
+        x: 1410
+        y: 600
+        w: 860
+        h: 900
+        rotation: 0.0
+        color:
+          - 0.02
+          - 0.02
+          - 0.02
+          - 0.98
+        border_color:
+          - 1.0
+          - 0.0
+          - 0.0
+          - 1.0
+        texture: null
+        roundness: 0.02
+        border_thickness_percentage: 0.002
+        fade: 0.0
+        blur: 5.5
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          touchable: false
+          editable: true
+      - !Text
+        id: easy_text
+        actions: []
+        x: 510
+        y: 200
+        pt: 50.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        text: EASY
+      - !Text
+        id: hard_text
+        actions: [ ]
+        x: 1410
+        y: 200
+        pt: 50.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        text: HARD
+      - !Text
+        id: easy_description_text
+        actions: [ ]
+        x: 510
+        y: 270
+        pt: 34.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        text: lorem ipsum solemifasolemi fsol
+      - !Text
+        id: hard_description_text
+        actions: [ ]
+        x: 1410
+        y: 270
+        pt: 34.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        text: Lorem ipsum il samet mohammmed
+      - !Rect
+        id: Easy select background
+        x: 510
+        y: 900
+        w: 10
+        h: 10
+        actions:
+          - as:["easy_select_text"] set(str:self.size, expr:{as.size}*1.2); set(str:self.center, as.center)
+        rotation: 0.0
+        color:
+          - 0.0
+          - 1.0
+          - 0.0
+          - 0.98
+        border_color:
+          - 0.22
+          - 0.0
+          - 0.0
+          - 1.0
+        texture: null
+        roundness: 0.02
+        border_thickness_percentage: 0.04
+        fade: 0.0
+        blur: 5.5
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          touchable: false
+          editable: true
+      - !Rect
+        id: Hard select background
+        x: 510
+        y: 900
+        w: 10
+        h: 10
+        actions:
+          - as:["hard_select_text"] set(str:self.size, expr:{as.size}*1.2); set(str:self.center, as.center)
+        rotation: 0.0
+        color:
+          - 0.0
+          - 1.0
+          - 0.0
+          - 0.98
+        border_color:
+          - 0.22
+          - 0.0
+          - 0.0
+          - 1.0
+        texture: null
+        roundness: 0.02
+        border_thickness_percentage: 0.04
+        fade: 0.0
+        blur: 5.5
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          touchable: false
+          editable: true
+      - !Text
+        id: easy_select_text
+        actions: [ ]
+        x: 510
+        y: 900
+        pt: 50.0
+        color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 1.0
+        text: ">Enter chill<"
+      - !Text
+        id: hard_select_text
+        actions: [ ]
+        x: 1410
+        y: 900
+        pt: 50.0
+        color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 1.0
+        text: ">Enter hell<"
+    editing_tool: false

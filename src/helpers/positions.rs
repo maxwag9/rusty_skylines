@@ -1,5 +1,5 @@
 #![allow(dead_code, unused_variables)]
-use crate::world::roads::road_mesh_manager::{chunk_coord_to_id, ChunkId};
+use crate::world::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
 use glam::{Vec2, Vec3};
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
@@ -933,6 +933,67 @@ impl WorldPos {
         }
 
         inside
+    }
+    #[inline]
+    pub fn point_segment_distance_squared(&self, a: WorldPos, b: WorldPos) -> f64 {
+        // Everything is calculated relative to `point` (self), so large world
+        // coordinates remain precise.
+        let ax = self.dx(a);
+        let az = self.dz(a);
+
+        let bx = self.dx(b);
+        let bz = self.dz(b);
+
+        let abx = bx - ax;
+        let abz = bz - az;
+
+        let ab_len2 = abx * abx + abz * abz;
+
+        // Degenerate segment.
+        if ab_len2 <= f64::EPSILON {
+            return ax * ax + az * az;
+        }
+
+        // Projection of point onto AB.
+        // Since A/B are already relative to `point`, the projection parameter
+        // is the dot product of A with AB, negated.
+        let t = (-(ax * abx + az * abz) / ab_len2).clamp(0.0, 1.0);
+
+        let closest_x = ax + abx * t;
+        let closest_z = az + abz * t;
+
+        closest_x * closest_x + closest_z * closest_z
+    }
+
+    #[inline]
+    pub fn polygon_distance_squared(&self, polygon: &[WorldPos]) -> f64 {
+        if polygon.is_empty() {
+            return f64::INFINITY;
+        }
+
+        if polygon.len() == 1 {
+            return self.distance_squared(polygon[0]);
+        }
+
+        if polygon.len() == 2 {
+            return self.point_segment_distance_squared(polygon[0], polygon[1]);
+        }
+
+        // Inside the district = actual distance is zero.
+        if self.in_polygon(polygon) {
+            return 0.0;
+        }
+
+        let mut min_dist2 = f64::INFINITY;
+
+        for i in 0..polygon.len() {
+            let a = polygon[i];
+            let b = polygon[(i + 1) % polygon.len()];
+
+            min_dist2 = min_dist2.min(self.point_segment_distance_squared(a, b));
+        }
+
+        min_dist2
     }
 }
 impl Default for WorldPos {

@@ -1,15 +1,15 @@
 [package]
 name = "Rusty_Skylines"
-version = "0.8.5"
+version = "0.8.6"
 edition = "2024"
 
 [dependencies]
 winit = { version = "0.31.0-beta.2", features = ["serde"] }
 
-wgpu = { version = "30.0.0", features = ["strict_asserts"] }
+wgpu = { version = "30.0.1", features = ["strict_asserts"] }
 pollster = "1.0.1"
 bytemuck = { version = "1.25.2", features = ["derive"] }
-glam = { version = "0.33.3", features = ["serde"] }
+glam = { version = "0.33.5", features = ["serde"] }
 toml = "1.1.4"
 serde = { version = "1.0.229", features = ["derive"] }
 anyhow = "1.0.104"
@@ -25,7 +25,7 @@ wgpu_render_manager = "30.0.2"                          # HERE!
 earcutr = "0.5.0"
 clipper2-rust = "1.1.0"
 rayon = "1.12.0"
-cpal = "0.18.1"
+cpal = "0.18.2"
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 sanitize-filename = "0.7.0-beta"
 image = "0.25.10"

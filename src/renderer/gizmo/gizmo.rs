@@ -142,7 +142,7 @@ pub struct Gizmo {
     total_game_time: f64,
     pub text_raster_factor: f32, // good start: 48.0
     pub text_raster_min: f32,    // good start: 8.0
-    pub text_raster_max: f32    // good start: 256.0
+    pub text_raster_max: f32,    // good start: 256.0
 }
 
 #[derive(Default)]
@@ -157,7 +157,7 @@ impl Gizmo {
         device: &Device,
         config: &SurfaceConfiguration,
         font_arc: &FontArc,
-        msaa_samples: u32
+        msaa_samples: u32,
     ) -> Self {
         let thin_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Gizmo Thin VB"),
@@ -185,7 +185,8 @@ impl Gizmo {
         });
         let brush: GlyphBrush<GlyphQuad, Extra> = GlyphBrushBuilder::using_font(font_arc.clone())
             .initial_cache_size((2048, 2048))
-            .cache_redraws(true).build();
+            .cache_redraws(true)
+            .build();
         let gizmo_buffers = Some(GizmoBuffers {
             thin_buffer,
             thick_buffer,
@@ -200,7 +201,7 @@ impl Gizmo {
             total_game_time: 0.0,
             text_raster_factor: 2048.0,
             text_raster_min: 8.0,
-            text_raster_max: 128.0
+            text_raster_max: 128.0,
         }
     }
     pub fn new_empty() -> Self {
@@ -210,12 +211,13 @@ impl Gizmo {
             total_game_time: 0.0,
             text_raster_factor: 2048.0,
             text_raster_min: 8.0,
-            text_raster_max: 128.0
+            text_raster_max: 128.0,
         }
     }
     pub fn clear(&mut self) {
         let now = self.total_game_time;
-        self.pending_renders.retain(|g| now - g.start_time < g.duration as f64);
+        self.pending_renders
+            .retain(|g| now - g.start_time < g.duration as f64);
     }
 
     pub fn update_buffers(
@@ -228,7 +230,9 @@ impl Gizmo {
         let thick_count = batches.thick_vertices.len() as u32;
         let filled_count = batches.filled_vertices.len() as u32;
         let text_count = batches.text_vertices.len() as u32;
-        let Some(gb) = self.gizmo_buffers.as_mut() else { return (0, 0, 0, 0) };
+        let Some(gb) = self.gizmo_buffers.as_mut() else {
+            return (0, 0, 0, 0);
+        };
         // Update thin line buffer
         if thin_count > 0 {
             let byte_size = (batches.thin_vertices.len() * size_of::<ThinLineVtxRender>()) as u64;
@@ -918,8 +922,16 @@ impl Gizmo {
         self.line(left_start, right_end, color, thickness, duration);
     }
 
-
-    pub fn tile(&mut self, pos: WorldPos, dir: Vec3, width: f32, length: f32, color: [f32; 4], thickness: f32, duration: f32) {
+    pub fn tile(
+        &mut self,
+        pos: WorldPos,
+        dir: Vec3,
+        width: f32,
+        length: f32,
+        color: [f32; 4],
+        thickness: f32,
+        duration: f32,
+    ) {
         let forward = dir.normalize();
         let right = Vec3::new(forward.z, 0.0, -forward.x);
 
@@ -932,14 +944,7 @@ impl Gizmo {
             pos.add_vec3(forward * half_l + right * half_w),  // front right
             pos.add_vec3(forward * half_l - right * half_w),  // front left
         ];
-        self.polyline(
-            corners.as_slice(),
-            color,
-            0.0,
-            true,
-            thickness,
-            duration,
-        );
+        self.polyline(corners.as_slice(), color, 0.0, true, thickness, duration);
     }
 
     // Polyline (anchor + relative points for now, or full WorldPos slice)
@@ -1208,16 +1213,30 @@ impl Gizmo {
         buildings: &Buildings,
         zoning: &ZoningStorage,
         settings: &Settings,
-        camera: &Camera
+        camera: &Camera,
     ) {
         self.total_game_time = total_game_time;
         let target = camera.target;
 
-        let mut renders = pending_gizmo_renders().lock().unwrap_or_else(|e| e.into_inner());
+        let mut renders = pending_gizmo_renders()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut taken_renders = mem::take(&mut *renders);
-        taken_renders.iter_mut().for_each(|render| render.start_time = self.total_game_time);
+        taken_renders
+            .iter_mut()
+            .for_each(|render| render.start_time = self.total_game_time);
         self.pending_renders.extend(taken_renders);
 
+        if let Some(district) = zoning.get_closest_district(camera.target) {
+            self.polyline(
+                district.points.as_slice(),
+                [0.4, 0.0, 0.0, 0.6],
+                0.0,
+                true,
+                0.4,
+                0.0,
+            );
+        }
 
         if settings.render_partitions_gizmo {
             self.visualize_partitions(buildings);
@@ -1267,7 +1286,7 @@ impl Gizmo {
                     PARK_L as f32,
                     [1.0, 0.0, 0.0, 0.5],
                     0.0,
-                    0.0
+                    0.0,
                 );
             }
         }
@@ -1876,7 +1895,9 @@ impl Gizmo {
     ) -> GizmoBatches {
         let mut batches = GizmoBatches::default();
         let eye = camera.eye_world();
-        let Some(gb) = self.gizmo_buffers.as_mut() else { return batches; };
+        let Some(gb) = self.gizmo_buffers.as_mut() else {
+            return batches;
+        };
 
         for render in self.pending_renders.iter_mut() {
             if render.filled {
@@ -1902,7 +1923,8 @@ impl Gizmo {
                     .clamp(self.text_raster_min, self.text_raster_max);
 
                 let step = 2.0;
-                let raster_scale = ((raw / step).round() * step).clamp(self.text_raster_min, self.text_raster_max);
+                let raster_scale =
+                    ((raw / step).round() * step).clamp(self.text_raster_min, self.text_raster_max);
 
                 for t in text.section.text.iter_mut() {
                     t.scale = PxScale::from(raster_scale);
@@ -1910,7 +1932,11 @@ impl Gizmo {
 
                 let section = text.section.to_borrowed();
 
-                let color = section.text.first().map(|t| t.extra.color).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                let color = section
+                    .text
+                    .first()
+                    .map(|t| t.extra.color)
+                    .unwrap_or([1.0, 1.0, 1.0, 1.0]);
 
                 let key = text.glyph_cache_key(raster_scale);
 
@@ -2037,10 +2063,14 @@ impl Gizmo {
 
                 text.vertices = verts;
 
-                batches.text_vertices.extend(text.vertices.iter().map(|v| v.to_render(eye)));
+                batches
+                    .text_vertices
+                    .extend(text.vertices.iter().map(|v| v.to_render(eye)));
             } else {
                 // Only thin-line renders go here
-                batches.thin_vertices.extend(render.vertices.iter().map(|v| v.to_render(eye)));
+                batches
+                    .thin_vertices
+                    .extend(render.vertices.iter().map(|v| v.to_render(eye)));
             }
         }
 

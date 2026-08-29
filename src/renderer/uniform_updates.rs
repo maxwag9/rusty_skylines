@@ -1,8 +1,12 @@
 use crate::data::Settings;
 use crate::renderer::gtao::gtao::GtaoParams;
-use crate::renderer::pipelines::{FogUniforms, Pipelines, ToneMappingState, ToneMappingUniforms, make_new_camera_uniforms, ColorGrade, ColorGradeState};
+use crate::renderer::pipelines::{
+    ColorGrade, ColorGradeState, FogUniforms, Pipelines, PostProcessUniforms, ToneMappingState,
+    ToneMappingUniforms, make_new_camera_uniforms,
+};
 use crate::renderer::shadows::compute_csm_matrices;
 use crate::resources::Time;
+use crate::ui::variables::Variables;
 use crate::world::astronomy::Astronomy;
 use crate::world::camera::Camera;
 use crate::world::terrain::sky::SkyUniform;
@@ -66,11 +70,11 @@ impl<'a> UniformUpdater<'a> {
     pub fn update_fog_uniforms(&self, config: &SurfaceConfiguration, camera: &Camera) {
         let fog_uniforms = FogUniforms {
             fog_density: 1.0,
-            fog_height: 200.0,
+            fog_height: 20.0,
             _pad0: 0.0,
             fog_color: [0.55, 0.55, 0.7],
             _pad1: 0.0,
-            fog_sky_factor: 0.05,
+            fog_sky_factor: 0.5,
             fog_height_falloff: 0.0,
             fog_start: camera.far * 0.70,
             fog_end: camera.far * 1.05,
@@ -83,19 +87,20 @@ impl<'a> UniformUpdater<'a> {
             bytemuck::bytes_of(&fog_uniforms),
         );
     }
-    pub fn update_tonemapping_uniforms(&self, tonemapping_state: ToneMappingState, color_grade_state: ColorGradeState) {
-        let tonemapping_uniforms = ToneMappingUniforms::from_state(tonemapping_state);
-        let color_grade_uniforms = ColorGrade::from_state(color_grade_state);
 
+    pub fn update_tonemapping_uniforms(
+        &self,
+        tonemapping_state: ToneMappingState,
+        color_grade_state: ColorGradeState,
+        variables: &mut Variables,
+    ) {
+        let tonemapping = ToneMappingUniforms::from_state(tonemapping_state);
+        let color_grade = ColorGrade::from_state(color_grade_state);
+        let pp_uniforms = PostProcessUniforms::new(tonemapping.as_slice(), color_grade, variables);
         self.queue.write_buffer(
-            &self.pipelines.buffers.tonemapping,
+            &self.pipelines.buffers.post_processing,
             0,
-            bytemuck::bytes_of(&tonemapping_uniforms),
-        );
-        self.queue.write_buffer(
-            &self.pipelines.buffers.color_grading,
-            0,
-            bytemuck::bytes_of(&color_grade_uniforms),
+            bytemuck::bytes_of(&pp_uniforms),
         );
     }
     pub fn update_sky_uniforms(&self, astronomy: &Astronomy) {

@@ -28,10 +28,13 @@ global_actions:
   #
   #  - on:startup, set(str:func_name, ["button:l on:release, print(hi)", "button:r on:down, print(you have chosen the dark side!! {args.0})"])
   #  - on:always, call(func_name, ["HURENSOHN HAHA!!"])
-  - button:"Resume" trigger:r, menu_active(PauseMenu); if(_result, call(back_to_the_game) ); set(str:just_resumed_from_pause_menu, _result);
-  - button:"Leave Game" trigger:r, menu_active(MainMenu); if(_result, exit_game());
-  - button:"Exit to Main Menu" trigger:r in:any, if(expr:is_some({current_save}), if(expr:!{just_resumed_from_pause_menu}, call(open_pause_menus)), call(open_main_menus) ); set(str:just_resumed_from_pause_menu, false)
-
+  - on:startup, set(str:to_the_menu, [
+    "button:"Resume" trigger:r, menu_active(PauseMenu); if(_result, call(back_to_the_game) ); set(str:just_resumed_from_pause_menu, _result);", 
+    "button:"Leave Game" trigger:r, menu_active(MainMenu); if(_result, exit_game());", 
+    "button:"Exit to Main Menu" trigger:r in:any, if(expr:is_some({current_save}), if(expr:!{just_resumed_from_pause_menu}, call(open_pause_menus)), call(open_main_menus) ); set(str:just_resumed_from_pause_menu, false)"
+    ])
+  - in:any, call(to_the_menu)
   #
   #- button:"KeyQ" trigger:r in:any, debug_menus();  # _Ok I get it, so 'x.exists' didn't work because {ap.5}.exists was replaced with '.exists' and that returns it as a full string. because the ap.5 value is
   - button:"Toggle editor mode" trigger:repeat in:any, toggle(str:editor_mode); if({editor_mode}, call(open_editor_menus));
+  - button:"Toggle Fullscreen" trigger:repeat in:any, toggle(str:fullscreen_mode);
