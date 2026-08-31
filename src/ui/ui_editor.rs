@@ -24,10 +24,10 @@ use crate::ui::ui_loader::{
     load_advanced_primitives_from_directory, load_global_actions, load_legacy_gui_layout,
     load_menus_from_directory,
 };
-use crate::ui::ui_text_editing::{MouseSnapshot, handle_text_editing};
+use crate::ui::ui_text_editing::handle_text_editing;
 use crate::ui::ui_touch_manager::{
-    CurrentHover, DragCoordinator, ElementRef, HitDetector, InputSnapshot, MouseButtons,
-    NavigationDirection, TouchEvent, UiTouchManager, ZoomState,
+    DragCoordinator, ElementEvent, ElementRef, GlobalEvent, HitDetector, NavigationDirection,
+    Touchable, UiTouchManager, ZoomState,
 };
 use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
@@ -46,7 +46,7 @@ use winit::event_loop::ActiveEventLoop;
 pub struct DragStartState {
     pub affected_element: ElementRef,
     pub start_pos: [f32; 2],
-    pub start_size: Option<SizeProperty>,
+    pub start_sizes: Vec<SizeProperty>,
     pub start_vertices: Option<Vec<[f32; 2]>>,
 }
 
@@ -253,13 +253,9 @@ impl Ui {
         let input = &mut world.input;
         self.handle_undo_redo_input(input, dt);
 
-        // Create input snapshot
-        let input_snapshot = self.create_input_snapshot(input);
-
         // Collect elements - borrow only self.menus
         let elements = Self::collect_touchable_elements(&self.menus, settings.editor_mode);
-        self.touch_manager
-            .update(dt, input_snapshot, &elements, &world.time);
+        self.touch_manager.update(dt, input, &elements, &world.time);
         for (menu_name, menu) in self.menus.iter() {
             for layer in menu.layers.iter() {
                 for element in layer.iter_all() {
@@ -289,25 +285,25 @@ impl Ui {
                         self.touch_manager.push_event(
                             element_ref.clone(),
                             if is_active {
-                                TouchEvent::Activated
+                                ElementEvent::Activated
                             } else {
-                                TouchEvent::Deactivated
+                                ElementEvent::Deactivated
                             },
                         );
                     }
 
                     if world.time.game_just_started() {
                         // Only on frame 0
-                        self.touch_manager
-                            .push_event(element_ref.clone(), TouchEvent::StartUp);
+                        self.touch_manager.global_events.push(GlobalEvent::StartUp);
                     }
                     if self.touch_manager.add_screen_resize_event {
                         self.touch_manager
-                            .push_event(element_ref.clone(), TouchEvent::ScreenResize); // Selbstverständlich
+                            .global_events
+                            .push(GlobalEvent::ScreenResize); // Selbstverständlich
                     }
                     // Important for when not hovering and such, super important for always-on functions!
                     self.touch_manager
-                        .push_event(element_ref, TouchEvent::Nothing);
+                        .push_event(element_ref, ElementEvent::Nothing);
                 }
             }
         }
@@ -329,9 +325,9 @@ impl Ui {
         self.apply_event_results(result, &input.mouse);
         //println!("The Variable is: {:?}", self.variables.get("tonemapping_state_open"));
         // Handle text editing
-        if self.touch_manager.editor.enabled {
-            self.handle_text_editing(input, input_snapshot);
-        }
+        //if self.touch_manager.editor.enabled {
+        self.handle_text_editing(input);
+        //}
 
         // Handle keyboard navigation
         self.handle_keyboard_navigation(input);
@@ -342,7 +338,7 @@ impl Ui {
         }
 
         // Execute actions
-        let hover = self.get_current_hit_for_actions();
+        let hover = self.touch_manager.hovered().cloned();
         if hover.is_some() {
             //|| self.touch_manager.editor.enabled || !settings.show_world {
             world.terrain.last_picked = None;
@@ -356,56 +352,12 @@ impl Ui {
             self,
             world,
             props,
-            &hover,
             window_size,
             settings,
             event_loop,
             game_state,
             simulation,
         );
-
-        if self.touch_manager.selection.selection_changed {
-            for (menu_name, menu) in self.menus.iter_mut() {
-                for layer in menu.layers.iter_mut() {
-                    for text in layer.elements.iter_mut().filter_map(UiElement::as_text_mut) {
-                        let text_ref = ElementRef::new(
-                            menu_name,
-                            layer.name.as_str(),
-                            text.id.as_str(),
-                            ElementKind::Text,
-                        );
-                        if !self.touch_manager.selection.is_selected(&text_ref) {
-                            if text.being_edited {
-                                layer.dirty.mark_texts()
-                            }
-                            text.being_edited = false; // Wtf?!
-                            text.clear_selection();
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Create input snapshot from mouse state
-    fn create_input_snapshot(&self, input: &Input) -> InputSnapshot {
-        let mouse = &input.mouse;
-        InputSnapshot {
-            position: mouse.pos.to_array(),
-
-            buttons: MouseButtons {
-                left: mouse.buttons.left,
-                right: mouse.buttons.right,
-                middle: mouse.buttons.middle,
-                back: mouse.buttons.back,
-                forward: mouse.buttons.forward,
-            },
-
-            scroll_delta: mouse.scroll_delta.y,
-            ctrl_held: input.ctrl,
-            shift_held: input.shift,
-            alt_held: input.alt,
-        }
     }
 
     /// Collect all touchable elements from menus - return references, not owned Strings
@@ -466,7 +418,6 @@ impl Ui {
             world,
             props,
             ui: self,
-            hover: &None,
             window_size,
             settings,
             event_loop,
@@ -479,111 +430,126 @@ impl Ui {
         // let events: Vec<TouchEvent> = self.touch_manager.events.drain().map(|kv|kv.1).flatten()
         //     .chain(self.touch_manager.global_events.drain(..)).collect();
         //for event in events {
-        self.handle_touch_events(&mut result, &world.input.mouse);
+        self.handle_ui_events(&mut result, &world.input.mouse);
         //}
 
         result
     }
 
     /// Handle a single touch event
-    fn handle_touch_events(&mut self, result: &mut EventProcessingResult, mouse: &Mouse) {
+    fn handle_ui_events(&mut self, result: &mut EventProcessingResult, mouse: &Mouse) {
         //println!("handle_touch_event: {:?}", event);
-        for (element_ref, events) in self.touch_manager.events.clone().iter() {
+        for (element_ref, events) in self.touch_manager.events.clone().into_iter() {
             // Bruh... I don't like this Clone!
             for event in events {
-                match event {
-                    // HOVER EVENTS
-                    TouchEvent::HoverEnter => {
-                        self.handle_hover_enter(element_ref, result);
-                    }
-                    TouchEvent::Hovering { .. } => {}
-                    TouchEvent::HoverExit => {
-                        self.handle_hover_exit(element_ref, result);
-                    }
+                self.handle_element_event(result, event, &element_ref, mouse);
+            }
+        }
+        for event in self.touch_manager.global_events.clone() {
+            self.handle_global_event(result, event, mouse);
+        }
+    }
+    fn handle_element_event(
+        &mut self,
+        result: &mut EventProcessingResult,
+        event: ElementEvent,
+        element_ref: &ElementRef,
+        mouse: &Mouse,
+    ) {
+        match event {
+            // HOVER EVENTS
+            ElementEvent::HoverEnter => {
+                self.handle_hover_enter(element_ref, result);
+            }
+            ElementEvent::Hovering { .. } => {}
+            ElementEvent::HoverExit => {
+                self.handle_hover_exit(element_ref, result);
+            }
 
-                    TouchEvent::Nothing { .. } => {}
-                    TouchEvent::Activated { .. } => {}
-                    TouchEvent::Deactivated { .. } => {}
-                    // PRESS/RELEASE EVENTS
-                    TouchEvent::Press {
-                        position,
-                        vertex_index,
-                    } => {
-                        self.handle_press(element_ref, *position, *vertex_index, result);
-                    }
-                    TouchEvent::Down { .. } => {}
-                    TouchEvent::Release { .. } => {
-                        self.handle_release(element_ref, result);
-                    }
-                    TouchEvent::Click { .. } => {
-                        self.handle_click(element_ref, result);
-                    }
-                    TouchEvent::DoubleClick { position } => {
-                        self.handle_double_click(element_ref, *position, result);
-                    }
+            ElementEvent::Nothing { .. } => {}
+            ElementEvent::Activated { .. } => {}
+            ElementEvent::Deactivated { .. } => {}
+            // PRESS/RELEASE EVENTS
+            ElementEvent::Press {
+                position,
+                vertex_index,
+            } => {
+                self.handle_press(element_ref, position, vertex_index, result);
+            }
+            ElementEvent::Down { .. } => {}
+            ElementEvent::Release { .. } => {
+                self.handle_release(element_ref, result);
+            }
+            ElementEvent::Click { .. } => {
+                self.handle_click(element_ref, result);
+            }
+            ElementEvent::DoubleClick { position } => {
+                self.handle_double_click(element_ref, result);
+            }
 
-                    // DRAG EVENTS
-                    TouchEvent::DragStart {
-                        start_position,
-                        vertex_index,
-                    } => {
-                        self.handle_drag_start(element_ref, *start_position, *vertex_index, result);
-                    }
-                    TouchEvent::DragMove {
-                        current_position,
-                        delta,
-                        total_delta,
-                    } => {
-                        self.handle_drag_move(element_ref, *current_position, result, mouse);
-                    }
-                    TouchEvent::DragEnd {
-                        start_position,
-                        end_position,
-                        vertex_index,
-                    } => {
-                        self.handle_drag_end(element_ref, *vertex_index, result);
-                    }
+            // DRAG EVENTS
+            ElementEvent::DragStart {
+                start_position,
+                vertex_index,
+            } => {
+                self.handle_drag_start(element_ref, start_position, vertex_index, result);
+            }
+            ElementEvent::DragMove {
+                current_position,
+                delta,
+                total_delta,
+            } => {
+                self.handle_drag_move(element_ref, current_position, result, mouse);
+            }
+            ElementEvent::DragEnd {
+                start_position,
+                end_position,
+                vertex_index,
+            } => {
+                self.handle_drag_end(element_ref, vertex_index, result);
+            }
 
-                    // ----------------------------------------------------------------
-                    // SELECTION EVENTS
-                    // ----------------------------------------------------------------
-                    TouchEvent::SelectionRequested { additive, multi } => {
-                        self.handle_selection_requested(element_ref, *additive, *multi, result);
-                    }
-                    TouchEvent::DeselectAllRequested => {
-                        self.handle_deselect_all(result, mouse);
-                    }
-                    TouchEvent::BoxSelectStart { start } => {
-                        self.handle_box_select_start(*start, result);
-                    }
-                    TouchEvent::BoxSelectMove { current } => {
-                        self.handle_box_select_move(*current, result);
-                    }
-                    TouchEvent::BoxSelectEnd { start, end } => {
-                        self.handle_box_select_end(*start, *end, result);
-                    }
+            ElementEvent::SelectionRequested { additive, multi } => {
+                self.handle_selection_requested(element_ref, additive, multi, result);
+            }
 
-                    TouchEvent::ScrollOnElement { delta } => {
-                        // self.handle_scroll_on_element(element, *delta, result);
-                    }
-
-                    TouchEvent::TextEditRequested { element } => {
-                        self.handle_text_edit_requested(element, result);
-                    }
-                    TouchEvent::TextEditEnded { element } => {
-                        self.handle_text_edit_ended(element, result);
-                    }
-
-                    TouchEvent::NavigateDirection { direction } => {
-                        self.handle_navigate_direction(*direction, result);
-                    }
-                    TouchEvent::StartUp { .. } => {}
-                    _ => {}
-                }
+            ElementEvent::TextEditRequested => {
+                self.handle_text_edit_requested(element_ref, result);
+            }
+            ElementEvent::TextEditEnded => {
+                self.handle_text_edit_ended(element_ref, result);
+            }
+            ElementEvent::ScrollOnElement { delta } => {
+                self.variables.set_f64("scroll_delta", delta);
             }
         }
     }
-
+    fn handle_global_event(
+        &mut self,
+        result: &mut EventProcessingResult,
+        event: GlobalEvent,
+        mouse: &Mouse,
+    ) {
+        match event {
+            GlobalEvent::DeselectAllRequested => {
+                self.handle_deselect_all(result, mouse);
+            }
+            GlobalEvent::BoxSelectStart { start } => {
+                self.handle_box_select_start(start, result);
+            }
+            GlobalEvent::BoxSelectMove { current } => {
+                self.handle_box_select_move(current, result);
+            }
+            GlobalEvent::BoxSelectEnd { start, end } => {
+                self.handle_box_select_end(start, end, result);
+            }
+            GlobalEvent::NavigateDirection { direction } => {
+                self.handle_navigate_direction(direction, result);
+            }
+            GlobalEvent::StartUp => {}
+            GlobalEvent::ScreenResize => {}
+        }
+    }
     fn handle_hover_enter(&mut self, element: &ElementRef, result: &mut EventProcessingResult) {
         // Update text hover state
         if element.kind == ElementKind::Text {
@@ -665,29 +631,26 @@ impl Ui {
         };
     }
 
-    fn handle_double_click(
-        &mut self,
-        element: &ElementRef,
-        _position: [f32; 2],
-        result: &mut EventProcessingResult,
-    ) {
-        if element.kind != ElementKind::Text || !self.touch_manager.editor.enabled {
+    fn handle_double_click(&mut self, element: &ElementRef, result: &mut EventProcessingResult) {
+        if element.kind != ElementKind::Text {
             return;
         }
 
         if !self.is_editable(element) {
             return;
-        };
-        // Now do mutations (borrow is dropped)
-        self.touch_manager.editor.editing_text = Some(element.clone());
-
-        // Get mutable reference and update
-        if let Some(text) = self.get_text_mut(element) {
-            text.being_edited = true;
-            text.text = text.template.clone();
         }
 
-        result.mark_dirty = true;
+        let editor_mode = self.touch_manager.editor.enabled;
+
+        let Some(text) = self.get_text(element) else {
+            return;
+        };
+
+        if !text.input_box && !editor_mode {
+            return;
+        }
+
+        self.begin_text_editing(element, result);
     }
 
     fn handle_drag_start(
@@ -704,7 +667,7 @@ impl Ui {
             return;
         };
         // Capture start state for undo
-        let start_size = get_element_size(&self.menus, element);
+        let start_sizes = get_element_sizes(&self.menus, element);
         let start_vertices = if element.kind == ElementKind::Polygon {
             self.get_polygon_vertices(&element)
         } else {
@@ -714,7 +677,7 @@ impl Ui {
         self.drag_start_state = Some(DragStartState {
             affected_element: element.clone(),
             start_pos: start_position,
-            start_size,
+            start_sizes,
             start_vertices,
         });
 
@@ -886,8 +849,8 @@ impl Ui {
             &mut self.variables,
             &mouse,
         );
+        result.update_selection = true; // Hmm
     }
-
     fn handle_box_select_start(&mut self, start: [f32; 2], _result: &mut EventProcessingResult) {
         self.touch_manager.selection.begin_box_select(start);
     }
@@ -908,55 +871,88 @@ impl Ui {
 
         let selected = HitDetector::find_in_box(start, end, &elements);
 
-        self.touch_manager
-            .selection
-            .set_from_box(selected, &mut self.menus);
+        self.touch_manager.selection.set_from_box(
+            selected,
+            &mut self.menus,
+            &mut self.touch_manager.editor,
+        );
         result.update_selection = true;
     }
 
+    fn begin_text_editing(&mut self, element: &ElementRef, result: &mut EventProcessingResult) {
+        if let Some(previous) = self.touch_manager.editor.editing_text.clone() {
+            if previous != *element {
+                self.end_text_editing(&previous);
+            }
+        }
+
+        let Some(text) = self.get_text_mut(element) else {
+            return;
+        };
+
+        text.being_edited = true;
+        text.text = text.template.clone();
+
+        self.touch_manager.editor.editing_text = Some(element.clone());
+        self.variables.set_bool("selected_text.being_edited", true);
+        self.touch_manager.selection.select_single(element.clone());
+
+        result.mark_dirty = true;
+        result.update_selection = true;
+    }
+
+    fn end_text_editing(&mut self, element: &ElementRef) {
+        if let Some(menu) = self.menus.get_mut(&element.menu) {
+            if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == element.layer) {
+                if let Some(text) = layer
+                    .elements
+                    .iter_mut()
+                    .filter_map(UiElement::as_text_mut)
+                    .find(|t| t.id == element.id)
+                {
+                    text.template = text.text.clone();
+                    text.being_edited = false;
+                    text.clear_selection();
+                    layer.dirty.mark_texts();
+                }
+            }
+        }
+
+        self.touch_manager.editor.editing_text = None;
+        self.variables.set_bool("selected_text.being_edited", false);
+    }
+
+    fn sync_text_editing_with_selection(&mut self) {
+        if let Some(editing) = self.touch_manager.editor.editing_text.clone() {
+            if !self.touch_manager.selection.selected.contains(&editing) {
+                self.end_text_editing(&editing);
+            }
+        }
+    }
     fn handle_text_edit_requested(
         &mut self,
         element: &ElementRef,
         result: &mut EventProcessingResult,
     ) {
-        // Check existence first
-        let exists = self
-            .get_element(element)
-            .and_then(|e| e.as_text())
-            .is_some();
-
-        if !exists {
+        if self.get_text(element).is_none() {
             return;
         }
 
-        // Update non-menu fields first
-        self.touch_manager.editor.editing_text = Some(element.clone());
-        self.variables.set_bool("selected_text.being_edited", true);
-
-        // Then update the text element
-        if let Some(text) = self.get_text_mut(element) {
-            text.being_edited = true;
-            text.text = text.template.clone();
-        }
-
-        result.mark_dirty = true;
+        self.begin_text_editing(element, result);
     }
 
     fn handle_text_edit_ended(&mut self, element: &ElementRef, result: &mut EventProcessingResult) {
-        if let Some(text) = self.get_text_mut(element) {
-            text.template = text.text.clone();
-            text.being_edited = false;
-            self.touch_manager.editor.editing_text = None;
-            self.variables.set_bool("selected_text.being_edited", false);
-            result.mark_dirty = true;
-        }
+        self.end_text_editing(element);
+        result.mark_dirty = true;
     }
-
     fn handle_navigate_direction(
         &mut self,
         direction: NavigationDirection,
         result: &mut EventProcessingResult,
     ) {
+        if self.touch_manager.editor.editing_text.is_some() {
+            return;
+        };
         let current = match self.touch_manager.selection.selected.first() {
             Some(elem) => elem,
             None => return,
@@ -986,7 +982,6 @@ impl Ui {
     // APPLY RESULTS
 
     fn apply_event_results(&mut self, result: EventProcessingResult, mouse: &Mouse) {
-        // Push undo commands
         for cmd in result.commands {
             self.ui_edit_manager.execute(
                 cmd,
@@ -997,12 +992,14 @@ impl Ui {
             );
         }
 
-        // Mark layers dirty
+        if result.update_selection {
+            self.sync_text_editing_with_selection();
+        }
+
         if result.mark_dirty {
             self.mark_all_layers_dirty();
         }
 
-        // Update selection visuals
         if result.update_selection {
             self.update_selection();
         }
@@ -1127,7 +1124,10 @@ impl Ui {
     }
 
     fn handle_keyboard_navigation(&mut self, input: &mut Input) {
-        if input.ctrl || !self.touch_manager.editor.enabled {
+        if input.ctrl
+            || !self.touch_manager.editor.enabled
+            || self.touch_manager.editor.editing_text.is_some()
+        {
             return;
         }
 
@@ -1322,29 +1322,15 @@ impl Ui {
         }
     }
 
-    fn get_current_hit_for_actions(&self) -> Option<CurrentHover> {
-        self.touch_manager.hovered().cloned()
-    }
-
-    fn handle_text_editing(&mut self, input: &mut Input, snapshot: InputSnapshot) {
-        if self.touch_manager.editor.editing_text.is_some() {
-            let mouse_snapshot = MouseSnapshot {
-                mx: snapshot.position[0],
-                my: snapshot.position[1],
-                pressed: snapshot.buttons.left.pressed,
-                just_pressed: snapshot.buttons.left.just_pressed,
-                scroll: snapshot.scroll_delta,
-            };
-
-            handle_text_editing(
-                &mut self.touch_manager.selection,
-                &mut self.touch_manager.editor,
-                &mut self.menus,
-                &mut self.ui_edit_manager,
-                input,
-                mouse_snapshot,
-            );
-        }
+    fn handle_text_editing(&mut self, input: &mut Input) {
+        let editing_text = self.touch_manager.editor.editing_text.clone();
+        handle_text_editing(
+            &editing_text,
+            &mut self.touch_manager.editor,
+            &mut self.menus,
+            &mut self.ui_edit_manager,
+            input,
+        );
     }
 
     pub fn save_gui_to_file(
@@ -1430,8 +1416,9 @@ impl Ui {
                 let mut any_changed = false;
 
                 for t in layer.elements.iter_mut().filter_map(UiElement::as_text_mut) {
-                    if self.touch_manager.selection.just_deselected
-                        || self.touch_manager.selection.just_selected
+                    if (self.touch_manager.selection.just_deselected
+                        || self.touch_manager.selection.just_selected)
+                        && !t.being_edited
                     {
                         t.clear_selection();
                         layer.dirty.mark_texts();
@@ -1672,8 +1659,8 @@ impl Ui {
                             y: v.pos[1],
                             radius: 10.0,
                             original_radius: 10.0,
-                            inside_border_thickness_percentage: 2.0,
-                            border_thickness_percentage: 0.0,
+                            inside_border_thickness: 2.0,
+                            border_thickness: 0.0,
                             fade: 0.0,
                             fill_color: [0.0, 0.8, 0.0, 0.6],
                             inside_border_color: [0.0; 4],
@@ -1958,14 +1945,15 @@ impl Ui {
                 }
 
                 if scale != 1.0 {
-                    if let Some(before) = get_element_size(&self.menus, sel) {
+                    if let Some(before) = get_element_main_size(&self.menus, sel) {
                         self.ui_edit_manager.push_command(ResizeElementCommand {
                             affected_element: sel.clone(),
                             before: Some(before.clone()),
                             after: before.scale_by(scale),
                         });
+
+                        changed = true;
                     }
-                    changed = true;
                 }
 
                 // Element Z movement
@@ -2113,15 +2101,25 @@ fn push_commands(ui_command_queue: &mut CommandQueue, ctx: &mut CommandContext) 
 
         ui_command_queue.push_many(parse_action(action, ctx, global_action_events, element_ctx));
     }
-    for (element_ref, mut events) in ctx.ui.touch_manager.events.clone().into_iter() {
+    for (element_ref, events) in ctx.ui.touch_manager.events.clone().into_iter() {
         //println!("{:?}", events);
         let Some(actions) = get_element_actions(&ctx.ui.menus, &element_ref) else {
             continue;
         };
-        //let mut events = events.clone();
-        events.extend(ctx.ui.touch_manager.global_events.clone());
-        let events: &[TouchEvent] = events.as_slice();
-        let commands = actions_to_uicommands(ctx, &element_ref, actions.as_slice(), events);
+
+        let events: Vec<ActionEvent> = events
+            .iter()
+            .map(|element_event| ActionEvent::from_element_event(element_event))
+            .chain(
+                ctx.ui
+                    .touch_manager
+                    .global_events
+                    .iter()
+                    .map(|global_event| ActionEvent::from_global_event(global_event)),
+            )
+            .collect();
+        let commands =
+            actions_to_uicommands(ctx, &element_ref, actions.as_slice(), events.as_slice());
         ui_command_queue.push_many(commands);
     }
 }
@@ -2202,7 +2200,40 @@ pub fn get_element_actions(
 ) -> Option<Vec<String>> {
     Some(get_element(menus, element)?.actions())
 }
-pub fn get_element_size(
+pub fn get_element_sizes(menus: &HashMap<String, Menu>, element: &ElementRef) -> Vec<SizeProperty> {
+    let Some(menu) = menus.get(&element.menu) else {
+        return vec![];
+    };
+    let Some(layer) = menu.layers.iter().find(|l| l.name == element.layer) else {
+        return vec![];
+    };
+
+    let vec = match element.kind {
+        ElementKind::Circle => layer
+            .iter_circles()
+            .find(|c| c.id == element.id)
+            .map(|e| e.sizes()),
+        ElementKind::Text => layer
+            .iter_texts()
+            .find(|t| t.id == element.id)
+            .map(|e| e.sizes()),
+        ElementKind::Handle => layer
+            .iter_handles()
+            .find(|h| h.id == element.id)
+            .map(|e| e.sizes()),
+        ElementKind::Polygon => layer
+            .iter_polygons()
+            .find(|p| p.id == element.id)
+            .map(|e| e.sizes()),
+        ElementKind::Rect => layer
+            .iter_rects()
+            .find(|r| r.id == element.id)
+            .map(|e| e.sizes()),
+        _ => None,
+    };
+    vec.unwrap_or(vec![])
+}
+pub fn get_element_main_size(
     menus: &HashMap<String, Menu>,
     element: &ElementRef,
 ) -> Option<SizeProperty> {
@@ -2213,27 +2244,26 @@ pub fn get_element_size(
         ElementKind::Circle => layer
             .iter_circles()
             .find(|c| c.id == element.id)
-            .map(|c| SizeProperty::Radius(c.radius)),
+            .map(|e| e.main_size()),
         ElementKind::Text => layer
             .iter_texts()
             .find(|t| t.id == element.id)
-            .map(|t| SizeProperty::Text([t.width, t.height], t.pt)),
+            .map(|e| e.main_size()),
         ElementKind::Handle => layer
             .iter_handles()
             .find(|h| h.id == element.id)
-            .map(|h| SizeProperty::Radius(h.radius)),
+            .map(|e| e.main_size()),
         ElementKind::Polygon => layer
             .iter_polygons()
             .find(|p| p.id == element.id)
-            .map(|p| SizeProperty::PolygonScale(p.scale)),
+            .map(|e| e.main_size()),
         ElementKind::Rect => layer
             .iter_rects()
             .find(|r| r.id == element.id)
-            .map(|r| SizeProperty::Rect(r.size())),
+            .map(|e| e.main_size()),
         _ => None,
     }
 }
-
 pub fn get_element_kind(
     menus: &HashMap<String, Menu>,
     menu: &str,

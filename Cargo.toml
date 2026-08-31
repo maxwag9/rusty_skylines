@@ -9,11 +9,11 @@ winit = { version = "0.31.0-beta.2", features = ["serde"] }
 wgpu = { version = "30.0.1", features = ["strict_asserts"] }
 pollster = "1.0.1"
 bytemuck = { version = "1.25.2", features = ["derive"] }
-glam = { version = "0.33.5", features = ["serde"] }
+glam = { version = "0.33.6", features = ["serde"] }
 toml = "1.1.4"
 serde = { version = "1.0.229", features = ["derive"] }
 anyhow = "1.0.104"
-notify = "9.0.0-rc.4"
+notify = "9.0.0-rc.5"
 num_cpus = "1.17.0"
 crossbeam-channel = "0.5.16"
 fastnoise-lite = "1.1.1"
@@ -45,7 +45,7 @@ sysinfo = "0.39.6"
 gfxinfo = { version = "0.1.2", features = ["amd", "nvidia", "intel"] }
 glyphon = "0.12.0"
 wgpu_text = "30.0.0"
-owo-colors = "4.3.0"
+owo-colors = "4.4.0"
 unicode-segmentation = "1.13.3"
 fontdb = "0.24.0"
 

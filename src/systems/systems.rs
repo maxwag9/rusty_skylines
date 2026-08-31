@@ -21,7 +21,7 @@ pub fn run_ticked(resources: &mut Resources) {
     let world = &mut resources.world;
     let renderer = &mut resources.render_core;
     let camera = &world.world_state.camera;
-    let variables = &resources.ui.variables;
+    let variables = &mut resources.ui.variables;
     let (time, terrain, roads, zoning, buildings, cars, input, city_state) = (
         &mut world.time,
         &mut world.terrain,
@@ -36,7 +36,7 @@ pub fn run_ticked(resources: &mut Resources) {
         &mut resources.settings,
         &mut renderer.gizmo,
         &renderer.road_renderer.mesh_manager,
-        &mut renderer.props
+        &mut renderer.props,
     );
     let aspect = renderer.config.width as f32 / renderer.config.height as f32;
 
@@ -46,7 +46,9 @@ pub fn run_ticked(resources: &mut Resources) {
     //     gizmo.square(center, half_chunk_size, [1.0, 0.0, 0.0, 1.0], 0.0, 0.0);
     // }
     if resources.simulation.running() {
-        terrain.update(gizmo, camera, aspect, settings, input, time, roads, props, variables);
+        terrain.update(
+            gizmo, camera, aspect, settings, input, time, roads, props, variables,
+        );
     }
     handle_destruction(
         gizmo,
@@ -184,13 +186,10 @@ fn handle_destruction(
                                 .road_types
                                 .get_road_type(segment.road_type_id)
                             {
-                                let cost = (calculate_road_cost(
-                                    road_type,
-                                    &[],
-                                    lane.geometry().total_len,
-                                ) as f64
-                                    * 0.2)
-                                    as i64;
+                                let cost =
+                                    (calculate_road_cost(road_type, &[], lane.geometry().total_len)
+                                        as f64
+                                        * 0.2) as i64;
                                 gizmo.text(
                                     format!("Refund: {}€", cost),
                                     sign_pos,
@@ -216,7 +215,7 @@ fn handle_destruction(
                             segment_id,
                             &roads.road_manager.road_types,
                             gizmo,
-                            true
+                            true,
                         )
                     }
                 }
@@ -225,22 +224,28 @@ fn handle_destruction(
                     //let points: Vec<WorldPos> = collect_road_points(edges).into_iter().copied().collect();
                     gizmo.circle(node.pos(), 4.0, [0.5, 0.2, 0.0, 0.3], 0.6, 0.0);
                     let mut total_cost = 0;
-                    for segment in
-                        node.arms().iter().map(|arm| arm.segment()).map(|segment_id| {
-                            roads.road_manager.roads.segment(segment_id)
-                        })
+                    for segment in node
+                        .arms()
+                        .iter()
+                        .map(|arm| arm.segment())
+                        .map(|segment_id| roads.road_manager.roads.segment(segment_id))
                     {
-                        let Some(lane) = segment.lanes().first().map(|&lane_id| roads.road_manager.roads.lane(lane_id)) else { continue };
-                        if let Some(road_type) = roads.road_manager.road_types
+                        let Some(lane) = segment
+                            .lanes()
+                            .first()
+                            .map(|&lane_id| roads.road_manager.roads.lane(lane_id))
+                        else {
+                            continue;
+                        };
+                        if let Some(road_type) = roads
+                            .road_manager
+                            .road_types
                             .get_road_type(segment.road_type_id)
                         {
-                            let cost = (calculate_road_cost(
-                                road_type,
-                                &[],
-                                lane.geometry().total_len,
-                            ) as f64
-                                * 0.2)
-                                as i64;
+                            let cost =
+                                (calculate_road_cost(road_type, &[], lane.geometry().total_len)
+                                    as f64
+                                    * 0.2) as i64;
                             total_cost += cost;
                         };
                     }

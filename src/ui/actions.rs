@@ -13,10 +13,10 @@ use crate::ui::ui_edit_manager::{
     DeleteElementCommand, DuplicateElementCommand, MoveElementCommand, ResizeElementCommand,
 };
 use crate::ui::ui_editor::{
-    Ui, get_element, get_element_mut, get_element_position, get_element_size,
+    Ui, get_element, get_element_main_size, get_element_mut, get_element_position,
 };
 use crate::ui::ui_edits::{SizeProperty, create_element, delete_element};
-use crate::ui::ui_touch_manager::{CurrentHover, ElementRef, MouseButtons};
+use crate::ui::ui_touch_manager::{ElementRef, MouseButtons};
 use crate::ui::variables::{Variables, initialize_value, save_colors};
 use crate::ui::vertex::{
     AdvancedPrimitive, ElementKind, UiButtonCircle, UiButtonHandle, UiButtonOutline,
@@ -24,7 +24,8 @@ use crate::ui::vertex::{
 };
 use crate::world::buildings::zoning::ZoningType;
 use crate::world::game_state::{
-    GameState, LoadResult, SaveInfo, SaveResult, get_available_saves, make_safe_save_name,
+    GameState, LoadResult, NewSavePackage, SaveInfo, SaveResult, get_available_saves,
+    make_safe_save_name,
 };
 use crate::world::roads::road_structs::{LeftLaneCount, RightLaneCount};
 use crate::world::world::World;
@@ -304,7 +305,6 @@ pub struct CommandContext<'a> {
     pub world: &'a mut World,
     pub props: &'a mut Props,
     pub ui: &'a mut Ui,
-    pub hover: &'a Option<CurrentHover>,
     pub window_size: PhysicalSize<u32>,
     pub settings: &'a mut Settings,
     pub event_loop: &'a dyn ActiveEventLoop,
@@ -577,6 +577,7 @@ impl CommandQueue {
                 element_ctx,
                 menu_name,
             } => {
+                //println!("Hi, te menu name is: {}", menu_name);
                 let element_ctx = &element_ctx;
                 let menu_name = string_to_value(ctx, element_ctx, menu_name);
                 let Some(menu_name) = menu_name.as_string() else {
@@ -931,9 +932,29 @@ impl CommandQueue {
                     //println!("{:?}", ctx.settings.read_setting(key));
                     return CommandResult::Ok;
                 }
-
+                //println!("{} {:?}", name, ctx.ui.variables.get(&name));
                 let new_val = match ctx.ui.variables.get(&name).as_deref() {
                     Some(Value::Bool(b)) => Value::Bool(!b),
+                    Some(Value::None) => Value::Bool(true),
+                    Some(Value::I64(i)) => {
+                        if *i == 0 {
+                            Value::I64(1)
+                        } else if *i == 1 {
+                            Value::I64(0)
+                        } else {
+                            return CommandResult::Ok;
+                        }
+                    }
+                    Some(Value::String(str)) => {
+                        if str == "false" {
+                            Value::Bool(true)
+                        } else if str == "true" {
+                            Value::Bool(false)
+                        } else {
+                            return CommandResult::Ok;
+                        }
+                    }
+                    None => Value::Bool(true),
                     _ => return CommandResult::Ok,
                 };
 
@@ -1439,9 +1460,10 @@ impl CommandQueue {
                 let element_ctx = &element_ctx;
                 let save_name = string_to_value(ctx, element_ctx, save_name);
                 let Some(save_name) = save_name.as_string() else {
-                    return CommandResult::Error(
-                        "Save name in load_save() wasn't resolved to string".to_string(),
-                    );
+                    return CommandResult::Error(format!(
+                        "Save name '{}' in load_save() wasn't resolved to string",
+                        save_name
+                    ));
                 };
                 if !without_saving {
                     save_game(
@@ -1491,7 +1513,7 @@ impl CommandQueue {
                 };
 
                 let shadow_name = format!("{}_shadow", element.id);
-                let shadow_master_command = format!(r#"as:"[{}]" set(str:as.center, [expr:{{self.center.x}}+5, expr:{{self.center.y}}+3]); set(str:as.color.fill, [expr:{{self.color.fill.r}}*0.01, expr:{{self.color.fill.g}}*0.01, expr:{{self.color.fill.b}}*0.01, expr:{{self.color.fill.a}}*0.7]); set(str:as.idx, self.idx); ifvareq(self.active, bool:false, delete(as.menu, as.layer, as.id, false)); if(expr:!{{as.exists}}, clone(self.menu, self.layer, self.id, self.menu, self.layer, str:{}, [expr:{{self.center.x}}+10, {{self.center.y}}], [], false);); if(expr:({{as.idx}}+1) != {{self.idx}}, set(str:as.offset_order, expr:{{self.idx}} - ({{as.idx}} + 1) ) )"#, shadow_name, shadow_name).to_string();
+                let shadow_master_command = format!(r#"as:"[{}]" set(str:shadow_color, [expr:{{self.color.fill.r}}*0.01, expr:{{self.color.fill.g}}*0.01, expr:{{self.color.fill.b}}*0.01, expr:{{self.color.fill.a}}*0.7]); set(str:as.center, [expr:{{self.center.x}}+5, expr:{{self.center.y}}+3]); set(str:as.color.fill, shadow_color); set(str:as.color.border, shadow_color); set(str:as.idx, self.idx); ifvareq(self.active, bool:false, delete(as.menu, as.layer, as.id, false)); if(expr:!{{as.exists}}, clone(self.menu, self.layer, self.id, self.menu, self.layer, str:{}, [expr:{{self.center.x}}+10, {{self.center.y}}], [], false);); if(expr:({{as.idx}}+1) != {{self.idx}}, set(str:as.offset_order, expr:{{self.idx}} - ({{as.idx}} + 1) ) )"#, shadow_name, shadow_name).to_string();
 
                 let color =
                     if let Some(color) = string_to_value(ctx, element_ctx, color).as_color4() {
@@ -1655,6 +1677,7 @@ impl CommandQueue {
                     args: Option<String>,
                 ) -> CommandResult {
                     let actions = string_to_value(ctx, element_ctx, function_name);
+                    //println!("[Action Call] {}", actions);
                     let actions: Vec<String> = if let Some(action) = actions.as_string() {
                         vec![action.to_string()]
                     } else if let Some(actions) = actions.as_array() {
@@ -1684,6 +1707,7 @@ impl CommandQueue {
                     let args = parse_args_call(ctx, element_ctx, args);
 
                     ctx.ui.variables.set_array("args", args); // So I can use args.4 for example.
+                    //println!("{:?}", actions);
                     for action in actions.iter() {
                         let commands = parse_action(action, ctx, &events, element_ctx.clone());
                         for command in commands {
@@ -1707,7 +1731,7 @@ impl CommandQueue {
                     };
 
                     let args = parse_args_call(ctx, element_ctx, args);
-
+                    //println!("{:?} {:?}", function_name, args);
                     //ctx.ui.variables.set_array("args", args); // So I can use args.4 for example. not needed in rust... most likely...
 
                     call_rust(ctx, function_name, args);
@@ -1718,6 +1742,7 @@ impl CommandQueue {
                 if let Some((left, right)) = function_name.split_once(':') {
                     match left {
                         "rust" | "RUST" => {
+                            //println!("{}", right);
                             parse_rust_call(ctx, element_ctx, right.to_string(), args)
                         }
                         _ => parse_action_call(
@@ -1756,6 +1781,45 @@ fn call_rust(ctx: &mut CommandContext, function_name: &str, args: Vec<Value>) {
                 .map(|save| Value::Array(save.to_values()))
                 .collect();
             ctx.ui.variables.set_array("saves", saves);
+        }
+        "create_save" => {
+            let save_name = args
+                .get(0)
+                .and_then(|s| s.as_string())
+                .unwrap_or_else(|| {
+                    println!("Argument 0 of create_save() must be a String, it's the save name.");
+                    "No save name"
+                })
+                .to_string();
+            let new_save_package = NewSavePackage {
+                name: save_name.clone(),
+                difficulty: args
+                    .get(1)
+                    .and_then(|s| s.as_string())
+                    .unwrap_or_else(|| {
+                        println!(
+                            "Argument 1 of create_save() must be a String, it's the Difficulty."
+                        );
+                        "Easy"
+                    })
+                    .to_string(),
+            };
+            save_game(
+                ctx.game_state,
+                ctx.world,
+                ctx.props,
+                ctx.settings,
+                &mut ctx.ui.variables,
+                false,
+            );
+            let create_result = ctx.game_state.create_save(
+                ctx.world,
+                ctx.props,
+                ctx.settings,
+                &mut ctx.ui.variables,
+                new_save_package,
+            );
+            println!("Created Save '{}': {:?}", save_name, create_result);
         }
         _ => {}
     }
@@ -1814,7 +1878,6 @@ pub fn process_commands(
     ui: &mut Ui,
     world: &mut World,
     props: &mut Props,
-    hover: &Option<CurrentHover>,
     window_size: PhysicalSize<u32>,
     settings: &mut Settings,
     event_loop: &dyn ActiveEventLoop,
@@ -1825,7 +1888,6 @@ pub fn process_commands(
         world,
         props,
         ui,
-        hover,
         window_size,
         settings,
         event_loop,
@@ -1844,7 +1906,6 @@ pub fn exit_game(
     props: &Props,
     event_loop: &dyn ActiveEventLoop,
 ) {
-    settings.total_game_time = world.time.total_game_time;
     match settings.save(rusty_skylines_dir("settings.toml")) {
         Ok(_) => println!("Settings saved"),
         Err(e) => eprintln!("Failed to save Settings: {e}"),
@@ -1872,6 +1933,7 @@ pub fn save_game(
                 .map(|s| s.name.as_str())
                 .unwrap_or("No save!!! Report to maxwag9!!")
         ),
+        SaveResult::TriedToSaveEmptySave => {}
         e => eprintln!(
             "Failed to save World '{}': {:?}",
             game_state
@@ -1915,6 +1977,7 @@ pub fn load_save(
                 save_name.as_str(),
             );
         }
+
         e => eprintln!("Failed to load World '{}': {:?}", save_name, e),
     }
 }
@@ -2112,7 +2175,7 @@ pub fn set_element_property(
             }
 
             "size" => {
-                let Some(before) = get_element_size(&ctx.ui.menus, &element_ref) else {
+                let Some(before) = get_element_main_size(&ctx.ui.menus, &element_ref) else {
                     return CommandResult::Error(
                         format!(
                             "get_element_size() failed in set_element_property for element {:?}",
@@ -2123,7 +2186,7 @@ pub fn set_element_property(
                 };
                 let Some(before) = before.size2() else {
                     return CommandResult::Error(
-                        format!("Size is not square in set_element_property for element {:?}, the element doesn't have a [f32; 2] size.", element_ref).to_string(),
+                        format!("Size is not square in set_element_property for element {:?}, the element doesn't have a [f32; 2] size.", element_ref).to_string()
                     );
                 };
                 let after = match Variables::component_index(component) {
@@ -2220,6 +2283,69 @@ pub fn set_element_property(
                 Value::F64(radius)
             }
 
+            "border" => {
+                let Some(size) = new_val.as_f64() else {
+                    return CommandResult::Error(format!(
+                        "set_element_property: border value must be a number, got: {}",
+                        new_val.to_string()
+                    ));
+                };
+
+                ctx.ui.ui_edit_manager.execute_command(
+                    ResizeElementCommand {
+                        affected_element: element_ref,
+                        before: None,
+                        after: SizeProperty::Border(size as f32),
+                    },
+                    &mut ctx.ui.touch_manager,
+                    &mut ctx.ui.menus,
+                    &mut ctx.ui.variables,
+                    &ctx.world.input.mouse,
+                );
+                Value::F64(size)
+            }
+            "inside_border" => {
+                let Some(size) = new_val.as_f64() else {
+                    return CommandResult::Error(format!(
+                        "set_element_property: inside_border value must be a number, got: {}",
+                        new_val.to_string()
+                    ));
+                };
+
+                ctx.ui.ui_edit_manager.execute_command(
+                    ResizeElementCommand {
+                        affected_element: element_ref,
+                        before: None,
+                        after: SizeProperty::InsideBorder(size as f32),
+                    },
+                    &mut ctx.ui.touch_manager,
+                    &mut ctx.ui.menus,
+                    &mut ctx.ui.variables,
+                    &ctx.world.input.mouse,
+                );
+                Value::F64(size)
+            }
+            "pt" => {
+                let Some(size) = new_val.as_f64() else {
+                    return CommandResult::Error(format!(
+                        "set_element_property: pt value must be a number, got: {}",
+                        new_val.to_string()
+                    ));
+                };
+
+                ctx.ui.ui_edit_manager.execute_command(
+                    ResizeElementCommand {
+                        affected_element: element_ref,
+                        before: None,
+                        after: SizeProperty::Pt(size as f32),
+                    },
+                    &mut ctx.ui.touch_manager,
+                    &mut ctx.ui.menus,
+                    &mut ctx.ui.variables,
+                    &ctx.world.input.mouse,
+                );
+                Value::F64(size)
+            }
             "color" => {
                 let color_property = ColorComponent::from_str(component); // MSRV!!
                 //println!("in set_element_property: {} to {}", color_property, new_val);
@@ -2456,6 +2582,7 @@ pub fn send_element_properties_to_variables(
                     variables.set_string(&format!("{prefix}.id"), element_ref.id.clone());
                     variables.set_string(&format!("{prefix}.kind"), element_ref.kind.to_string());
                     if let Some(text) = element.text() {
+                        //println!("{}", text);
                         variables.set_string(&format!("{prefix}.text"), text);
                     } else {
                         variables.set_var(&format!("{prefix}.text"), Value::None);
@@ -2467,29 +2594,32 @@ pub fn send_element_properties_to_variables(
                     }
 
                     variables.set_array(&format!("{prefix}.center"), element.center());
+                    // if let Some(text) = element.as_text() {
+                    //     variables.set_array(&format!("{prefix}.anchor_center"), anchor_to(text.anchor, text.center(), text.width, text.height));
+                    // }
 
-                    variables.set_var(
-                        &format!("{prefix}.radius"),
-                        element
-                            .size()
-                            .radius()
-                            .map(|r| Value::F64(r as f64))
-                            .unwrap_or(Value::None),
-                    );
-
-                    variables.set_var(
-                        &format!("{prefix}.pt"),
-                        element
-                            .size()
-                            .pt()
-                            .map(|r| Value::F64(r as f64))
-                            .unwrap_or(Value::None),
-                    );
-
-                    variables.set_var(
-                        &format!("{prefix}.size"),
-                        element.size().value_size2().unwrap_or(Value::None),
-                    );
+                    for prop in element.sizes() {
+                        match prop {
+                            SizeProperty::Radius(radius) => {
+                                variables.set_f64(&format!("{prefix}.radius"), radius);
+                            }
+                            SizeProperty::Pt(pt) => {
+                                variables.set_f64(&format!("{prefix}.pt"), pt);
+                            }
+                            SizeProperty::Rect(rect) => {
+                                variables.set_array(&format!("{prefix}.size"), rect);
+                            }
+                            SizeProperty::PolygonScale(_) => {}
+                            SizeProperty::AdvancedPrimitiveScale(_) => {}
+                            SizeProperty::Border(border) => {
+                                variables.set_f64(&format!("{prefix}.border"), border);
+                            }
+                            SizeProperty::InsideBorder(inside_border) => {
+                                variables
+                                    .set_f64(&format!("{prefix}.inside_border"), inside_border);
+                            }
+                        }
+                    }
 
                     let color_components = element.color_components();
 

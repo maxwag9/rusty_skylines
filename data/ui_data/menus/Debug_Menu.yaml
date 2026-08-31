@@ -7,7 +7,21 @@ layers:
         id: fps_text
         x: 0.0
         y: 0.0
-        pt: 14.999999
+        pt: 20
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'Rusty Skylines {GAME_VERSION}'
+        anchor: TopLeft
+        misc:
+          touchable: false
+      - !Text
+        id: fps_text
+        x: 0.0
+        y: 20
+        pt: 15
         color:
           - 1.0
           - 0.0
@@ -16,14 +30,12 @@ layers:
         text: 'FPS: {expr:{fps}:.2} | Frame: {expr:fix({render_dt} * 1000):.2}ms | Render CPU: {expr:fix({cpu_frametime}:.2, 2, 2)}ms | Sim: {expr:({sim_dt} * 1000):.2}ms | {expr:{fps} > 60 ? "Smooth" : "Laggy"}'
         anchor: TopLeft
         misc:
-          active: true
           touchable: false
-          editable: true
       - !Text
         id: frametime_main_pass_text
         x: 0.0
-        y: 20
-        pt: 14.999999
+        y: 40
+        pt: 15
         color:
           - 1.0
           - 0.0
@@ -32,14 +44,26 @@ layers:
         text: 'Total everything: {expr:{total_frametime}:.2}ms, Sky: {expr:{sky_frametime}:.2}ms, Stars: {expr:{stars_frametime}:.2}ms, Terrain: {expr:{terrain_frametime}:.2}ms, Water: {expr:{water_frametime}:.2}ms, Roads: {expr:{roads_frametime}:.2}ms, Reversed Depth Z: {reversed_depth_z}, MSAA: {msaa_samples}x, Present Mode: {present_mode}, CSM Shadows: {shadow_map_size}px'
         anchor: TopLeft
         misc:
-          active: true
           touchable: false
-          editable: true
+      - !Text
+        id: cpu_frametime_text
+        x: 0.0
+        y: 60
+        pt: 15
+        color:
+          - 1.0
+          - 0.0
+          - 1.0
+          - 1.0
+        text: 'CPU Frametimes: {cpu_frametimes}'
+        anchor: TopLeft
+        misc:
+          touchable: false
       - !Text
         id: gtao_frametimes_text
         x: 0.0
-        y: 40
-        pt: 14.999999
+        y: 80
+        pt: 15
         color:
           - 1.0
           - 0.2
@@ -48,14 +72,12 @@ layers:
         text: 'GTAO: Total: {expr:{gtao_frametime}:.2}ms, Prep: {expr:{gtao_prep_frametime}:.2}ms, Generate: {expr:{gtao_generate_frametime}:.2}ms, Blur: {expr:{gtao_blur_frametime}:.2}ms, Upsample/Apply: {expr:{gtao_upsample_apply_frametime}:.2}ms'
         anchor: TopLeft
         misc:
-          active: true
           touchable: false
-          editable: true
       - !Text
         id: fog_frametime_text
         x: 0
-        y: 60
-        pt: 14.999999
+        y: 100
+        pt: 15
         color:
           - 1.0
           - 0.0
@@ -64,14 +86,12 @@ layers:
         text: 'Fog: {expr:{fog_frametime}:.2}ms, UI: {expr:{ui_frametime}:.2}ms, Tonemapping: {expr:{tonemap_frametime}:.2}ms, Cars: {expr:{cars_frametime}:.2}ms, Props: {expr:{props_frametime}:.2}ms, Gizmo: {expr:{gizmo_frametime}:.2}ms'
         anchor: TopLeft
         misc:
-          active: true
           touchable: false
-          editable: true
       - !Text
         id: shadows_frametime_text
         x: 0
-        y: 80
-        pt: 14.999999
+        y: 120
+        pt: 15
         color:
           - 1.0
           - 0.0
@@ -80,30 +100,26 @@ layers:
         text: 'CSM Shadows: {expr:{csm_frametime}:.2}ms, RT Total: {expr:{rt_frametime}:.2}ms, RT Rays: {expr:{rt_tracing_frametime}:.2}ms, RT Upsampling: {expr:{rt_upsample_frametime}:.2}ms, RT Apply: {expr:{rt_apply_frametime}:.2}ms'
         anchor: TopLeft
         misc:
-          active: true
           touchable: false
-          editable: true
       - !Text
         id: sky_info_text
-        x: 0.00037002563
-        y: 100
-        pt: 14.999999
+        x: 0
+        y: 140
+        pt: 15
         color:
           - 0.3
           - 0.5
           - 1.0
           - 1.0
-        text: 'Requested Time Speed: {expr:{time_speed}:.2}x, Actual Time Speed: {expr:{achieved_time_speed}:.2}x, Total Game Time: {expr:elapsed({total_game_time})}, Day length: {expr:{day_length}:.2}s, Total_days: {expr:{total_days}:.2}d, Sun declination: {expr:{sun_declination}:.2} degrees'
+        text: 'Requested Time Speed: {expr:{sim_speed}:.2}x, Actual Time Speed: {expr:{achieved_time_speed}:.2}x, Total Game Time: {expr:fancy_time({total_game_time}, false, {day_length}, 3, false)}, Day length: {expr:{day_length}:.2}s, Total_days: {expr:{total_days}:.2}d, Sun declination: {expr:{sun_declination}:.2} degrees'
         anchor: TopLeft
         misc:
-          active: true
           touchable: false
-          editable: true
       - !Text
         id: player_info_text
-        x: -0.0
-        y: 120
-        pt: 14.999999
+        x: 0
+        y: 160
+        pt: 15
         color:
           - 0.0
           - 0.5
@@ -112,14 +128,12 @@ layers:
         text: 'Player Pos: X: {expr:{target_pos.x}:.2} Y: {expr:{target_pos.y}:.2} Z: {expr:{target_pos.z}:.2} Chunk Pos: ({{target_pos_cx}, {target_pos_cz}})'
         anchor: TopLeft
         misc:
-          active: true
           touchable: false
-          editable: true
       - !Text
         id: world_info_text
         x: 0.0
-        y: 140
-        pt: 14.999999
+        y: 180
+        pt: 15
         color:
           - 1.0
           - 0.89762557
@@ -128,14 +142,12 @@ layers:
         text: 'Car Count: {car_count}, Prop Count: (Total: {prop_count}, Generated: {generated_prop_count}, Manual: {manual_prop_count}), Visible Prop Count: (Total: {visible_prop_count}, Generated: {visible_generated_prop_count}, Manual: {visible_manual_prop_count}), Cursor Mode: {cursor_mode}, Color: {color_picker_color}s'
         anchor: TopLeft
         misc:
-          active: true
           touchable: false
-          editable: true
 
       - !Text
         id: save_info_text
         x: 0.0
-        y: 180
+        y: 200
         pt: 20
         color:
           - 1.0
@@ -145,7 +157,5 @@ layers:
         text: 'Current Save: {current_save}'
         anchor: TopLeft
         misc:
-          active: true
           touchable: false
-          editable: true
     editing_tool: false

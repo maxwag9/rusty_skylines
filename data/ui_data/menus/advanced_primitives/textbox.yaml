@@ -1,4 +1,4 @@
-name: button
+name: textbox
 elements:
   # Outer border
   - !Rect
@@ -23,24 +23,7 @@ elements:
       - 0.1
       - 1.0
     roundness: 0.20
-    border_thickness: 2
-  # inner indicator
-  #  - !Rect
-  #    id: Checkbox Indicator
-  #    actions:
-  #      - on:release, toggle(str:{ap})
-  #      #- button:a show_interaction(self.color.fill) # buggy
-  #      - on:release on:activated button:a, ifvareq({ap}, bool:false, set_var(str:self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(str:self.color.fill, [0.0, 0.5, 0.0, 1.0]))
-  #    x: 0.0
-  #    y: 0.0
-  #    w: 40
-  #    h: 40
-  #    color:
-  #      - 0.00
-  #      - 0.50
-  #      - 0.0
-  #      - 1.0
-  #    roundness: 0.5
+    border_thickness: 4
   - !Text
     id: button_text
     x: 0
@@ -53,7 +36,4 @@ elements:
       - 0.9
     text: '{ap.0}'
     anchor: Center
-    misc:
-      active: true
-      touchable: false
-      editable: true
+    input_box: true

@@ -1,9 +1,8 @@
 use crate::renderer::ui::{
-    make_poly_ssbo, upload_poly_vbo, CircleParams, HandleParams, OutlineParams, UiRenderer,
+    CircleParams, HandleParams, OutlineParams, UiRenderer, make_poly_ssbo, upload_poly_vbo,
 };
 use crate::renderer::ui_text_rendering::{
-    anchor_to, render_corner_brackets, render_editor_caret, render_editor_outline, render_selection
-    ,
+    anchor_to, render_corner_brackets, render_editor_caret, render_editor_outline, render_selection,
 };
 use crate::resources::Time;
 use crate::ui::ui_touch_manager::{ElementRef, UiTouchManager};
@@ -110,12 +109,13 @@ pub fn upload_outlines(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut 
             bytes,
         );
     } else if layer.gpu.outline_poly_vertices_ssbo.is_none() {
-        layer.gpu.outline_poly_vertices_ssbo = Some(ui_renderer.device.create_buffer(&BufferDescriptor {
-            label: Some(&format!("{}_outline_poly_dummy", layer.name)),
-            size: 48,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }));
+        layer.gpu.outline_poly_vertices_ssbo =
+            Some(ui_renderer.device.create_buffer(&BufferDescriptor {
+                label: Some(&format!("{}_outline_poly_dummy", layer.name)),
+                size: 48,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
     }
 }
 
@@ -308,12 +308,7 @@ pub fn upload_text(
         t.width = cache.width;
         t.height = cache.height;
 
-        let pos = anchor_to(
-            t.anchor.unwrap_or_default(),
-            [t.x, t.y],
-            t.width,
-            t.height,
-        );
+        let pos = anchor_to(t.anchor, [t.x, t.y], t.width, t.height);
 
         let is_selected = touch_manager.selection.is_selected(&ElementRef::new(
             menu_name,
@@ -332,7 +327,7 @@ pub fn upload_text(
                 pos[1] + t.height,
                 &mut vertices,
                 t.being_hovered,
-                depth
+                depth,
             );
             set_text_vertex_depth(&mut vertices[start..], depth);
         }
@@ -352,12 +347,13 @@ pub fn upload_text(
                 &mut vertices,
                 pad,
                 t.being_hovered,
-                depth
+                depth,
             );
             set_text_vertex_depth(&mut vertices[start..], depth);
         }
 
-        if t.being_edited || (t.input_box && is_selected) {
+        if t.being_edited {
+            //|| (t.input_box && is_selected) {
             let start = vertices.len();
             render_editor_caret(ui_renderer, t, &mut vertices, time_system, depth);
             set_text_vertex_depth(&mut vertices[start..], depth);

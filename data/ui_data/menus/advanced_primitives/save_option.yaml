@@ -37,7 +37,7 @@ elements:
       - 0.1
       - 1.0
     roundness: 0.05
-    border_thickness_percentage: 0.04
+    border_thickness: 4
 
 
   - !Text

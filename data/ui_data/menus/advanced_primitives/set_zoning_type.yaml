@@ -22,8 +22,8 @@ elements:
       - 1.0
       - 1.0
     texture: null
-    roundness: 0.0
-    border_thickness_percentage: 0.0
+    roundness: 0.2
+    border_thickness: 3
     fade: 0.0
     blur: 0.0
     glow_color:

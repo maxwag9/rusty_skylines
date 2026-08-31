@@ -20,7 +20,7 @@ elements:
       - 0.0
       - 1.0
     roundness: 0.0
-    border_thickness_percentage: 0.004
+    border_thickness: 4
   # Outer border
   - !Rect
     id: Milestone Border
@@ -42,7 +42,7 @@ elements:
       - 1.0
       - 1.0
     roundness: 0.03
-    border_thickness_percentage: 0.002
+    border_thickness: 4
   # exiting circle
   - !Circle
     id: exiting button

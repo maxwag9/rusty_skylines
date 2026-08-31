@@ -33,7 +33,7 @@ use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChunkCoords {
     pub chunk_coord: ChunkCoord, // Y IS UP/DOWN LIKE IN MINECRAFT NOT CRINGE Z LIKE BLENDER ETC. (Blender is awesome)
-    pub dist2: i32, // In chunk space
+    pub dist2: i32,              // In chunk space
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VisibleChunk {
@@ -159,7 +159,7 @@ impl TerrainJobs {
         pending: &VecDeque<CpuChunkMesh>,
         visible: &Vec<VisibleChunk>,
         lod_map: &HashMap<ChunkCoord, LodStep>,
-        variables: &Variables
+        settings: &Settings,
     ) {
         let pending_coords: HashSet<ChunkCoord> =
             pending.iter().map(|cpu| cpu.chunk_coord).collect();
@@ -167,8 +167,8 @@ impl TerrainJobs {
         let mut far_jobs_sent = 0usize;
 
         let tree_spawning_params = TreeSpawningParams {
-            forest_cluster_strength: variables.get_f64("forest_cluster_strength").unwrap_or(1.0) as f32,
-            dense_forests: variables.get_bool("dense_forests").unwrap_or(false)
+            forest_cluster_strength: settings.forest_cluster_strength,
+            dense_forests: settings.dense_forests,
         };
 
         for v in visible.iter() {
@@ -243,7 +243,7 @@ impl TerrainJobs {
                 in_progress: Arc::new(AtomicBool::new(false)),
                 terrain_edits_snapshot,
                 loaded_snapshot: Arc::new(loaded_snapshot),
-                tree_spawning_params
+                tree_spawning_params,
             });
 
             if close_jobs_sent < self.max_close_jobs_per_frame {
@@ -403,16 +403,11 @@ pub struct Terrain {
 
     pub pending_results: VecDeque<CpuChunkMesh>,
     pub device: Device,
-    pub queue: Queue
+    pub queue: Queue,
 }
 const VERTEX_SIZE_BYTES: usize = size_of::<Vertex>();
 impl Terrain {
-    pub fn new(
-        device: &Device,
-        queue: &Queue,
-        settings: &Settings,
-        props: &Props
-    ) -> Self {
+    pub fn new(device: &Device, queue: &Queue, settings: &Settings, props: &Props) -> Self {
         let cs = chunk_size() as f32;
         let view_radius_render = (64f32 * (64f32 / cs)) as usize;
         let view_radius_generate = (32f32 * (64f32 / cs)) as usize;
@@ -477,7 +472,7 @@ impl Terrain {
         _time: &Time,
         roads: &mut Roads,
         props: &mut Props,
-        variables: &Variables
+        variables: &Variables,
     ) {
         let t_frame = Instant::now();
 
@@ -526,7 +521,7 @@ impl Terrain {
             &self.pending_results,
             &self.visible,
             &self.lod_map,
-            variables
+            settings,
         );
         self.frame_timings.dispatch_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
@@ -641,7 +636,13 @@ impl Terrain {
 
             let coord = cpu.chunk_coord;
 
-            if !self.terrain_jobs.workers.is_current_version(coord, cpu.version) { continue; }
+            if !self
+                .terrain_jobs
+                .workers
+                .is_current_version(coord, cpu.version)
+            {
+                continue;
+            }
 
             let t0 = Instant::now();
 

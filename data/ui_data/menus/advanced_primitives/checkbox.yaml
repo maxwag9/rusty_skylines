@@ -2,51 +2,42 @@ name: checkbox
 elements:
   # Outer border
   - !Rect
-    id: Checkbox Border
+    id: Button_Background
     actions:
-      - on:release, toggle(str:{ap})
-      - button:a show_interaction(self.color.fill)
-    x: 0.0
-    y: 0.0
-    w: 60
-    h: 60
-    color:
-      - 0.00
-      - 0.00
-      - 0.00
-      - 1.0
-    border_color:
-      - 1.0
-      - 1.0
-      - 1.0
-      - 1.0
-    roundness: 0.1
-    border_thickness_percentage: 0.05
-  # inner indicator
-  - !Rect
-    id: Checkbox Indicator
-    actions:
-      - on:release, toggle(str:{ap})
-      #- button:a show_interaction(self.color.fill) # buggy
-      - on:release on:activated button:a, ifvareq({ap}, bool:false, set_var(str:self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(str:self.color.fill, [0.0, 0.5, 0.0, 1.0]))
-    x: 0.0
-    y: 0.0
-    w: 40
+      - "in:any, as:[str:button_text], set(str:as.pt, {ap.1}); set(str:self.size, expr:{as.size}+15.0); set(str:self.center, [expr:{as.center.x}+{as.size.x}*0.5, as.center.y]) call(str:{ap.2});"
+      - "on:hovering, ifvareq({ap}, bool:false, set_var(str:self.color.border, [0.3, 0.0, 0.0, 1.0]), set_var(str:self.color.border, [0.0, 0.3, 0.0, 1.0]))"
+      - "on:hover_exit on:activated, ifvareq({ap}, bool:false, set_var(str:self.color.border, [1.0, 0.0, 0.0, 1.0]), set_var(str:self.color.border, [0.0, 1.0, 0.0, 1.0]))"
+      - "on:down, set(str:previous_fill, self.color.fill); set(str:self.color.fill, [0.8, 0.8, 0.8, 0.2])"
+      - "on:release, toggle(str:{ap}); set(str:self.color.fill, [0.8, 0.8, 0.8, 0.05])"
+      #      - "show_interaction(self.color.fill)"
+      #- "in:any, set(str:x, expr:{self.center.x}/{screen.x}); set(str:y, expr:{self.center.y}/{screen.y}); set(str:corner, expr:exp(-8.0*({x}*{x} + {y}*{y}))); set(str:self.color.border, [corner, expr:1-{corner}, expr:1-{corner}, 1])"
+    x: 0
+    y: 0
+    w: 150
     h: 40
     color:
-      - 0.00
-      - 0.50
-      - 0.0
+      - 0.8
+      - 0.8
+      - 0.8
+      - 0.05
+    border_color:
+      - 0.1
+      - 0.1
+      - 0.1
       - 1.0
-    roundness: 0.5
+    roundness: 0.20
+    border_thickness: 4
   - !Text
-    id: setting_text
-    x: 0.00
-    y: -55
-    pt: 6.0
+    id: button_text
+    x: 0
+    y: 0
+    pt: 40.0
     color:
       - 1.0
       - 1.0
       - 1.0
       - 0.9
-    text: '{ap}'
+    text: '{ap.0}'
+    anchor: CenterLeft
+    misc:
+      touchable: false

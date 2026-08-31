@@ -19,7 +19,7 @@ elements:
       - 1.0
     texture: null
     roundness: 0.7
-    border_thickness_percentage: 0.2
+    border_thickness: 2
     fade: 0.0
     blur: 4.0
     glow_misc: { }
@@ -46,7 +46,7 @@ elements:
       - 1.0
     texture: null
     roundness: 0.7
-    border_thickness_percentage: 0.2
+    border_thickness: 2
     fade: 0.0
     blur: 4.0
     glow_misc: { }

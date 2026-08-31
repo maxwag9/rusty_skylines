@@ -92,11 +92,13 @@ impl<'a> UniformUpdater<'a> {
         &self,
         tonemapping_state: ToneMappingState,
         color_grade_state: ColorGradeState,
+        settings: &Settings,
         variables: &mut Variables,
     ) {
         let tonemapping = ToneMappingUniforms::from_state(tonemapping_state);
         let color_grade = ColorGrade::from_state(color_grade_state);
-        let pp_uniforms = PostProcessUniforms::new(tonemapping.as_slice(), color_grade, variables);
+        let pp_uniforms =
+            PostProcessUniforms::new(tonemapping.as_slice(), color_grade, settings, variables);
         self.queue.write_buffer(
             &self.pipelines.buffers.post_processing,
             0,

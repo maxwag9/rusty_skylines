@@ -10,8 +10,14 @@ use crate::resources::Time;
 use crate::ui::input::Input;
 use crate::ui::ui_editor::Ui;
 use crate::ui::ui_touch_manager::UiTouchManager;
-use crate::ui::vertex::{PolygonEdgeGpu, PolygonInfoGpu, RuntimeLayer, UiButtonPolygon, UiButtonText, UiElement, UiVertexPoly, UiVertexText};
-use glyphon::{Cache, FontSystem, Resolution, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, fontdb};
+use crate::ui::vertex::{
+    PolygonEdgeGpu, PolygonInfoGpu, RuntimeLayer, UiButtonPolygon, UiButtonText, UiElement,
+    UiVertexPoly, UiVertexText,
+};
+use glyphon::{
+    Cache, FontSystem, Resolution, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer,
+    Viewport, fontdb,
+};
 use std::fs;
 use wgpu::*;
 use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions};
@@ -25,7 +31,7 @@ pub struct ScreenUniform {
     pub size: [f32; 2],
     pub time: f32,
     pub enable_dither: u32, // use 0 = off, 1 = on
-    pub mouse: [f32; 2]    // position!
+    pub mouse: [f32; 2],    // position!
 }
 
 #[repr(C)]
@@ -41,8 +47,8 @@ pub struct CircleParams {
 
     pub fade: f32,  // 0..1 for fade effect
     pub style: u32, // 0 = normal, 1 = hue circle, 2 = SV, etc.
-    pub inside_border_thickness_percentage: f32,
-    pub depth: f32
+    pub inside_border_thickness: f32,
+    pub depth: f32,
 }
 
 impl Default for CircleParams {
@@ -58,8 +64,8 @@ impl Default for CircleParams {
             misc: [0.0; 4], // active, touched_time, is_touched, id_hash
             fade: 0.0,
             style: 0,
-            inside_border_thickness_percentage: 0.0,
-            depth: 0.0
+            inside_border_thickness: 0.0,
+            depth: 0.0,
         }
     }
 }
@@ -77,7 +83,7 @@ pub struct OutlineParams {
     pub(crate) dash_misc: [f32; 4], // (dash_len, dash_spacing, dash_roundness, speed)
     pub(crate) sub_dash_color: [f32; 4],
     pub(crate) sub_dash_misc: [f32; 4], // (sub_dash_len, sub_dash_spacing, sub_roundness, sub_speed)
-    pub(crate) misc: [f32; 4]          // active, touched_time, is_touched, id_hash
+    pub(crate) misc: [f32; 4],          // active, touched_time, is_touched, id_hash
 }
 
 impl Default for OutlineParams {
@@ -93,7 +99,7 @@ impl Default for OutlineParams {
             dash_misc: [2.0, 1.0, 1.0, 2.0], // (dash_len, dash_spacing, dash_roundness, speed)
             sub_dash_color: [0.3, 0.4, 0.5, 0.9],
             sub_dash_misc: [2.0, 1.0, 1.0, -2.0], // (sub_dash_len, sub_dash_spacing, sub_dash_roundness, sub_speed)
-            misc: [1.0, 0.0, 0.0, 0.0]           // active, touched_time, is_touched, id_hash
+            misc: [1.0, 0.0, 0.0, 0.0],           // active, touched_time, is_touched, id_hash
         }
     }
 }
@@ -160,8 +166,8 @@ pub struct TextParams {
     pub height: f32,
     pub id: String,
     pub caret: usize,
-    pub anchor: Option<Anchor>,
-    pub depth: f32
+    pub anchor: Anchor,
+    pub depth: f32,
 }
 
 impl Default for TextParams {
@@ -178,8 +184,8 @@ impl Default for TextParams {
             height: 10.0,
             id: "None".to_string(),
             caret: 0,
-            anchor: None,
-            depth: 0.0
+            anchor: Anchor::default(),
+            depth: 0.0,
         }
     }
 }
@@ -205,23 +211,13 @@ impl UiRenderer {
         size: PhysicalSize<u32>,
         msaa_samples: u32,
     ) -> anyhow::Result<Self> {
-        let pipelines = UiPipelines::new(
-            device,
-            config,
-            msaa_samples,
-            size,
-        )?;
+        let pipelines = UiPipelines::new(device, config, msaa_samples, size)?;
 
         let mut font_system = FontSystem::new();
 
         let swash_cache = SwashCache::new();
         let cache = Cache::new(&device);
-        let mut text_atlas = TextAtlas::new(
-            device,
-            queue,
-            &cache,
-            COLOR_FORMAT,
-        );
+        let mut text_atlas = TextAtlas::new(device, queue, &cache, COLOR_FORMAT);
         let text_renderer = TextRenderer::new(
             &mut text_atlas,
             device,
@@ -239,10 +235,7 @@ impl UiRenderer {
             }),
         );
 
-        let mut viewport = Viewport::new(
-            device,
-            &cache,
-        );
+        let mut viewport = Viewport::new(device, &cache);
 
         viewport.update(
             queue,
@@ -263,9 +256,7 @@ impl UiRenderer {
                         .any(|(family, _)| family.eq_ignore_ascii_case(system_font_family))
                 })
                 .map(|face| face.id)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("System font '{}' not found", system_font_family)
-                })?;
+                .ok_or_else(|| anyhow::anyhow!("System font '{}' not found", system_font_family))?;
 
             let face = font_system
                 .db()
@@ -275,27 +266,21 @@ impl UiRenderer {
             match &face.source {
                 fontdb::Source::Binary(data) => data.as_ref().as_ref().to_vec(),
                 fontdb::Source::File(path) => fs::read(path)?,
-                fontdb::Source::SharedFile(path, _) => fs::read(path)?
+                fontdb::Source::SharedFile(path, _) => fs::read(path)?,
             }
         } else {
             let dir = data_dir("ui_data/ttf");
 
             let font_path = fs::read_dir(dir)?
                 .filter_map(Result::ok)
-                .find(|e| {
-                    e.path()
-                        .extension()
-                        .map(|x| x == "ttf")
-                        .unwrap_or(false)
-                })
+                .find(|e| e.path().extension().map(|x| x == "ttf").unwrap_or(false))
                 .ok_or_else(|| anyhow::anyhow!("No TTF found"))?
                 .path();
 
             fs::read(font_path)?
         };
 
-        let font_arc = FontArc::try_from_vec(font_data.clone())
-            .expect("Failed to load font data");
+        let font_arc = FontArc::try_from_vec(font_data.clone()).expect("Failed to load font data");
 
         if !use_system_font {
             font_system.db_mut().load_font_data(font_data.clone());
@@ -311,7 +296,7 @@ impl UiRenderer {
             viewport,
             font_arc,
 
-            device: device.clone()
+            device: device.clone(),
         })
     }
 
@@ -482,19 +467,34 @@ impl UiRenderer {
                     }
                     UiElement::Outline(o) => {
                         if let Some(bg1) = outline_bg.as_ref() {
-                            self.draw_outline(render_manager, pipelines, &mut pass, bg1, outline_idx);
+                            self.draw_outline(
+                                render_manager,
+                                pipelines,
+                                &mut pass,
+                                bg1,
+                                outline_idx,
+                            );
                         }
 
                         outline_idx += 1;
                     }
                     UiElement::Text(t) => {
-                        if let Some(texts) = self.make_text_areas(t, layer.order as usize, element_idx) {
+                        if let Some(texts) =
+                            self.make_text_areas(t, layer.order as usize, element_idx)
+                        {
                             pending_text.extend(texts);
                         }
                     }
                     UiElement::Rect(rect) => {
                         if let Some(bg1) = rect_bg.as_ref() {
-                            self.draw_rect(render_manager, pipelines, &mut pass, bg1, rect_idx, rect.blur > 0.0);
+                            self.draw_rect(
+                                render_manager,
+                                pipelines,
+                                &mut pass,
+                                bg1,
+                                rect_idx,
+                                rect.blur > 0.0,
+                            );
                         }
 
                         rect_idx += 1;
@@ -683,7 +683,8 @@ impl UiRenderer {
             return None;
         }
 
-        let (Some(info), Some(edges)) = (&layer.gpu.poly_info_ssbo, &layer.gpu.poly_edge_ssbo) else {
+        let (Some(info), Some(edges)) = (&layer.gpu.poly_info_ssbo, &layer.gpu.poly_edge_ssbo)
+        else {
             return None;
         };
 
@@ -708,28 +709,26 @@ impl UiRenderer {
             return None;
         }
 
-        Some(self.device.create_bind_group(&BindGroupDescriptor {
-            label: None,
-            layout: &self.pipelines.outline_layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: layer
-                        .gpu
-                        .outline_shapes_ssbo
-                        .as_ref()?
-                        .as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: layer
-                        .gpu
-                        .outline_poly_vertices_ssbo
-                        .as_ref()?
-                        .as_entire_binding(),
-                },
-            ],
-        }))
+        Some(
+            self.device.create_bind_group(&BindGroupDescriptor {
+                label: None,
+                layout: &self.pipelines.outline_layout,
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: layer.gpu.outline_shapes_ssbo.as_ref()?.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: layer
+                            .gpu
+                            .outline_poly_vertices_ssbo
+                            .as_ref()?
+                            .as_entire_binding(),
+                    },
+                ],
+            }),
+        )
     }
 
     fn rect_bind_group(&self, layer: &RuntimeLayer) -> Option<BindGroup> {
@@ -771,7 +770,10 @@ impl UiRenderer {
 
         render_manager.render_with_layouts(
             &shader_dir().join("ui_circle_glow.wgsl"),
-            &[&self.pipelines.uniform_layout, &self.pipelines.circle_layout],
+            &[
+                &self.pipelines.uniform_layout,
+                &self.pipelines.circle_layout,
+            ],
             &[&self.pipelines.uniform_bind_group, circle_bg],
             options,
             pass,
@@ -797,7 +799,10 @@ impl UiRenderer {
 
         render_manager.render_with_layouts(
             &shader_dir().join("ui_circle.wgsl"),
-            &[&self.pipelines.uniform_layout, &self.pipelines.circle_layout],
+            &[
+                &self.pipelines.uniform_layout,
+                &self.pipelines.circle_layout,
+            ],
             &[&self.pipelines.uniform_bind_group, circle_bg],
             options,
             pass,
@@ -832,7 +837,10 @@ impl UiRenderer {
 
         render_manager.render_with_layouts(
             &shader_dir().join("ui_handle.wgsl"),
-            &[&self.pipelines.uniform_layout, &self.pipelines.handle_layout],
+            &[
+                &self.pipelines.uniform_layout,
+                &self.pipelines.handle_layout,
+            ],
             &[&self.pipelines.uniform_bind_group, handle_bg],
             options,
             pass,
@@ -869,7 +877,10 @@ impl UiRenderer {
 
         render_manager.render_with_layouts(
             &shader_dir().join("ui_polygon.wgsl"),
-            &[&self.pipelines.uniform_layout, &self.pipelines.polygon_layout],
+            &[
+                &self.pipelines.uniform_layout,
+                &self.pipelines.polygon_layout,
+            ],
             &[&self.pipelines.uniform_bind_group, poly_bg],
             options,
             pass,
@@ -904,7 +915,10 @@ impl UiRenderer {
 
         render_manager.render_with_layouts(
             &shader_dir().join("ui_shape_outline.wgsl"),
-            &[&self.pipelines.uniform_layout, &self.pipelines.outline_layout],
+            &[
+                &self.pipelines.uniform_layout,
+                &self.pipelines.outline_layout,
+            ],
             &[&self.pipelines.uniform_bind_group, outline_bg],
             options,
             pass,
@@ -1027,7 +1041,7 @@ impl UiRenderer {
 
         let width = cache.width.max(1.0);
         let height = cache.height.max(1.0);
-        let top_left = anchor_to(cache.anchor.unwrap_or_default(), cache.pos, width, height);
+        let top_left = anchor_to(cache.anchor, cache.pos, width, height);
         let (left, top) = (top_left[0], top_left[1]);
 
         let depth = depth_for(layer_order, element_idx);
@@ -1113,11 +1127,10 @@ impl UiRenderer {
             return;
         }
 
-        if let Err(e) = self.text_renderer.render(
-            &self.text_atlas,
-            &self.viewport,
-            pass,
-        ) {
+        if let Err(e) = self
+            .text_renderer
+            .render(&self.text_atlas, &self.viewport, pass)
+        {
             println!("{}", e);
         }
     }
@@ -1171,4 +1184,3 @@ pub fn upload_poly_vbo(
     }
     queue.write_buffer(layer.gpu.poly_vbo.as_ref().unwrap(), 0, bytes);
 }
-

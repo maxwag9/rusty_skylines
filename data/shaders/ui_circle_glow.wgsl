@@ -19,7 +19,7 @@ const DITHER_MATRIX : array<array<f32, 4>, 4> = array(
 );
 
 struct CircleParams {
-    // center.x, center.y, radius, outer_border_thickness_percentage
+    // center.x, center.y, radius, outer_border_thickness
     center_radius_border: vec4<f32>,
     fill_color: vec4<f32>,
     inside_border_color: vec4<f32>,
@@ -30,7 +30,7 @@ struct CircleParams {
 
     fade: f32,
     style: u32,
-    inside_border_thickness_percentage: f32,
+    inside_border_thickness: f32,
     depth: f32
 };
 fn hash(p: vec2<f32>) -> f32 {

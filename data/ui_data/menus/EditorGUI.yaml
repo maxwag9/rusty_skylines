@@ -25,7 +25,7 @@ layers:
           - 0.9
         texture: null
         roundness: 0.4
-        border_thickness_percentage: 0.002
+        border_thickness: 2
         fade: 0.0
         blur: 4.0
         glow_color:
@@ -59,7 +59,6 @@ layers:
           - 0.9
         texture: null
         roundness: 0.4
-        border_thickness_percentage: 0.0
         fade: 0.0
         blur: 4.0
         glow_color:

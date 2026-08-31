@@ -3,11 +3,7 @@ elements:
   # Soft outer border
   - !Rect
     id: Zoning Border
-    actions:
-      - on:activated, set(str:zoning_demand_indicator_{ap}_border_height, self.size.y)
-      #- on:activated, print(zoning_demand_indicator_{ap}_border_height)
-      - on:activated, set(str:zoning_demand_indicator_{ap}_border_y, self.center.y)
-      #- on:activated, print(zoning_demand_indicator_{ap}_border_y)
+    actions: [ ]
     x: 0
     y: 0
     w: 30
@@ -22,14 +18,14 @@ elements:
       - 1.0
       - 1.0
       - 0.2
-    roundness: 0.05
-    border_thickness_percentage: 0.04
+    roundness: 0.2
+    border_thickness: 0.04
   # inner indicator
   - !Rect
     id: Zoning Indicator
     actions:
-      - on:a set(str:self.size.y, expr:{zoning_demand_indicator_{ap}_border_height}*{{ap}})
-      - on:a set(str:self.center.y, expr:({zoning_demand_indicator_{ap}_border_y} + 0.5 * {zoning_demand_indicator_{ap}_border_height}) - 0.5 * ({zoning_demand_indicator_{ap}_border_height}*{{ap}}))
+      - as:["Zoning Border"] set(str:self.size.y, expr:{as.size.y}*{{ap}})
+      - as:["Zoning Border"] set(str:self.center.y, expr:({as.center.y} + 0.5 * {as.size.y}) - 0.5 * ({as.size.y}*{{ap}}))
       - show_interaction(self.color.fill)
       #- on:release, ifvareq(str:{ap}, bool:false, set_var(str:self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(str:self.color.fill, [0.0, 0.5, 0.0, 1.0]))
     x: 0
@@ -41,7 +37,7 @@ elements:
       - 0.50
       - 0.0
       - 0.9
-    roundness: 0.1
+    roundness: 0.2
   - !Text
     id: zoning_value_text
     x: 0

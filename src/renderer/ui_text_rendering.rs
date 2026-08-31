@@ -1,11 +1,11 @@
 use crate::renderer::ui::UiRenderer;
 use crate::resources::Time;
+use crate::ui::ui_text_editing::{get_caret_position, line_start_grapheme_index, text_top_left};
 use crate::ui::vertex::{UiButtonText, UiVertexText};
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
-use crate::ui::ui_text_editing::{get_caret_position, line_start_grapheme_index, text_top_left};
 
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Default)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, PartialEq)]
 pub enum Anchor {
     TopLeft,
     #[default]
@@ -29,53 +29,49 @@ fn push_quad(
     xb: f32,
     yb: f32,
     col: [f32; 4],
-    depth: f32
+    depth: f32,
 ) {
     text_vertices.extend_from_slice(&[
         UiVertexText {
             pos: [xa, ya],
             color: col,
             depth,
-            _pad0: [0.0; 3]
+            _pad0: [0.0; 3],
         },
         UiVertexText {
             pos: [xb, ya],
             color: col,
             depth,
-            _pad0: [0.0; 3]
+            _pad0: [0.0; 3],
         },
         UiVertexText {
             pos: [xb, yb],
             color: col,
             depth,
-            _pad0: [0.0; 3]
+            _pad0: [0.0; 3],
         },
         UiVertexText {
             pos: [xa, ya],
             color: col,
             depth,
-            _pad0: [0.0; 3]
+            _pad0: [0.0; 3],
         },
         UiVertexText {
             pos: [xb, yb],
             color: col,
             depth,
-            _pad0: [0.0; 3]
+            _pad0: [0.0; 3],
         },
         UiVertexText {
             pos: [xa, yb],
             color: col,
             depth,
-            _pad0: [0.0; 3]
+            _pad0: [0.0; 3],
         },
     ]);
 }
 
-pub fn render_selection(
-    t: &UiButtonText,
-    text_vertices: &mut Vec<UiVertexText>,
-    depth: f32,
-) {
+pub fn render_selection(t: &UiButtonText, text_vertices: &mut Vec<UiVertexText>, depth: f32) {
     if !t.has_selection {
         return;
     }
@@ -122,8 +118,7 @@ pub fn render_selection(
                         x0 = glyph.x + glyph.w;
                     } else {
                         let offset = start_local - cluster_start;
-                        x0 = glyph.x
-                            + glyph.w * (offset as f32 / cluster_len.max(1) as f32);
+                        x0 = glyph.x + glyph.w * (offset as f32 / cluster_len.max(1) as f32);
                     }
 
                     break;
@@ -143,8 +138,7 @@ pub fn render_selection(
                         x1 = glyph.x + glyph.w;
                     } else {
                         let offset = end_local - cluster_start;
-                        x1 = glyph.x
-                            + glyph.w * (offset as f32 / cluster_len.max(1) as f32);
+                        x1 = glyph.x + glyph.w * (offset as f32 / cluster_len.max(1) as f32);
                     }
 
                     break;
@@ -174,7 +168,7 @@ pub fn render_editor_outline(
     text_vertices: &mut Vec<UiVertexText>,
     pad: f32,
     being_hovered: bool,
-    depth: f32
+    depth: f32,
 ) {
     let x0 = min_x - pad;
     let y0 = min_y - pad;
@@ -198,7 +192,7 @@ pub fn render_corner_brackets(
     max_y: f32,
     text_vertices: &mut Vec<UiVertexText>,
     being_hovered: bool,
-    depth: f32
+    depth: f32,
 ) {
     let base_len = 6.0;
     let base_pad = 4.0;
@@ -250,7 +244,6 @@ pub fn render_editor_caret(
             break;
         }
     }
-
 
     let blink_t = time_system.total_time * 3.0;
     let caret_alpha = (0.5 + 0.5 * blink_t.cos()).clamp(0.0, 1.0) as f32;

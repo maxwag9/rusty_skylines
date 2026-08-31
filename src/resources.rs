@@ -1,6 +1,8 @@
+use crate::app::GAME_VERSION;
 use crate::data::FullScreenMode;
 use crate::data::Settings;
 use crate::helpers::paths::rusty_skylines_dir;
+use crate::renderer::props::Props;
 use crate::renderer::render_core::{
     Renderer, create_device, create_surface_and_adapter, create_surface_config,
 };
@@ -8,20 +10,20 @@ use crate::renderer::shadows::CSM_CASCADES;
 use crate::simulation::Simulation;
 use crate::ui::actions::CommandQueue;
 use crate::ui::ui_editor::Ui;
-use crate::ui::variables::{load_colors, Variables};
+use crate::ui::variables::{Variables, load_colors};
 use crate::world::astronomy::Astronomy;
 use crate::world::game_state::GameState;
 use crate::world::sound::sound::Sounds;
 use crate::world::statisticals::demands::HOURS_PER_DAY;
 use crate::world::world::World;
+use gfxinfo::active_gpu;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use gfxinfo::active_gpu;
 use sysinfo::System;
 use wgpu::Surface;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
-use crate::renderer::props::Props;
 
 pub struct CommandQueues {
     pub ui_command_queue: CommandQueue,
@@ -49,27 +51,66 @@ pub struct Resources {
     pub sounds: Sounds,
     pub surface: Surface<'static>,
     pub pending_fullscreen_change: Option<FullScreenMode>,
-    pub pending_present_mode_change: bool
+    pub pending_present_mode_change: bool,
 }
 
 fn ram_comment(sys: System) -> String {
     let total_ram = sys.total_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
     match total_ram {
-        ..0.4 => format!("{} GiB of RAM... You are in the deepest pits of hell with that low RAM! Go buy some! No DDR1 or DDR2 allowed!", total_ram),
-        0.4..1.8 => format!("{:.4} GiB of RAM... Trying my game on your Windows 98 PC or what? I told you it wouldn't work!", total_ram),
+        ..0.4 => format!(
+            "{} GiB of RAM... You are in the deepest pits of hell with that low RAM! Go buy some! No DDR1 or DDR2 allowed!",
+            total_ram
+        ),
+        0.4..1.8 => format!(
+            "{:.4} GiB of RAM... Trying my game on your Windows 98 PC or what? I told you it wouldn't work!",
+            total_ram
+        ),
         1.8..4.5 => format!("{:.2} GiB of RAM... Sorry, you are poor!", total_ram),
         4.5..8.5 => format!("{:.2} GiB of RAM... Awkward Ram size!!", total_ram),
-        8.5..16.9 => format!("{:.2} GiB of RAM... You can game quite well with {:.2} GiB!!!", total_ram, total_ram),
-        16.9..33.6 => format!("{:.2} GiB of RAM... Respect for the Ram!!!! Can I have it? No? Well, my game will have it!", total_ram),
-        33.6..69.1 => format!("{:.2} GiB of RAM... Insane Ram size!!!!! Either you are rich or you bought it before AI fucked us over!", total_ram),
-        69.1..132.9 => format!("{:.2} GiB of RAM... Holy Shit, go open some CAD software, why the fuck are you playing my game with {} GiB of RAM?!", total_ram, total_ram),
-        132.9..261.0 => format!("{:.2} GiB of RAM... That's GALACTIC amounts! Did you forget to switch to your main PC instead of your server rack??", total_ram),
-        261.0..532.8 => format!("{:.2} GiB of RAM... WTF? Did you steal my RAM? Is this normal??", total_ram),
-        532.8..1200.3 => format!("{:.2} GiB of RAM... A fucking Terrabyte! There is no way in hell windows 18 needs that much RAM! So much spyware?", total_ram),
-        1200.3..4522.2 => format!("{:.2} GiB of RAM... Goddamnit! You are literally playing on my Minecraft server! Or more like a fucking AI server...", total_ram),
-        4522.2..16200.4 => format!("{:.2} GiB of RAM... I bet this is normal in your time! Just a casual stick of 4TiB DDR 11 Memory with 24000mhz... Yes, I future-proofed this message to past the year 2077!", total_ram),
-        16200.4.. => format!("{:.2} GiB of RAM... You are literally a god. We must all bow down to you. You own ALL RAM... Fuck you and thank you god!", total_ram),
-        _ => panic!("You have some goofy ass amount of RAM, wtf? {} GiB of Ram to be precise.", total_ram),
+        8.5..16.9 => format!(
+            "{:.2} GiB of RAM... You can game quite well with {:.2} GiB!!!",
+            total_ram, total_ram
+        ),
+        16.9..33.6 => format!(
+            "{:.2} GiB of RAM... Respect for the Ram!!!! Can I have it? No? Well, my game will have it!",
+            total_ram
+        ),
+        33.6..69.1 => format!(
+            "{:.2} GiB of RAM... Insane Ram size!!!!! Either you are rich or you bought it before AI fucked us over!",
+            total_ram
+        ),
+        69.1..132.9 => format!(
+            "{:.2} GiB of RAM... Holy Shit, go open some CAD software, why the fuck are you playing my game with {} GiB of RAM?!",
+            total_ram, total_ram
+        ),
+        132.9..261.0 => format!(
+            "{:.2} GiB of RAM... That's GALACTIC amounts! Did you forget to switch to your main PC instead of your server rack??",
+            total_ram
+        ),
+        261.0..532.8 => format!(
+            "{:.2} GiB of RAM... WTF? Did you steal my RAM? Is this normal??",
+            total_ram
+        ),
+        532.8..1200.3 => format!(
+            "{:.2} GiB of RAM... A fucking Terrabyte! There is no way in hell windows 18 needs that much RAM! So much spyware?",
+            total_ram
+        ),
+        1200.3..4522.2 => format!(
+            "{:.2} GiB of RAM... Goddamnit! You are literally playing on my Minecraft server! Or more like a fucking AI server...",
+            total_ram
+        ),
+        4522.2..16200.4 => format!(
+            "{:.2} GiB of RAM... I bet this is normal in your time! Just a casual stick of 4TiB DDR 11 Memory with 24000mhz... Yes, I future-proofed this message to past the year 2077!",
+            total_ram
+        ),
+        16200.4.. => format!(
+            "{:.2} GiB of RAM... You are literally a god. We must all bow down to you. You own ALL RAM... Fuck you and thank you god!",
+            total_ram
+        ),
+        _ => panic!(
+            "You have some goofy ass amount of RAM, wtf? {} GiB of Ram to be precise.",
+            total_ram
+        ),
     }
 }
 fn format_memory(bytes: u64) -> String {
@@ -89,19 +130,44 @@ impl Resources {
     pub fn new(window: Arc<Box<dyn Window>>, event_loop: &dyn ActiveEventLoop) -> Self {
         let mut settings = Settings::load(rusty_skylines_dir("settings.toml"));
         let mut variables = Variables::new();
+        variables.set_string("GAME_VERSION", GAME_VERSION);
         let editor_mode = settings.editor_mode.clone();
 
         let (surface, adapter, size) = create_surface_and_adapter(window.clone(), event_loop);
         println!(" [app] surface + adapter created");
-        let (config, msaa_samples) = create_surface_config(&surface, &adapter, &mut settings, &mut variables, size, false);
-        println!("Surface size: {}x{}, Format: {:?}, Alpha Mode: {:?}", config.width, config.height, config.format, config.alpha_mode);
+        let (config, msaa_samples) = create_surface_config(
+            &surface,
+            &adapter,
+            &mut settings,
+            &mut variables,
+            size,
+            false,
+        );
+        println!(
+            "Surface size: {}x{}, Format: {:?}, Alpha Mode: {:?}",
+            config.width, config.height, config.format, config.alpha_mode
+        );
 
         let gpu_info = active_gpu();
         let adapter_info = adapter.get_info();
         if let Ok(gpu_info) = gpu_info {
-            println!("GPU: {} ({}), Driver: {} {}, Type: {:?}, VRAM: {}", gpu_info.model(), gpu_info.family(), adapter_info.driver, adapter_info.driver_info, adapter_info.device_type, format_memory(gpu_info.info().total_vram()));
+            println!(
+                "GPU: {} ({}), Driver: {} {}, Type: {:?}, VRAM: {}",
+                gpu_info.model(),
+                gpu_info.family(),
+                adapter_info.driver,
+                adapter_info.driver_info,
+                adapter_info.device_type,
+                format_memory(gpu_info.info().total_vram())
+            );
         } else {
-            println!("GPU: {}, Driver: {} {}, Type: {:?}", adapter_info.name, adapter_info.driver, adapter_info.driver_info, adapter_info.device_type);
+            println!(
+                "GPU: {}, Driver: {} {}, Type: {:?}",
+                adapter_info.name,
+                adapter_info.driver,
+                adapter_info.driver_info,
+                adapter_info.device_type
+            );
         }
 
         let mut sys = System::new_all();
@@ -111,12 +177,27 @@ impl Resources {
         if let Some(cpu) = cpus.first() {
             let physical_cores = System::physical_core_count().unwrap_or(0);
             //let cpu_name = cpu.name().split(" cpu").next().unwrap_or(cpu.name());
-            println!("CPU: {}, Cores: {}/{}, Architecture: {}", cpu.brand(), physical_cores, cpus.len(), std::env::consts::ARCH);
+            println!(
+                "CPU: {}, Cores: {}/{}, Architecture: {}",
+                cpu.brand(),
+                physical_cores,
+                cpus.len(),
+                std::env::consts::ARCH
+            );
         }
 
         println!("RAM: {}", ram_comment(sys));
-        println!("OS: {}, OS kernel: {}, System name: {}, Average System load last 5 minutes: {}%", System::long_os_version().unwrap_or_default(), System::kernel_long_version(), System::name().unwrap_or_default(), System::load_average().five);
-        println!("Backend: {}, Present mode: {}, MSAA: {}x", adapter_info.backend, settings.present_mode, settings.msaa_samples);
+        println!(
+            "OS: {}, OS kernel: {}, System name: {}, Average System load last 5 minutes: {}%",
+            System::long_os_version().unwrap_or_default(),
+            System::kernel_long_version(),
+            System::name().unwrap_or_default(),
+            System::load_average().five
+        );
+        println!(
+            "Backend: {}, Present mode: {}, MSAA: {}x",
+            adapter_info.backend, settings.present_mode, settings.msaa_samples
+        );
         let (device, queue) = &create_device(&adapter);
 
         surface.configure(device, &config);
@@ -127,10 +208,14 @@ impl Resources {
         let mut world_core = World::new(device, queue, &settings, &props);
         let camera = &mut world_core.world_state.camera;
 
-        let render_core = Renderer::new(device, queue, &config, size, adapter, &settings, camera, props);
+        let render_core = Renderer::new(
+            device, queue, &config, size, adapter, &settings, camera, props,
+        );
 
         let mut ui_loader = Ui::new(&settings, variables, window.surface_size());
-        ui_loader.variables.set_bool("editor_mode", settings.editor_mode);
+        ui_loader
+            .variables
+            .set_bool("editor_mode", settings.editor_mode);
         load_colors(
             rusty_skylines_dir("colors.toml"),
             &settings,
@@ -138,7 +223,6 @@ impl Resources {
         );
         let mut command_queues = CommandQueues::new();
         ui_loader.set_starting_menu(&settings, &mut command_queues.ui_command_queue);
-        world_core.time.total_game_time = settings.total_game_time;
         world_core.time.update_hour();
         let pending_fullscreen_change = Some(settings.fullscreen_mode);
         Self {
@@ -158,10 +242,18 @@ impl Resources {
     }
 
     pub fn reconfigure_surface(&mut self) {
-        let (config, msaa_samples) = create_surface_config(&self.surface, &self.render_core.adapter, &mut self.settings, &mut self.ui.variables, self.window.surface_size(), true);
+        let (config, msaa_samples) = create_surface_config(
+            &self.surface,
+            &self.render_core.adapter,
+            &mut self.settings,
+            &mut self.ui.variables,
+            self.window.surface_size(),
+            true,
+        );
         self.render_core.config = config;
         self.render_core.update_msaa(&self.settings);
-        self.surface.configure(&self.render_core.device, &self.render_core.config);
+        self.surface
+            .configure(&self.render_core.device, &self.render_core.config);
     }
 }
 
@@ -170,6 +262,7 @@ pub const HOURS_PER_YEAR: f64 = DAYS_PER_YEAR * HOURS_PER_DAY;
 const SCHOOL_YEAR_START_DAY: u32 = (DAYS_PER_YEAR * 0.75) as u32; // ~September 1
 
 pub struct Time {
+    pub timer: Timer,
     pub last_frame: Instant,
 
     pub render_dt: f32,
@@ -200,8 +293,8 @@ pub struct Time {
 
     pub astronomy: Astronomy,
     frame_start: Instant,
-    cpu_frame_duration: Duration,
-    after_acquire_start: Instant
+    pub cpu_frame_duration: Duration,
+    after_acquire_start: Instant,
 }
 
 impl Time {
@@ -214,6 +307,7 @@ impl Time {
         let target_sim_dt = 1.0 / tps;
 
         Self {
+            timer: Default::default(),
             last_frame: now,
 
             render_dt: 0.0,
@@ -245,7 +339,7 @@ impl Time {
             astronomy: Astronomy::default(),
             frame_start: Instant::now(),
             cpu_frame_duration: Default::default(),
-            after_acquire_start: Instant::now()
+            after_acquire_start: Instant::now(),
         }
     }
 
@@ -280,7 +374,6 @@ impl Time {
     }
 
     pub fn begin_frame(&mut self, time_speed: f32) {
-        self.frame_checkpoint(FrameTimeCheckpointType::FrameStart);
         let now = Instant::now();
         let raw_dt = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
@@ -319,9 +412,8 @@ impl Time {
         // time_speed scaling only applies to the sim accumulator
         self.sim_accumulator += self.render_dt * time_speed.abs();
     }
-    pub fn end_frame(&mut self) -> Duration {
+    pub fn end_frame(&mut self) {
         self.frame_count += 1;
-        self.frame_checkpoint(FrameTimeCheckpointType::FrameEnd)
     }
     pub fn update_achieved_speed(&mut self, steps: u32) {
         self.achieved_speed_window_steps += steps;
@@ -401,6 +493,8 @@ impl Time {
     pub fn consume_sim_step(&mut self) {
         self.sim_accumulator -= self.target_sim_dt;
         let dt = self.target_sim_dt as f64;
+        //println!("{}", self.total_game_time);
+        //println!("Yeah they are");
         if self.current_time_speed >= 0.0 {
             self.total_game_time += dt;
         } else {
@@ -438,7 +532,7 @@ pub enum FrameTimeCheckpointType {
     FrameStart,
     BeforeAcquireFrame,
     AfterAcquireFrame,
-    FrameEnd
+    FrameEnd,
 }
 
 #[repr(C)]
@@ -485,4 +579,53 @@ pub struct Uniforms {
     pub reversed_depth_z: u32,
     pub csm_enabled: u32,
     pub near_far_depth: [f32; 2],
+}
+
+#[derive(Debug, Default)]
+pub struct Timer {
+    starts: HashMap<String, Instant>,
+    checkpoints: HashMap<String, Vec<Duration>>,
+}
+
+impl Timer {
+    pub fn checkpoint(&mut self, name: &str, end: bool) {
+        match end {
+            false => {
+                self.starts.insert(name.to_owned(), Instant::now());
+            }
+
+            true => {
+                if let Some(start) = self.starts.remove(name) {
+                    self.checkpoints
+                        .entry(name.to_owned())
+                        .or_default()
+                        .push(start.elapsed());
+                }
+            }
+        }
+    }
+
+    pub fn get(&self, name: &str) -> Option<&[Duration]> {
+        self.checkpoints.get(name).map(Vec::as_slice)
+    }
+    pub fn totals(&self) -> Vec<(String, Duration)> {
+        self.checkpoints
+            .iter()
+            .map(|(name, durations)| {
+                let total = durations.iter().copied().sum();
+                (name.clone(), total)
+            })
+            .collect()
+    }
+    pub fn total(&self, name: &str) -> Duration {
+        self.checkpoints
+            .get(name)
+            .map(|times| times.iter().copied().sum())
+            .unwrap_or_default()
+    }
+
+    pub fn clear(&mut self) {
+        self.starts.clear();
+        self.checkpoints.clear();
+    }
 }

@@ -18,209 +18,156 @@ layers:
         name: settings_to_main_menu_button
         ap_name: button
         ap_vars:
-          - "str:str:To Main Menu"
+          - "str:<- To Main Menu"
           - "25"
           - "str:on:r call(open_main_menus)"
-        x: 300
+        x: 100
         y: 50
         scale: 1.0
-        misc:
-          active: true
-          touchable: true
-          editable: true
+
         editing_tool: false
       - !Advanced
         name: checkbox_render_chunk_bounds
         ap_name: checkbox
         ap_var: str:render_chunk_bounds
-        x: 900
-        y: 300
+        x: 75
+        y: 200
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: checkbox_render_intersection_gizmo
         ap_name: checkbox
         ap_var: str:render_intersection_gizmo
-        x: 1000
-        y: 300
+        x: 75
+        y: 260
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: checkbox_render_partitions_gizmo
         ap_name: checkbox
         ap_var: str:render_partitions_gizmo
-        x: 1100
-        y: 300
+        x: 75
+        y: 320
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: checkbox_render_node_ids_gizmo
         ap_name: checkbox
         ap_var: str:render_node_ids_gizmo
-        x: 1200
-        y: 300
+        x: 75
+        y: 380
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: checkbox_render_lanes_gizmo
         ap_name: checkbox
         ap_var: str:render_lanes_gizmo
-        x: 1300
-        y: 300
+        x: 75
+        y: 440
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: checkbox_render_signfinding_gizmo
         ap_name: checkbox
         ap_var: str:render_signfinding_gizmo
-        x: 1400
-        y: 300
+        x: 75
+        y: 500
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: checkbox_render_parking_gizmo
         ap_name: checkbox
         ap_var: str:render_parking_gizmo
-        x: 1500
-        y: 300
+        x: 75
+        y: 560
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: checkbox_render_lot_info
         ap_name: checkbox
         ap_var: str:render_lot_info
-        x: 1600
-        y: 300
+        x: 75
+        y: 620
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: checkbox_simple_car_following
         ap_name: checkbox
         ap_var: str:simple_car_following
-        x: 1700
-        y: 300
+        x: 75
+        y: 680
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: checkbox_always_day
         ap_name: checkbox
         ap_var: str:always_day
-        x: 880
-        y: 680
+        x: 75
+        y: 740
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: checkbox_tonemap_ui
         ap_name: checkbox
         ap_var: str:tonemap_ui
-        x: 880
-        y: 540
+        x: 75
+        y: 800
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: tonemapping_state_dropdown
         ap_name: dropdown
         ap_var: str:tonemapping_state
-        x: 200
-        y: 640
+        x: 600
+        y: 280
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: color_grade_state_dropdown
         ap_name: dropdown
         ap_var: str:color_grading_state
-        x: 200
-        y: 740
+        x: 600
+        y: 360
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: present_mode_dropdown
         ap_name: dropdown
         ap_var: str:present_mode
-        x: 200
-        y: 840
+        x: 600
+        y: 440
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: shadow_type_dropdown
         ap_name: dropdown
         ap_var: str:shadow_type
-        x: 400
-        y: 240
+        x: 600
+        y: 520
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: fullscreen_mode_dropdown
         ap_name: dropdown
         ap_var: str:fullscreen_mode
         x: 600
-        y: 640
+        y: 600
         scale: 1.0
-        misc:
-          active: true
-          touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: msaa_slider
         ap_name: slider
@@ -233,14 +180,9 @@ layers:
           - "{supported_msaa_levels}"
           - "none:None"
           - "true"
-        x: 1300
+        x: 1075
         y: 800
         scale: 1.5
-        misc:
-          active: true
-          touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: shadow_map_size_slider
         ap_name: slider
@@ -253,14 +195,9 @@ layers:
           - "[1024, 2048, 4096, 6144, 8192]"
           - "[str:Potato, str:Low, str:Medium, str:High, str:Insane]"
           - "true"
-        x: 1000
-        y: 400
+        x: 1075
+        y: 600
         scale: 1.5
-        misc:
-          active: true
-          touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: target_fps_slider
         ap_name: slider
@@ -273,12 +210,117 @@ layers:
           - "[25, 30, 50, 59, 60, 75, 100, 120, 144, 240, 360, 480, 960, 2000]"
           - "none:None"
           - "true"
-        x: 1300
+        x: 1075
         y: 700
         scale: 1.5
-        misc:
-          active: true
-          touchable: false
-          editable: true
-        editing_tool: false
-    editing_tool: false
+      - !Advanced
+        name: exposure_slider
+        ap_name: slider
+        ap_var:
+          - "str:exposure"
+          - "str:Exposure"
+          - "-2.0"
+          - "2.0"
+          - "0.1"
+          - "none:None"
+          - "none:None"
+          - "false"
+        x: 1575
+        y: 700
+        scale: 1.5
+
+      - !Advanced
+        name: brightness_slider
+        ap_name: slider
+        ap_var:
+          - "str:brightness"
+          - "str:Brightness"
+          - "-1.0"
+          - "1.0"
+          - "0.1"
+          - "none:None"
+          - "none:None"
+          - "false"
+        x: 1575
+        y: 600
+        scale: 1.5
+
+      - !Advanced
+        name: contrast_slider
+        ap_name: slider
+        ap_var:
+          - "str:contrast"
+          - "str:Contrast"
+          - "0.0"
+          - "2.0"
+          - "0.1"
+          - "none:None"
+          - "none:None"
+          - "false"
+        x: 1075
+        y: 900
+        scale: 1.5
+
+      - !Advanced
+        name: saturation_slider
+        ap_name: slider
+        ap_var:
+          - "str:saturation"
+          - "str:Saturation"
+          - "0.0"
+          - "2.0"
+          - "0.1"
+          - "none:None"
+          - "none:None"
+          - "false"
+        x: 1075
+        y: 1000
+        scale: 1.5
+
+      - !Advanced
+        name: vignette_strength_slider
+        ap_name: slider
+        ap_var:
+          - "str:vignette_strength"
+          - "str:Vignette Strength"
+          - "0.0"
+          - "1.0"
+          - "0.1"
+          - "none:None"
+          - "none:None"
+          - "false"
+        x: 1575
+        y: 800
+        scale: 1.5
+
+      - !Advanced
+        name: vignette_radius_slider
+        ap_name: slider
+        ap_var:
+          - "str:vignette_radius"
+          - "str:Vignette Radius"
+          - "0.0"
+          - "1.0"
+          - "0.05"
+          - "none:None"
+          - "none:None"
+          - "false"
+        x: 1575
+        y: 900
+        scale: 1.5
+
+      - !Advanced
+        name: vignette_softness_slider
+        ap_name: slider
+        ap_var:
+          - "str:vignette_softness"
+          - "str:Vignette Softness"
+          - "0.0"
+          - "1.0"
+          - "0.05"
+          - "none:None"
+          - "none:None"
+          - "false"
+        x: 1575
+        y: 1000
+        scale: 1.5

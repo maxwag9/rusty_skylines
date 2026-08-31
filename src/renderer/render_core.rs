@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
 use wgpu::wgt::PollType;
@@ -161,10 +161,11 @@ impl Renderer {
         self.render_manager.invalidate_bind_groups();
         ui.resize(self.old_window_size, new_size);
         let res = Resolution {
-            width: self.old_window_size.width,
-            height: self.old_window_size.height,
+            width: new_size.width,
+            height: new_size.height,
         };
-        self.ui_renderer.viewport.update(&self.queue, res);
+
+        self.ui_renderer.viewport.update(&self.queue, res); // Update Glypon screen size to NEW size! NOT THE OLD SIZE FOR FUCKS SAKE
     }
 
     pub fn render(
@@ -177,7 +178,6 @@ impl Renderer {
         if settings.render_debug_print {
             println!("[render] start");
         }
-        let total_cpu_render_time_start = Instant::now();
         let aspect = self.config.width as f32 / self.config.height as f32;
         let screen_size: UVec2 = UVec2::new(self.config.width, self.config.height);
         //let t = Instant::now();
@@ -307,12 +307,11 @@ impl Renderer {
             aspect,
             settings,
             &mut world.input,
-            time,
+            &mut world.time,
             ui,
             terrain,
             &mut world.roads,
             &world.cars,
-            astronomy,
             &mut world.buildings,
             &mut world.zoning,
         );
@@ -344,6 +343,7 @@ impl Renderer {
         updater.update_tonemapping_uniforms(
             settings.tonemapping_state,
             settings.color_grading_state,
+            settings,
             variables,
         );
         updater.update_ssao_uniforms(time, settings, camera.prev_view_proj);
@@ -355,12 +355,11 @@ impl Renderer {
         aspect: f32,
         settings: &Settings,
         input: &mut Input,
-        time: &Time,
+        time: &mut Time,
         ui: &mut Ui,
         terrain: &mut Terrain,
         roads: &mut Roads,
         cars: &Cars,
-        astronomy: &Astronomy,
         buildings: &mut Buildings,
         zoning: &mut Zoning,
     ) {
@@ -390,6 +389,7 @@ impl Renderer {
             &ui.variables,
         );
         self.props.place_props(terrain, input, &self.device);
+        time.timer.checkpoint("ui_render_update", false);
         self.ui_renderer.update(
             ui,
             time,
@@ -398,6 +398,7 @@ impl Renderer {
             PhysicalSize::new(self.config.width, self.config.height),
             settings,
         );
+        time.timer.checkpoint("ui_render_update", true);
         self.road_renderer.update(
             terrain,
             roads,
@@ -433,8 +434,8 @@ impl Renderer {
             ui,
             camera.target,
             camera.orbit_radius,
-            astronomy.sun_dir,
-            astronomy.moon_dir,
+            time.astronomy.sun_dir,
+            time.astronomy.moon_dir,
             false,
         );
 
@@ -547,7 +548,7 @@ impl Renderer {
         config: &RenderPassConfig,
         camera: &Camera,
         aspect: f32,
-        time: &Time,
+        time: &mut Time,
         input: &mut Input,
         ui: &mut Ui,
         terrain: &Terrain,
@@ -586,9 +587,11 @@ impl Renderer {
         });
         self.execute_fog_pass(encoder, settings);
 
+        time.timer.checkpoint("ui_render", false);
         gpu_timestamp!(encoder, &mut self.profiler, "UI", {
             self.execute_ui_pass(encoder, ui, time, input, settings);
         });
+        time.timer.checkpoint("ui_render", true);
 
         self.execute_debug_preview_pass(encoder, settings, &terrain.terrain_gen);
 

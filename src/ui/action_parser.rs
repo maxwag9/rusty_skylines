@@ -6,8 +6,8 @@ use crate::ui::input::Input;
 use crate::ui::menu::Menu;
 use crate::ui::parser::Value;
 use crate::ui::ui_editor::{Ui, get_element_kind};
-use crate::ui::ui_touch_manager::UiTouchManager;
-use crate::ui::ui_touch_manager::{ElementRef, MouseButtons, TouchEvent};
+use crate::ui::ui_touch_manager::{ElementEvent, ElementRef, MouseButtons};
+use crate::ui::ui_touch_manager::{GlobalEvent, UiTouchManager};
 use crate::ui::variables::Variables;
 use std::cmp::PartialEq;
 use std::collections::HashMap;
@@ -474,57 +474,64 @@ pub enum ActionEvent {
     DragStart,
     DragEnd,
 }
-fn touch_event_to_action_event(ctx: &mut CommandContext, event: &TouchEvent) -> ActionEvent {
-    match event {
-        TouchEvent::HoverEnter { .. } => ActionEvent::HoverEnter,
+impl ActionEvent {
+    pub fn from_element_event(element_event: &ElementEvent) -> ActionEvent {
+        match element_event {
+            ElementEvent::HoverEnter { .. } => ActionEvent::HoverEnter,
 
-        TouchEvent::Hovering { .. } => ActionEvent::Hovering,
+            ElementEvent::Hovering { .. } => ActionEvent::Hovering,
 
-        TouchEvent::HoverExit { .. } => ActionEvent::HoverExit,
+            ElementEvent::HoverExit { .. } => ActionEvent::HoverExit,
 
-        TouchEvent::Press { .. } => ActionEvent::Press,
+            ElementEvent::Press { .. } => ActionEvent::Press,
 
-        TouchEvent::Down { .. } => ActionEvent::Down,
+            ElementEvent::Down { .. } => ActionEvent::Down,
 
-        TouchEvent::Release { .. } => ActionEvent::Release,
+            ElementEvent::Release { .. } => ActionEvent::Release,
 
-        TouchEvent::Click { .. } => ActionEvent::Click,
+            ElementEvent::Click { .. } => ActionEvent::Click,
 
-        TouchEvent::DoubleClick { .. } => ActionEvent::DoubleClick,
+            ElementEvent::DoubleClick { .. } => ActionEvent::DoubleClick,
 
-        TouchEvent::DragStart { .. } => ActionEvent::DragStart,
+            ElementEvent::DragStart { .. } => ActionEvent::DragStart,
 
-        TouchEvent::DragMove { .. } => ActionEvent::DragMove,
+            ElementEvent::DragMove { .. } => ActionEvent::DragMove,
 
-        TouchEvent::DragEnd { .. } => ActionEvent::DragEnd,
+            ElementEvent::DragEnd { .. } => ActionEvent::DragEnd,
 
-        TouchEvent::ScrollOnElement { delta, .. } => {
-            ctx.ui.variables.set_f64("scroll_delta", *delta);
-            ActionEvent::ScrollOnElement
+            ElementEvent::ScrollOnElement { delta, .. } => ActionEvent::ScrollOnElement,
+            ElementEvent::SelectionRequested { .. } => ActionEvent::Select,
+
+            ElementEvent::Nothing { .. } => ActionEvent::Nothing,
+
+            ElementEvent::Activated { .. } => ActionEvent::Activated,
+
+            ElementEvent::Deactivated { .. } => ActionEvent::Deactivated,
+
+            ElementEvent::TextEditRequested => ActionEvent::Nothing,
+
+            ElementEvent::TextEditEnded => ActionEvent::Nothing,
         }
+    }
+    pub fn from_global_event(global_event: &GlobalEvent) -> ActionEvent {
+        match global_event {
+            GlobalEvent::DeselectAllRequested {} => ActionEvent::DeSelect,
+            GlobalEvent::StartUp { .. } => ActionEvent::StartUp,
 
-        TouchEvent::SelectionRequested { .. } => ActionEvent::Select,
+            GlobalEvent::ScreenResize { .. } => ActionEvent::ScreenResize,
 
-        TouchEvent::DeselectAllRequested {} => ActionEvent::DeSelect,
-
-        TouchEvent::Nothing { .. } => ActionEvent::Nothing,
-
-        TouchEvent::Activated { .. } => ActionEvent::Activated,
-
-        TouchEvent::Deactivated { .. } => ActionEvent::Deactivated,
-
-        TouchEvent::StartUp { .. } => ActionEvent::StartUp,
-
-        TouchEvent::ScreenResize { .. } => ActionEvent::ScreenResize,
-
-        _ => ActionEvent::Nothing,
+            GlobalEvent::BoxSelectStart { .. } => ActionEvent::Nothing,
+            GlobalEvent::BoxSelectMove { .. } => ActionEvent::Nothing,
+            GlobalEvent::BoxSelectEnd { .. } => ActionEvent::Nothing,
+            GlobalEvent::NavigateDirection { .. } => ActionEvent::Nothing,
+        }
     }
 }
 pub fn actions_to_uicommands(
     ctx: &mut CommandContext,
     element: &ElementRef,
     actions: &[String],
-    events: &[TouchEvent],
+    events: &[ActionEvent],
 ) -> Vec<UiCommand> {
     let layer_actions = ctx
         .ui
@@ -533,12 +540,6 @@ pub fn actions_to_uicommands(
         .and_then(|m| m.layers.iter().find(|l| l.name == element.layer))
         .map(|l| l.actions.clone())
         .unwrap_or_default();
-
-    let events: Vec<ActionEvent> = events
-        .iter()
-        .map(|event| touch_event_to_action_event(ctx, event))
-        .collect();
-    let events = events.as_slice();
     let mut cmds = Vec::new();
     let all_actions: Vec<String> = actions
         .iter()

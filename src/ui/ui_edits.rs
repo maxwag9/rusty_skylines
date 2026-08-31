@@ -99,12 +99,12 @@ pub fn set_element_position(
 #[derive(Clone, Debug, PartialEq)]
 pub enum SizeProperty {
     Radius(f32),
-    Text([f32; 2], f32),
-    Width(f32),
-    Height(f32),
+    Pt(f32),
     Rect([f32; 2]),
     PolygonScale(f32),
     AdvancedPrimitiveScale(f32),
+    Border(f32),
+    InsideBorder(f32),
 }
 impl SizeProperty {
     pub fn radius(&self) -> Option<f32> {
@@ -115,14 +115,13 @@ impl SizeProperty {
     }
     pub fn pt(&self) -> Option<f32> {
         match self {
-            SizeProperty::Text(_, pt) => Some(*pt),
+            SizeProperty::Pt(pt) => Some(*pt),
             _ => None,
         }
     }
     pub fn size2(&self) -> Option<[f32; 2]> {
         match self {
             SizeProperty::Rect(size) => Some(*size),
-            SizeProperty::Text(size, _) => Some(*size),
             _ => None,
         }
     }
@@ -136,21 +135,26 @@ impl SizeProperty {
             )
         })
     }
-
+    pub fn border(&self) -> Option<f32> {
+        match self {
+            SizeProperty::Border(val) => Some(*val),
+            _ => None,
+        }
+    }
+    pub fn inside_border(&self) -> Option<f32> {
+        match self {
+            SizeProperty::InsideBorder(val) => Some(*val),
+            _ => None,
+        }
+    }
     pub fn scale_by(&self, scale: f32) -> Self {
         let mut scaled = self.clone();
         match &mut scaled {
             SizeProperty::Radius(r) => {
                 *r *= scale;
             }
-            SizeProperty::Text(_, pt) => {
+            SizeProperty::Pt(pt) => {
                 *pt *= scale;
-            }
-            SizeProperty::Width(w) => {
-                *w *= scale;
-            }
-            SizeProperty::Height(h) => {
-                *h *= scale;
             }
             SizeProperty::Rect(rect) => {
                 rect[0] *= scale;
@@ -161,6 +165,12 @@ impl SizeProperty {
             }
             SizeProperty::AdvancedPrimitiveScale(ps) => {
                 *ps *= scale;
+            }
+            SizeProperty::Border(b) => {
+                *b *= scale;
+            }
+            SizeProperty::InsideBorder(b) => {
+                *b *= scale;
             }
         }
         scaled
@@ -198,21 +208,21 @@ pub fn set_element_size(
                 }
 
                 layer.dirty.mark_circles();
-                return Some(element.size());
+                return Some(element.main_size());
             }
 
             UiElement::Text(t)
                 if element_ref.kind == ElementKind::Text && t.id == element_ref.id =>
             {
                 match size {
-                    SizeProperty::Text(_, pt) => {
+                    SizeProperty::Pt(pt) => {
                         t.pt = pt.max(4.0);
                     }
                     _ => {}
                 }
 
                 layer.dirty.mark_texts();
-                return Some(element.size());
+                return Some(element.main_size());
             }
 
             // DEPENDENTS (always applied immediately)
@@ -225,7 +235,7 @@ pub fn set_element_size(
                     _ => {}
                 }
                 layer.dirty.mark_handles();
-                return Some(element.size());
+                return Some(element.main_size());
             }
 
             UiElement::Outline(o) if matches!(o.parent.as_ref(), Some(p) if p.id == element_ref.id) =>
@@ -237,7 +247,7 @@ pub fn set_element_size(
                     _ => {}
                 }
                 layer.dirty.mark_outlines();
-                return Some(element.size());
+                return Some(element.main_size());
             }
             UiElement::Polygon(p)
                 if element_ref.kind == ElementKind::Polygon && p.id == element_ref.id =>
@@ -251,26 +261,23 @@ pub fn set_element_size(
                 }
 
                 layer.dirty.mark_polygons();
-                return Some(element.size());
+                return Some(element.main_size());
             }
             UiElement::Rect(r)
                 if element_ref.kind == ElementKind::Rect && r.id == element_ref.id =>
             {
                 match size {
-                    SizeProperty::Width(w) => {
-                        r.w = *w;
-                    }
-                    SizeProperty::Height(h) => {
-                        r.h = *h;
-                    }
                     SizeProperty::Rect(rect) => {
                         r.w = rect[0];
                         r.h = rect[1];
                     }
+                    SizeProperty::Border(thickness) => {
+                        r.border_thickness = *thickness;
+                    }
                     _ => {}
                 }
                 layer.dirty.mark_rects();
-                return Some(element.size());
+                return Some(element.main_size());
             }
             _ => {}
         }

@@ -138,7 +138,25 @@ impl Variables {
             }
             Some(v) => match v {
                 Value::F64(v) => *v,
-                _ => unreachable!(),
+                _ => {
+                    self.set_f64(name, default);
+                    default
+                }
+            },
+        }
+    }
+    pub fn get_or_set_bool(&mut self, name: &str, default: bool) -> bool {
+        match self.vars.get(name) {
+            None => {
+                self.set_bool(name, default);
+                default
+            }
+            Some(v) => match v {
+                Value::Bool(v) => *v,
+                _ => {
+                    self.set_bool(name, default);
+                    default
+                }
             },
         }
     }

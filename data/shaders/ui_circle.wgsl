@@ -11,7 +11,7 @@ struct ScreenUniform {
 var<uniform> screen: ScreenUniform;
 
 struct CircleParams {
-    // center.x, center.y, radius, outer_border_thickness_percentage
+    // center.x, center.y, radius, outer_border_thickness
     center_radius_border: vec4<f32>,
     fill_color: vec4<f32>,
     inside_border_color: vec4<f32>,
@@ -22,7 +22,7 @@ struct CircleParams {
 
     fade: f32,
     style: u32,
-    inside_border_thickness_percentage: f32,
+    inside_border_thickness: f32,
     depth: f32
 };
 
@@ -95,7 +95,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // --- CHANGES HERE ---
     // Convert normalized percentage (0.0 - 1.0) to absolute pixels
     let border_thick = crb.w * radius;
-    let inside_thick = p.inside_border_thickness_percentage * radius;
+    let inside_thick = p.inside_border_thickness * radius;
 
     let dist = distance(in.local_pos, center);
 

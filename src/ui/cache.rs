@@ -1,13 +1,13 @@
-use bytemuck::Zeroable;
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::ui::actions::style_to_u32;
 use crate::ui::helper::triangulate_polygon;
 use crate::ui::ui_editor::Ui;
 use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::ui_touch_manager::ElementRef;
+use crate::ui::vertex::*;
+use bytemuck::Zeroable;
 use glyphon::{Attrs, FontSystem, Metrics, Shaping};
 use unicode_segmentation::UnicodeSegmentation;
-use crate::ui::vertex::*;
 
 pub fn rebuild_text_cache(
     font_system: &mut FontSystem,
@@ -85,7 +85,7 @@ pub fn rebuild_circle_cache(
             let cache = c.cache.get_or_insert_with(CircleParams::default);
 
             *cache = CircleParams {
-                center_radius_border: [c.x, c.y, c.radius, c.border_thickness_percentage],
+                center_radius_border: [c.x, c.y, c.radius, c.border_thickness],
                 fill_color: c.fill_color,
                 inside_border_color: c.inside_border_color,
                 border_color: c.border_color,
@@ -104,7 +104,7 @@ pub fn rebuild_circle_cache(
                 ],
                 fade: c.fade,
                 style: style_to_u32(&c.style),
-                inside_border_thickness_percentage: c.inside_border_thickness_percentage,
+                inside_border_thickness: c.inside_border_thickness,
                 depth: 0.0,
             };
         }
@@ -193,7 +193,7 @@ pub fn rebuild_outline_cache(
                     rt.touched_time,
                     if rt.is_down { 1.0 } else { 0.0 },
                     hash,
-                ]
+                ],
             }
         }
     }
@@ -283,7 +283,7 @@ pub fn rebuild_polygon_cache(
                     color: v.color,
                     misc,
                     depth: 0.0,
-                    _pad0: Default::default()
+                    _pad0: Default::default(),
                 });
             }
 
@@ -306,8 +306,6 @@ pub fn rebuild_rect_cache(
 
         if let UiElement::Rect(rect) = element {
             let (rt, hash) = runtime_info(runtime, &rect.id);
-            let min_dim = rect.w.min(rect.h);
-            let border = rect.border_thickness_percentage * min_dim;
             let cache = rect.cache.get_or_insert_with(RectParams::zeroed);
 
             *cache = RectParams {
@@ -316,7 +314,7 @@ pub fn rebuild_rect_cache(
                 color: rect.color,
                 border_color: rect.border_color,
                 roundness: rect.roundness,
-                border_thickness: border,
+                border_thickness: rect.border_thickness,
                 rotation: -rect.rotation.to_radians(),
                 fade: rect.fade,
                 blur: rect.blur,

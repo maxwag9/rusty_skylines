@@ -1,4 +1,5 @@
 use crate::data::BendMode;
+use crate::renderer::ui_text_rendering::Anchor;
 use crate::ui::ui_editor::GlobalActions;
 use crate::ui::vertex::*;
 use std::error::Error;
@@ -398,7 +399,7 @@ fn synth_text(rng: &mut SimpleRng) -> UiButtonTextYaml {
             editable: rng.next_bool(),
         },
         input_box: rng.next_bool(),
-        anchor: None,
+        anchor: Anchor::default(),
     }
 }
 
@@ -410,8 +411,8 @@ fn synth_circle(rng: &mut SimpleRng) -> UiButtonCircleYaml {
         x: rng.next_i32_range(0, 1920) as i16,
         y: rng.next_i32_range(0, 1080) as i16,
         radius: rng.next_f32_range(0.0, 0.3),
-        inside_border_thickness_percentage: rng.next_f32_range(0.0, 0.3),
-        border_thickness_percentage: rng.next_f32_range(0.0, 0.3),
+        inside_border_thickness: rng.next_f32_range(0.0, 0.3),
+        border_thickness: rng.next_f32_range(0.0, 0.3),
         fade: rng.next_f32_range(0.0, 1.0),
         fill_color: [
             rng.next_f32_range(0.0, 2.0),

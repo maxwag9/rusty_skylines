@@ -4,15 +4,15 @@ elements:
     id: Main Button Background
     actions:
       # Toggle the open/closed state variable
-      - on:release button:left, toggle_var(str:{ap}_open)
+      #- on:activated set(str:{ap}_open, false)
+      - on:release button:left, toggle(str:{ap}_open)
       #- on:sel button:a, print(str:{ap}_open, false)
       #- on:scroll button:a, print(str:{ap}, scroll_delta)
       - on:scroll button:a, inc_var(str:{ap}, scroll_delta)
       - on:sel button:a, ifvareq({ap}_open, bool:false, forin({ap}.options, del_ap(self.menu, self.layer, expr:"{ap}_Option_"+{idx})))
       # If opening: Iterate over the options array and clone the template AP
       #- on:release button:a, print(str:{ap}.{idx})
-      - on:release button:left, ifvareq({ap}_open, bool:true, forin({ap}.options, add_ap(self.menu, expr:"{ap}_Option_"+{idx}, "dropdown_option", expr:"{ap}.options."+{idx}, [self.center.x, expr:{self.center.y} + {self.size.y} * ({idx} + 1)], 1.0, true);))
-      - on:release button:left, set(str:dd_{ap}_layer, self.layer)
+      - on:release button:left, ifvareq(var:{ap}_open, bool:true, forin({ap}.options, add_ap(self.menu, expr:"{ap}_Option_"+{idx}, "dropdown_option", [expr:"{ap}.options."+{idx}, str:str:{ap}, self.layer], [self.center.x, expr:{self.center.y} + {self.size.y} * ({idx} + 1)], 1.0, true);))
       #- on:release button:left, print("dd_{ap}_layer")
       # If closing: Iterate over the options array and delete the cloned APs
       #- on:release button:left, print("{ap}_open")
@@ -40,7 +40,7 @@ elements:
       - 1.0
       - 1.0
     roundness: 0.1
-    border_thickness_percentage: 0.05
+    border_thickness: 4
 
   - !Text
     id: Main Button Text

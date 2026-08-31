@@ -1100,7 +1100,9 @@ impl UIEditCommand for DeselectAllCommand {
         _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
-        touch_manager.selection.deselect_all(menus);
+        touch_manager
+            .selection
+            .deselect_all(menus, &mut touch_manager.editor);
     }
 
     fn description(&self) -> String {

@@ -10,7 +10,7 @@ elements:
       #- on:release button:left, print(Name in option:, strexpr:{split("{ap}", ".").0}_open))
       #- on:release button:left, print(Before:, {split("{ap}", ".").0}_open)
 
-      - on:release button:left, set(expr:split("{ap}", ".").0 + "_open", bool:false)
+      - on:release button:left, set(expr:"{ap.1}" + "_open", bool:false)
       #- on:release button:left, print({split("{ap}", ".").0}.options)
       #- on:release button:left, print({split("{ap}", ".").0}, {ap})
       #- on:release button:left, print(strexpr:dd_{split("{ap}", ".").0}_layer)
@@ -18,8 +18,8 @@ elements:
       #- on:release button:left, print({split("{ap}", ".").0}_open)
       #- on:release button:left, print(split("{ap}", ".").0)
       #- on:release button:left, print({ap})
-      - on:release button:left, set(expr:split("{ap}", ".").0, {ap})
-      - on:release button:left, ifvareq(exprvar:split("{ap}", ".").0 + "_open", bool:false, forin(exprvar:split("{ap}", ".").0 + ".options", del_ap(self.menu, expr:"dd_" + split("{ap}", ".").0 +"_layer", expr:split("{ap}", ".").0 + "_Option_{idx}")))
+      - on:release button:left, set(str:{ap.1}, {ap.0});
+      - on:release button:left, ifvareq(exprvar:"{ap.1}" + "_open", bool:false, print("trying to delete them"); forin(exprvar:{ap.1}.options, del_ap(self.menu, {ap.2}, expr:"{ap.1}" + "_Option_" + {idx})))
       #- on:release button:left, print(After:, {split("{ap}", ".").0}_open)Haha you got the rabbit hide and I got the rabbit meat
       - show_interaction(None, false)
     x: 0
@@ -37,7 +37,7 @@ elements:
       - 1.0
       - 0.5
     roundness: 0.1
-    border_thickness_percentage: 0.05
+    border_thickness: 4
 
   - !Text
     id: Option Text

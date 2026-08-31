@@ -1,7 +1,6 @@
-use crate::renderer::ui_text_rendering::{Anchor, anchor_to};
-use crate::ui::input::{Input, Mouse};
+use crate::renderer::ui_text_rendering::anchor_to;
+use crate::ui::input::Input;
 use crate::ui::menu::Menu;
-use crate::ui::selections::SelectionManager;
 use crate::ui::ui_edit_manager::{TextEditCommand, UiEditManager};
 use crate::ui::ui_touch_manager::{EditorTouchExtension, ElementRef};
 use crate::ui::vertex::{ElementKind, LayerDirty, UiButtonText, UiElement};
@@ -10,93 +9,77 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 use winit::keyboard::NamedKey;
 
-#[derive(Clone, Copy)]
-pub struct MouseSnapshot {
-    pub mx: f32,
-    pub my: f32,
-    pub pressed: bool,
-    pub just_pressed: bool,
-    pub scroll: f32,
-}
-
-impl MouseSnapshot {
-    pub fn from_mouse(mouse: &Mouse) -> Self {
-        Self {
-            mx: mouse.pos.x,
-            my: mouse.pos.y,
-            pressed: mouse.buttons.left.pressed,
-            just_pressed: mouse.buttons.left.just_pressed,
-            scroll: mouse.scroll_delta.y,
-        }
-    }
-}
-
 // TEXT EDITING
 
 /// Handle text editing with undo support
 pub fn handle_text_editing(
-    selection: &mut SelectionManager,
+    editing_text: &Option<ElementRef>,
     editor: &mut EditorTouchExtension,
     menus: &mut HashMap<String, Menu>,
     edit_manager: &mut UiEditManager,
     input: &mut Input,
-    mouse_snapshot: MouseSnapshot
 ) {
-    for sel in &selection.selected {
-        let sel_menu = sel.menu.clone();
-        let sel_layer = sel.layer.clone();
-        let sel_element_id = sel.id.clone();
+    let Some(sel) = editing_text else {
+        return;
+    };
 
-        let Some((menu_name, menu)) = menus.iter_mut().find(|(n, m)| **n == sel_menu && m.active)
-        else {
-            return;
-        };
+    let sel_menu = sel.menu.clone();
+    let sel_layer = sel.layer.clone();
+    let sel_element_id = sel.id.clone();
 
-        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == sel_layer) else {
-            return;
-        };
+    let Some((menu_name, menu)) = menus.iter_mut().find(|(n, m)| **n == sel_menu && m.active)
+    else {
+        return;
+    };
 
-        let Some(text) = layer
-            .elements
-            .iter_mut()
-            .filter_map(UiElement::as_text_mut)
-            .find(|t| t.id == sel_element_id)
-        else {
-            return;
-        };
+    let Some(layer) = menu
+        .layers
+        .iter_mut()
+        .find(|l| l.name == sel_layer && l.active)
+    else {
+        return;
+    };
 
-        let before_text = text.text.clone();
-        let before_template = text.template.clone();
-        let before_caret = text.caret;
-        process_text_editing_input(editor, input, mouse_snapshot, text, &mut layer.dirty);
+    let Some(text) = layer
+        .elements
+        .iter_mut()
+        .filter_map(UiElement::as_text_mut)
+        .find(|t| t.id == sel_element_id && t.misc.active)
+    else {
+        return;
+    };
 
-        if text.text != before_text || text.template != before_template {
-            edit_manager.push_command(TextEditCommand {
-                affected_element: ElementRef {
-                    menu: menu_name.clone(),
-                    layer: layer.name.clone(),
-                    id: sel_element_id.clone(),
-                    kind: ElementKind::Text,
-                },
-                before_text,
-                after_text: text.text.clone(),
-                before_template,
-                after_template: text.template.clone(),
-                before_caret,
-                after_caret: text.caret,
-            });
-        }
+    let before_text = text.text.clone();
+    let before_template = text.template.clone();
+    let before_caret = text.caret;
+
+    process_text_editing_input(editor, input, text, &mut layer.dirty);
+
+    if text.text != before_text || text.template != before_template {
+        edit_manager.push_command(TextEditCommand {
+            affected_element: ElementRef {
+                menu: menu_name.clone(),
+                layer: layer.name.clone(),
+                id: sel_element_id.clone(),
+                kind: ElementKind::Text,
+            },
+            before_text,
+            after_text: text.text.clone(),
+            before_template,
+            after_template: text.template.clone(),
+            before_caret,
+            after_caret: text.caret,
+        });
     }
 }
 
 pub fn process_text_editing_input(
     editor: &mut EditorTouchExtension,
     input: &mut Input,
-    mouse_snapshot: MouseSnapshot,
     text: &mut UiButtonText,
-    dirty: &mut LayerDirty
+    dirty: &mut LayerDirty,
 ) {
-    if handle_mouse_caret_selection(editor, mouse_snapshot, text) {
+    if handle_mouse_caret_selection(editor, input, text) {
         return;
     }
 
@@ -117,23 +100,18 @@ pub fn process_text_editing_input(
 
 fn handle_mouse_caret_selection(
     editor: &mut EditorTouchExtension,
-    mouse_snapshot: MouseSnapshot,
+    input: &Input,
     t: &mut UiButtonText,
 ) -> bool {
-    let mx = mouse_snapshot.mx;
-    let my = mouse_snapshot.my;
-    let pos = anchor_to(
-        t.anchor.unwrap_or(Anchor::Center),
-        [t.x, t.y],
-        t.width,
-        t.height,
-    );
+    let mx = input.mouse.pos.x;
+    let my = input.mouse.pos.y;
+    let pos = anchor_to(t.anchor, [t.x, t.y], t.width, t.height);
     let x0 = pos[0];
     let y0 = pos[1];
     let x1 = x0 + t.width;
     let y1 = y0 + t.height;
 
-    if mouse_snapshot.just_pressed && mx >= x0 && mx <= x1 && my >= y0 && my <= y1 {
+    if input.mouse.buttons.just_pressed() && mx >= x0 && mx <= x1 && my >= y0 && my <= y1 {
         let new_caret = pick_caret(t, mx, my);
         t.caret = new_caret;
         t.sel_start = new_caret;
@@ -143,7 +121,7 @@ fn handle_mouse_caret_selection(
         return true;
     }
 
-    if editor.dragging_text_selection && mouse_snapshot.pressed {
+    if editor.dragging_text_selection && input.mouse.buttons.pressed() {
         let new_pos = pick_caret(t, mx, my);
         t.sel_end = new_pos;
         t.has_selection = t.sel_end != t.sel_start;
@@ -151,7 +129,7 @@ fn handle_mouse_caret_selection(
         return true;
     }
 
-    if editor.dragging_text_selection && !mouse_snapshot.pressed {
+    if editor.dragging_text_selection && !input.mouse.buttons.pressed() {
         editor.dragging_text_selection = false;
     }
 
@@ -185,7 +163,7 @@ fn handle_clipboard_commands(
 
     let clipboard = &mut input.clipboard;
 
-    let is_template_mode = !text.input_box;
+    let is_template_mode = true; // !text.input_box;
 
     let (l, r) = text.selection_range();
     let active = if is_template_mode {
@@ -275,16 +253,12 @@ fn handle_clipboard_commands(
     }
 }
 
-fn handle_backspace(
-    input: &mut Input,
-    text: &mut UiButtonText,
-    dirty: &mut LayerDirty,
-) -> bool {
+fn handle_backspace(input: &mut Input, text: &mut UiButtonText, dirty: &mut LayerDirty) -> bool {
     if !input.action_repeat("Backspace") {
         return false;
     }
 
-    let is_template_mode = !text.input_box;
+    let is_template_mode = true; // !text.input_box;
 
     if text.has_selection {
         let (l, r) = text.selection_range();
@@ -347,7 +321,7 @@ fn handle_character_input(
     //     return false;
     // }
 
-    let is_template_mode = !text.input_box; // or override mode!!
+    let is_template_mode = true; // !text.input_box; // or override mode!! That'S why I thought green was weird in "//!"
 
     if text.has_selection {
         delete_selection(text, is_template_mode);
@@ -377,11 +351,7 @@ fn delete_selection(text: &mut UiButtonText, is_template_mode: bool) {
     text.clear_selection();
 }
 
-fn insert_characters(
-    text: &mut UiButtonText,
-    input: &mut Input,
-    is_template_mode: bool,
-) {
+fn insert_characters(text: &mut UiButtonText, input: &mut Input, is_template_mode: bool) {
     if input.named_just_pressed(NamedKey::Enter) {
         if is_template_mode {
             let bi = caret_to_byte(&text.template, text.caret);
@@ -411,10 +381,7 @@ fn insert_characters(
     }
 
     for s in &input.text_input {
-        let filtered: String = s
-            .chars()
-            .filter(|c| !c.is_control())
-            .collect();
+        let filtered: String = s.chars().filter(|c| !c.is_control()).collect();
 
         if filtered.is_empty() {
             continue;
@@ -472,7 +439,7 @@ pub fn text_top_left(text: &UiButtonText) -> (f32, f32, f32, f32) {
         .map(|c| (c.width.max(1.0), c.height.max(1.0)))
         .unwrap_or((text.width.max(1.0), text.height.max(1.0)));
 
-    let top_left = anchor_to(text.anchor.unwrap_or_default(), [text.x, text.y], width, height);
+    let top_left = anchor_to(text.anchor, [text.x, text.y], width, height);
     (top_left[0], top_left[1], width, height)
 }
 
@@ -565,8 +532,7 @@ pub fn get_caret_position(t: &UiButtonText) -> (f32, f32) {
 
                     if caret_in_line < cluster_end {
                         let offset = caret_in_line - cluster_start;
-                        caret_x = glyph.x
-                            + glyph.w * (offset as f32 / cluster_len.max(1) as f32);
+                        caret_x = glyph.x + glyph.w * (offset as f32 / cluster_len.max(1) as f32);
                         break;
                     }
 
@@ -583,11 +549,7 @@ pub fn get_caret_position(t: &UiButtonText) -> (f32, f32) {
     last_pos
 }
 
-fn find_caret_at_x_on_line(
-    text: &UiButtonText,
-    target_x: f32,
-    line_y: f32,
-) -> Option<usize> {
+fn find_caret_at_x_on_line(text: &UiButtonText, target_x: f32, line_y: f32) -> Option<usize> {
     let (text_left, text_top, _, _) = text_top_left(text);
     let epsilon = 0.5f32;
 
@@ -620,9 +582,7 @@ fn find_caret_at_x_on_line(
             let cluster_len = graphemes.len();
 
             for i in 0..=cluster_len {
-                let x = text_left
-                    + glyph.x
-                    + glyph.w * (i as f32 / cluster_len as f32);
+                let x = text_left + glyph.x + glyph.w * (i as f32 / cluster_len as f32);
 
                 let dist = (target_x - x).abs();
 

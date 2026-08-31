@@ -22,7 +22,6 @@ layers:
           - 1.0
         texture: null
         roundness: 0.0
-        border_thickness_percentage: 0.00
         fade: 0.0
         blur: 5.5
         glow_color:
@@ -36,6 +35,36 @@ layers:
           touchable: false
           editable: true
       - !Rect
+        id: Stylish_Background
+        x: 960
+        y: 600
+        w: 1860
+        h: 1000
+        rotation: 6.0
+        color:
+          - 0.02
+          - 0.02
+          - 0.02
+          - 0.45
+        border_color:
+          - 0.0
+          - 0.3
+          - 0.0
+          - 1.0
+        texture: null
+        roundness: 0.02
+        border_thickness: 2
+        fade: 0.0
+        blur: 5.5
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          touchable: false
+      - !Rect
         id: Easy_Background
         x: 510
         y: 600
@@ -46,7 +75,7 @@ layers:
           - 0.02
           - 0.02
           - 0.02
-          - 0.98
+          - 0.75
         border_color:
           - 0.0
           - 1.0
@@ -54,7 +83,7 @@ layers:
           - 1.0
         texture: null
         roundness: 0.02
-        border_thickness_percentage: 0.002
+        border_thickness: 2
         fade: 0.0
         blur: 5.5
         glow_color:
@@ -78,7 +107,7 @@ layers:
           - 0.02
           - 0.02
           - 0.02
-          - 0.98
+          - 0.75
         border_color:
           - 1.0
           - 0.0
@@ -86,7 +115,7 @@ layers:
           - 1.0
         texture: null
         roundness: 0.02
-        border_thickness_percentage: 0.002
+        border_thickness: 2
         fade: 0.0
         blur: 5.5
         glow_color:
@@ -155,11 +184,12 @@ layers:
         h: 10
         actions:
           - as:["easy_select_text"] set(str:self.size, expr:{as.size}*1.2); set(str:self.center, as.center)
+          - on:release, set(str:new_difficulty, "Easy"); close_all_layers("CreateSave"); open_layer(self.menu, "CreateScreen")
         rotation: 0.0
         color:
-          - 0.0
-          - 1.0
-          - 0.0
+          - 0.12
+          - 0.85
+          - 0.22
           - 0.98
         border_color:
           - 0.22
@@ -168,7 +198,7 @@ layers:
           - 1.0
         texture: null
         roundness: 0.02
-        border_thickness_percentage: 0.04
+        border_thickness: 4
         fade: 0.0
         blur: 5.5
         glow_color:
@@ -177,10 +207,6 @@ layers:
           - 0.0
           - 0.0
         glow_misc: { }
-        misc:
-          active: true
-          touchable: false
-          editable: true
       - !Rect
         id: Hard select background
         x: 510
@@ -189,11 +215,12 @@ layers:
         h: 10
         actions:
           - as:["hard_select_text"] set(str:self.size, expr:{as.size}*1.2); set(str:self.center, as.center)
+          - on:release, set(str:new_difficulty, "Hard"); close_all_layers("CreateSave"); open_layer(self.menu, "CreateScreen")
         rotation: 0.0
         color:
-          - 0.0
-          - 1.0
-          - 0.0
+          - 0.06
+          - 0.97
+          - 0.08
           - 0.98
         border_color:
           - 0.22
@@ -202,7 +229,7 @@ layers:
           - 1.0
         texture: null
         roundness: 0.02
-        border_thickness_percentage: 0.04
+        border_thickness: 4
         fade: 0.0
         blur: 5.5
         glow_color:
@@ -211,10 +238,6 @@ layers:
           - 0.0
           - 0.0
         glow_misc: { }
-        misc:
-          active: true
-          touchable: false
-          editable: true
       - !Text
         id: easy_select_text
         actions: [ ]
@@ -227,6 +250,8 @@ layers:
           - 0.0
           - 1.0
         text: ">Enter chill<"
+        misc:
+          touchable: false
       - !Text
         id: hard_select_text
         actions: [ ]
@@ -239,4 +264,115 @@ layers:
           - 0.0
           - 1.0
         text: ">Enter hell<"
+        misc:
+          touchable: false
+    editing_tool: false
+
+
+
+
+
+
+  - name: CreateScreen
+    order: 2
+    elements:
+      - !Rect
+        id: Menu Background
+        x: 960
+        y: 540
+        w: 1920
+        h: 1080
+        rotation: 0.0
+        color:
+          - 0.01
+          - 0.01
+          - 0.01
+          - 0.01
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness: 0.00
+        fade: 0.0
+        blur: 5.5
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: false
+          touchable: false
+          editable: true
+
+      - !Rect
+        id: Create_Save_Background
+        x: 960
+        y: 600
+        w: 1760
+        h: 900
+        rotation: 0.0
+        color:
+          - 0.02
+          - 0.02
+          - 0.02
+          - 0.75
+        border_color:
+          - 0.0
+          - 1.0
+          - 0.0
+          - 1.0
+        texture: null
+        roundness: 0.02
+        border_thickness: 2
+        fade: 0.0
+        blur: 5.5
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          touchable: false
+      - !Advanced
+        name: world_name_textbox
+        ap_name: textbox
+        ap_vars:
+          - "str:World Name"
+          - "50"
+          - "str:set(str:new_save_name, as.text);"
+        x: 960
+        y: 440
+        scale: 1.0
+        editing_tool: false
+      - !Advanced
+        name: create_the_save_finally_button
+        ap_name: button
+        ap_vars:
+          - "str:Create Save: '{new_save_name}'"
+          - "40"
+          - "str:on:r call(rust:create_save, [new_save_name, new_difficulty]); set(str:show_world, true); set(str:editor_mode, false); set(str:override_mode, false); load_save(new_save_name, false); call(open_play_menus);"
+        x: 1560
+        y: 1010
+        scale: 1.0
+      - !Advanced
+        name: difficulty_slider
+        ap_name: slider
+        ap_var:
+          - "str:new_difficulty"
+          - "str:Difficulty"
+          - "0"
+          - "1"
+          - "1"
+          - "[str:Easy, str:Hard]"
+          - "[str:Easy, str:Hard]"
+          - "true"
+        x: 1075
+        y: 600
+        scale: 1.5
     editing_tool: false

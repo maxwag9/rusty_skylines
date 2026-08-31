@@ -1,5 +1,5 @@
 use crate::ui::menu::Menu;
-use crate::ui::ui_touch_manager::ElementRef;
+use crate::ui::ui_touch_manager::{EditorTouchExtension, ElementRef};
 use crate::ui::vertex::*;
 use std::collections::HashMap;
 
@@ -68,7 +68,11 @@ impl SelectionManager {
     }
 
     /// Clear all selections
-    pub fn deselect_all(&mut self, menus: &mut HashMap<String, Menu>) {
+    pub fn deselect_all(
+        &mut self,
+        menus: &mut HashMap<String, Menu>,
+        editor: &mut EditorTouchExtension,
+    ) {
         for (_, menu) in menus.iter_mut() {
             for layer in menu.layers.iter_mut() {
                 for text in layer.elements.iter_mut().filter_map(UiElement::as_text_mut) {
@@ -81,11 +85,17 @@ impl SelectionManager {
         self.selected.clear();
         self.active_tool = None;
         self.selection_changed = true;
+        //editor.editing_text = None;
     }
 
     /// Set selection from box select results
-    pub fn set_from_box(&mut self, elements: Vec<ElementRef>, menus: &mut HashMap<String, Menu>) {
-        self.deselect_all(menus);
+    pub fn set_from_box(
+        &mut self,
+        elements: Vec<ElementRef>,
+        menus: &mut HashMap<String, Menu>,
+        editor: &mut EditorTouchExtension,
+    ) {
+        self.deselect_all(menus, editor);
         self.just_selected = !elements.is_empty();
         self.selected = elements;
         self.active_tool = None;

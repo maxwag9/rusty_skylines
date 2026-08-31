@@ -22,14 +22,14 @@ impl WorldState {
         world
     }
 
-    pub fn update(&mut self, ui_loader: &mut Ui, time: &mut Time, settings: &Settings, proj: Mat4) {
+    pub fn update(&mut self, ui: &mut Ui, time: &mut Time, settings: &Settings, proj: Mat4) {
         let time_scales =
             TimeScales::from_game_time(time.total_game_time, time.day_length, settings.always_day);
         let observer = ObserverParams::from_jd(time_scales.jd);
         time.astronomy = compute_astronomy(&time_scales, proj);
 
         update_ui_variables(
-            ui_loader,
+            ui,
             &time_scales,
             &time.astronomy,
             observer.obliquity,

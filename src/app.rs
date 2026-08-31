@@ -3,7 +3,7 @@ use crate::data::FullScreenMode;
 use crate::data::SettingKey;
 use crate::helpers::paths::data_dir;
 use crate::renderer::shadows::create_csm_shadow_texture;
-use crate::resources::Resources;
+use crate::resources::{FrameTimeCheckpointType, Resources};
 use crate::simulation::update_picked_pos;
 use crate::systems::input::run_inputs;
 use crate::systems::small_systems::run_commands;
@@ -393,22 +393,53 @@ impl ApplicationHandler for App {
                     event_loop.exit();
                     return;
                 };
+                resources
+                    .world
+                    .time
+                    .frame_checkpoint(FrameTimeCheckpointType::FrameStart);
                 if resources.settings.render_debug_print {
                     println!("[event] redraw requested");
                 }
                 let frame_start = Instant::now();
+
                 update_stuff(resources);
 
+                resources
+                    .world
+                    .time
+                    .timer
+                    .checkpoint("cpu_frametime_movement", false);
                 run_inputs(resources);
+                resources
+                    .world
+                    .time
+                    .timer
+                    .checkpoint("cpu_frametime_movement", true);
 
                 resources.settings.new_settings_changes();
 
+                resources
+                    .world
+                    .time
+                    .timer
+                    .checkpoint("cpu_frametime_ui", false);
                 run_ui(resources, event_loop);
+                resources
+                    .world
+                    .time
+                    .timer
+                    .checkpoint("cpu_frametime_ui", true);
 
                 resources.settings.new_settings_changes();
                 apply_settings(resources);
 
                 run_commands(resources);
+
+                resources
+                    .world
+                    .time
+                    .timer
+                    .checkpoint("cpu_frametime_tick", false);
                 run_ticked(resources);
 
                 resources.settings.new_settings_changes();
@@ -436,6 +467,11 @@ impl ApplicationHandler for App {
                         steps += 1;
                     }
                 }
+                resources
+                    .world
+                    .time
+                    .timer
+                    .checkpoint("cpu_frametime_tick", true);
 
                 // Update achieved speed (windowed measurement)
                 resources.world.time.update_achieved_speed(steps);
@@ -456,13 +492,44 @@ impl ApplicationHandler for App {
                     );
                 }
 
+                resources
+                    .world
+                    .time
+                    .timer
+                    .checkpoint("cpu_frametime_sound", false);
                 run_sounds(resources);
+                resources
+                    .world
+                    .time
+                    .timer
+                    .checkpoint("cpu_frametime_sound", true);
+
+                resources
+                    .world
+                    .time
+                    .timer
+                    .checkpoint("cpu_frametime_cars", false);
                 run_interpolation(resources);
+                resources
+                    .world
+                    .time
+                    .timer
+                    .checkpoint("cpu_frametime_cars", true);
 
                 if resources.settings.render_debug_print {
                     print!("  [event] redraw: before run_render");
                 }
+                resources
+                    .world
+                    .time
+                    .timer
+                    .checkpoint("cpu_frametime_render", false);
                 run_render(resources); // use commands output
+                resources
+                    .world
+                    .time
+                    .timer
+                    .checkpoint("cpu_frametime_render", true);
                 if resources.settings.render_debug_print {
                     print!("  [event] redraw: after run_render");
                 }
@@ -470,11 +537,7 @@ impl ApplicationHandler for App {
                 let elapsed = frame_start.elapsed();
                 let target =
                     Duration::from_secs_f32(resources.world.time.target_frametime.max(0.0));
-                let cpu_frametime = resources.world.time.end_frame();
-                resources
-                    .ui
-                    .variables
-                    .set_f64("cpu_frametime", cpu_frametime.as_secs_f64());
+                resources.world.time.end_frame();
 
                 if let Some(mut pending) = resources.pending_fullscreen_change.take() {
                     if std::env::var_os("WAYLAND_DISPLAY").is_some() {
@@ -492,6 +555,38 @@ impl ApplicationHandler for App {
                     resources.reconfigure_surface();
                     resources.pending_present_mode_change = false;
                 }
+                resources
+                    .world
+                    .time
+                    .frame_checkpoint(FrameTimeCheckpointType::FrameEnd);
+                resources.ui.variables.set_f64(
+                    "cpu_frametime",
+                    resources.world.time.cpu_frame_duration.as_secs_f64() * 1000.0,
+                );
+                if resources.world.time.frame_count % 30 == 0 {
+                    let totals = resources.world.time.timer.totals();
+                    for (name, total) in totals.iter() {
+                        resources
+                            .ui
+                            .variables
+                            .set_f64(name, total.as_secs_f64() * 1000.0);
+                    }
+                    let frametimes: Vec<Value> = totals
+                        .into_iter()
+                        .map(|(name, duration)| {
+                            let ms = duration.as_secs_f64() * 1000.0;
+                            let rounded = (ms * 10.0).round() / 10.0;
+
+                            Value::Array(vec![Value::String(name), Value::F64(rounded)])
+                        })
+                        .collect();
+                    resources
+                        .ui
+                        .variables
+                        .set_array("cpu_frametimes", frametimes);
+                };
+                resources.world.time.timer.clear();
+                //println!("CPU FRAMETIME: {}", resources.world.time.cpu_frame_duration.as_secs_f64() * 1000.0);
                 if target > Duration::ZERO && elapsed < target {
                     thread::sleep(target - elapsed);
                 }
@@ -564,6 +659,7 @@ fn update_stuff(resources: &mut Resources) {
         settings,
         &render_core.config,
         input,
+        ui,
     );
     terrain.make_pick_uniforms(
         &render_core.queue,
@@ -571,10 +667,10 @@ fn update_stuff(resources: &mut Resources) {
         &world_state.camera,
     );
     let can_time_control = !settings.editor_mode && !settings.drive_car && settings.show_world;
-
+    ui.variables.set_bool("sim_running", simulation.running());
     if can_time_control && input.action_pressed_once("Toggle Stop Time") {
         simulation.toggle();
-        ui.variables.set_bool("sim_running", simulation.running());
+
         if !simulation.running() {
             time.clear_sim_accumulator();
         }
@@ -603,8 +699,10 @@ fn update_stuff(resources: &mut Resources) {
         ui.variables.set_f64("fps", time.render_fps);
         ui.variables.set_f64("render_dt", time.render_dt);
         ui.variables.set_f64("sim_dt", time.target_sim_dt);
+
         ui.variables
             .set_f64("total_game_time", time.total_game_time);
+        //println!("{}, {:?}", time.total_game_time, ui.variables.get("total_game_time"));
         ui.variables.set_i64("hour", time.hour());
         ui.variables.set_i64("minute", time.minute());
         ui.variables

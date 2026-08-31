@@ -738,7 +738,6 @@ define_settings! {
     OverrideMode => override_mode: bool = false; Bool,
     ShowGui => show_gui: bool = true; Bool,
     BackgroundColor => background_color: [f32; 4] = [0.0, 0.0, 0.0, 1.0]; Val,
-    TotalGameTime => total_game_time: f64 = 0.0; Val,
     WorldGenerationBenchmarkMode => world_generation_benchmark_mode: bool = false; Bool,
     BendMode => bend_mode: BendMode = BendMode::Strict; Cycle,
     ShowWorld => show_world: bool = true; Bool,
@@ -769,7 +768,17 @@ define_settings! {
     RenderParkingGizmo => render_parking_gizmo: bool = false; Bool,
     RenderLotInfo => render_lot_info: bool = false; Bool,
     TonemapUi => tonemap_ui: bool = true; Bool,
-    PrintParseErrors => print_parse_errors: bool = false; Bool
+    PrintParseErrors => print_parse_errors: bool = false; Bool,
+
+    Exposure => exposure: f64 = 0.0; Val,
+    Brightness => brightness: f64 = 0.0; Val,
+    Contrast => contrast: f64 = 1.0; Val,
+    Saturation => saturation: f64 = 1.0; Val,
+    VignetteStrength => vignette_strength: f64 = 0.0; Val,
+    VignetteRadius => vignette_radius: f64 = 0.60; Val,
+    VignetteSoftness => vignette_softness: f64 = 0.70; Val,
+    ForestClusterStrength => forest_cluster_strength: f32 = 0.8; Val,
+    DenseForests => dense_forests: bool = false; Bool,
 }
 
 impl Settings {

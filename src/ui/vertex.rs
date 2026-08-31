@@ -6,7 +6,7 @@ use crate::ui::helper::ensure_ccw;
 use crate::ui::parser::Value;
 use crate::ui::ui_edit_manager::ColorComponent;
 use crate::ui::ui_edits::SizeProperty;
-use crate::ui::ui_touch_manager::ElementRef;
+use crate::ui::ui_touch_manager::{ElementRef, Touchable};
 use crate::ui::variables::Variables;
 use glyphon::Metrics;
 use serde::de::Visitor;
@@ -279,6 +279,7 @@ pub struct AdvancedPrimitiveYaml {
 
     #[serde(default)]
     pub scale: f32,
+    #[serde(default, skip_serializing_if = "is_default")]
     pub misc: MiscButtonSettingsYaml,
     #[serde(default, skip_serializing_if = "is_false")]
     pub editing_tool: bool,
@@ -438,7 +439,7 @@ pub struct UiButtonRectYaml {
     #[serde(default)]
     pub roundness: f32, // corner radius
     #[serde(default)]
-    pub border_thickness_percentage: f32,
+    pub border_thickness: f32,
     #[serde(default)]
     pub fade: f32,
     #[serde(default)]
@@ -449,7 +450,7 @@ pub struct UiButtonRectYaml {
     // If glow settings are all 0.0, remove bloc
     #[serde(default)]
     pub glow_misc: GlowMisc,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub misc: MiscButtonSettingsYaml,
 }
 #[derive(Debug, Clone)]
@@ -466,7 +467,7 @@ pub struct UiButtonRect {
     pub border_color: [f32; 4],
     pub texture: Option<String>,
     pub roundness: f32, // corner radius
-    pub border_thickness_percentage: f32,
+    pub border_thickness: f32,
     pub fade: f32,
     pub blur: f32,
     pub glow_color: [f32; 4],
@@ -484,6 +485,7 @@ impl UiButtonRect {
         let y = e.y as f32 * y_scale;
         let w = e.w as f32 * x_scale;
         let h = e.h as f32 * y_scale;
+        let border_thickness = e.border_thickness * y_scale;
         let yaml_element = Some(e.clone());
         UiButtonRect {
             id: e.id,
@@ -498,7 +500,7 @@ impl UiButtonRect {
             border_color: e.border_color,
             texture: e.texture,
             roundness: e.roundness,
-            border_thickness_percentage: e.border_thickness_percentage,
+            border_thickness,
             fade: e.fade,
             blur: e.blur,
             glow_color: e.glow_color,
@@ -522,6 +524,7 @@ impl UiButtonRect {
         let y = self.y * y_scale_reverse;
         let w = self.w * x_scale_reverse;
         let h = self.h * y_scale_reverse;
+        let border_thickness = self.border_thickness * y_scale_reverse;
         let (x, y, w, h) = if let Some(yaml_element) = self.yaml_element.as_ref() {
             let x = snap(x, yaml_element.x as f32);
             let y = snap(y, yaml_element.y as f32);
@@ -544,7 +547,7 @@ impl UiButtonRect {
             border_color: self.border_color,
             texture: self.texture.clone(),
             roundness: self.roundness,
-            border_thickness_percentage: self.border_thickness_percentage,
+            border_thickness,
             fade: self.fade,
             blur: self.blur,
             glow_color: self.glow_color,
@@ -883,15 +886,29 @@ impl UiElement {
             _ => None,
         }
     }
-    pub fn size(&self) -> SizeProperty {
+    pub fn sizes(&self) -> Vec<SizeProperty> {
         match self {
-            UiElement::Text(t) => SizeProperty::Text([t.width, t.height], t.pt),
-            UiElement::Circle(c) => SizeProperty::Radius(c.radius),
-            UiElement::Handle(h) => SizeProperty::Radius(h.radius),
-            UiElement::Outline(o) => SizeProperty::Radius(o.shape_data.radius),
-            UiElement::Polygon(p) => SizeProperty::PolygonScale(p.scale),
-            UiElement::Rect(r) => SizeProperty::Rect(r.size()),
-            UiElement::Advanced(ap) => SizeProperty::AdvancedPrimitiveScale(ap.scale),
+            UiElement::Text(e) => e.sizes(),
+            UiElement::Circle(e) => e.sizes(),
+            UiElement::Handle(e) => e.sizes(),
+            UiElement::Outline(e) => vec![
+                SizeProperty::Radius(e.shape_data.radius),
+                SizeProperty::Border(e.shape_data.border_thickness),
+            ],
+            UiElement::Polygon(e) => e.sizes(),
+            UiElement::Rect(e) => e.sizes(),
+            UiElement::Advanced(e) => vec![SizeProperty::AdvancedPrimitiveScale(e.scale)],
+        }
+    }
+    pub fn main_size(&self) -> SizeProperty {
+        match self {
+            UiElement::Text(e) => e.main_size(),
+            UiElement::Circle(e) => e.main_size(),
+            UiElement::Handle(e) => e.main_size(),
+            UiElement::Outline(e) => SizeProperty::Radius(e.shape_data.radius),
+            UiElement::Polygon(e) => e.main_size(),
+            UiElement::Rect(e) => e.main_size(),
+            UiElement::Advanced(e) => SizeProperty::AdvancedPrimitiveScale(e.scale),
         }
     }
     pub fn kind(&self) -> ElementKind {
@@ -1623,7 +1640,7 @@ pub struct UiLayerYaml {
     #[serde(default, skip_serializing_if = "is_default")]
     pub opaque: bool,
 
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub editing_tool: bool,
 }
 
@@ -1844,12 +1861,19 @@ impl MiscButtonSettings {
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+#[serde(default)]
 pub struct MiscButtonSettingsYaml {
-    #[serde(default)]
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub active: bool,
-    #[serde(default, alias = "pressable")]
+
+    #[serde(
+        default = "default_true",
+        alias = "pressable",
+        skip_serializing_if = "is_true"
+    )]
     pub touchable: bool,
-    #[serde(default)]
+
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub editable: bool,
 }
 
@@ -1919,7 +1943,7 @@ pub struct UiButtonText {
 
     pub buffer: glyphon::Buffer,
     pub input_box: bool,
-    pub anchor: Option<Anchor>,
+    pub anchor: Anchor,
     pub yaml_element: Option<UiButtonTextYaml>,
 
     pub cache: Option<TextParams>,
@@ -1952,8 +1976,8 @@ pub struct UiButtonCircle {
     pub y: f32,
     pub radius: f32,
     pub original_radius: f32,
-    pub inside_border_thickness_percentage: f32,
-    pub border_thickness_percentage: f32,
+    pub inside_border_thickness: f32,
+    pub border_thickness: f32,
     pub fade: f32,
     pub fill_color: [f32; 4],
     pub inside_border_color: [f32; 4],
@@ -1962,7 +1986,6 @@ pub struct UiButtonCircle {
     pub glow_misc: GlowMisc,
     pub misc: MiscButtonSettings,
     pub yaml_element: Option<UiButtonCircleYaml>,
-
     pub cache: Option<CircleParams>,
 }
 
@@ -2090,6 +2113,8 @@ impl UiButtonCircle {
         let x = e.x as f32 * x_scale;
         let y = e.y as f32 * y_scale;
         let r = e.radius * y_scale;
+        let inside_border_thickness = e.inside_border_thickness * y_scale;
+        let border_thickness = e.border_thickness * y_scale;
         let yaml_element = Some(e.clone());
         UiButtonCircle {
             id: e.id,
@@ -2099,8 +2124,8 @@ impl UiButtonCircle {
             y,
             radius: r,
             original_radius: e.radius,
-            inside_border_thickness_percentage: e.inside_border_thickness_percentage,
-            border_thickness_percentage: e.border_thickness_percentage,
+            inside_border_thickness,
+            border_thickness,
             fade: e.fade,
             fill_color: e.fill_color,
             inside_border_color: e.inside_border_color,
@@ -2129,6 +2154,8 @@ impl UiButtonCircle {
         let x = self.x * x_scale_reverse;
         let y = self.y * y_scale_reverse;
         let r = self.radius * y_scale_reverse;
+        let inside_border_thickness = self.inside_border_thickness * y_scale_reverse;
+        let border_thickness = self.border_thickness * y_scale_reverse;
         let (x, y, r) = if let Some(yaml_element) = self.yaml_element.as_ref() {
             let x = snap(x, yaml_element.x as f32);
             let y = snap(y, yaml_element.y as f32);
@@ -2145,8 +2172,8 @@ impl UiButtonCircle {
             y,
 
             radius: r,
-            inside_border_thickness_percentage: self.inside_border_thickness_percentage,
-            border_thickness_percentage: self.border_thickness_percentage,
+            inside_border_thickness,
+            border_thickness,
 
             fade: self.fade,
             fill_color: self.fill_color,
@@ -2239,6 +2266,7 @@ impl UiButtonOutline {
         let x = e.shape_data.x * x_scale;
         let y = e.shape_data.y * y_scale;
         let r = e.shape_data.radius * y_scale;
+        let border_thickness = e.shape_data.border_thickness * y_scale;
         let yaml_element = Some(e.clone());
         UiButtonOutline {
             id: e.id,
@@ -2250,7 +2278,7 @@ impl UiButtonOutline {
                 x,
                 y,
                 radius: r,
-                border_thickness: e.shape_data.border_thickness,
+                border_thickness,
             },
             dash_color: e.dash_color,
             dash_misc: e.dash_misc,
@@ -2274,6 +2302,7 @@ impl UiButtonOutline {
         let x = self.shape_data.x * x_scale_reverse;
         let y = self.shape_data.y * y_scale_reverse;
         let r = self.shape_data.radius * y_scale_reverse;
+        let border_thickness = self.shape_data.border_thickness * y_scale_reverse;
         let (x, y, r) = if let Some(yaml_element) = self.yaml_element.as_ref() {
             let x = snap(x, yaml_element.shape_data.x);
             let y = snap(y, yaml_element.shape_data.y);
@@ -2291,7 +2320,7 @@ impl UiButtonOutline {
                 x,
                 y,
                 radius: r,
-                border_thickness: self.shape_data.border_thickness,
+                border_thickness,
             },
 
             dash_color: self.dash_color,
@@ -2473,7 +2502,7 @@ impl Default for UiButtonText {
             sel_end: 0,
             has_selection: false,
             input_box: false,
-            anchor: None,
+            anchor: Anchor::default(),
             yaml_element: None,
             cache: None,
             buffer: glyphon::Buffer::new_empty(Metrics::new(14.0, 20.0)),
@@ -2542,8 +2571,8 @@ impl Default for UiButtonCircle {
             y: 0.0,
             radius: 50.0,
             original_radius: 50.0,
-            inside_border_thickness_percentage: 0.0,
-            border_thickness_percentage: 0.05,
+            inside_border_thickness: 0.0,
+            border_thickness: 0.05,
             fade: 0.0,
             fill_color: [1.0, 1.0, 1.0, 1.0],
             inside_border_color: [0.0, 0.0, 0.0, 1.0],
@@ -2610,7 +2639,7 @@ impl Default for UiButtonRect {
             border_color: [1.0, 1.0, 1.0, 1.0],
             texture: None,
             roundness: 0.0,
-            border_thickness_percentage: 0.0,
+            border_thickness: 0.0,
             fade: 0.0,
             blur: 0.2,
             glow_color: [0.2, 0.0, 0.8, 0.98],
@@ -2720,14 +2749,14 @@ pub struct UiButtonTextYaml {
 
     // If 'misc' matches defaults (active:true, pressable:false, editable:false),
     // this entire block is removed from YAML.
-    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub misc: MiscButtonSettingsYaml,
 
     #[serde(skip_serializing_if = "is_default")]
     pub input_box: bool,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub anchor: Option<Anchor>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub anchor: Anchor,
 }
 
 impl Default for UiButtonTextYaml {
@@ -2743,7 +2772,7 @@ impl Default for UiButtonTextYaml {
             text: String::new(),
             misc: MiscButtonSettingsYaml::default(),
             input_box: false,
-            anchor: None,
+            anchor: Anchor::default(),
         }
     }
 }
@@ -2778,10 +2807,10 @@ pub struct UiButtonCircleYaml {
     pub radius: f32,
 
     #[serde(skip_serializing_if = "is_default")]
-    pub inside_border_thickness_percentage: f32,
+    pub inside_border_thickness: f32,
 
     #[serde(skip_serializing_if = "is_default")]
-    pub border_thickness_percentage: f32,
+    pub border_thickness: f32,
 
     #[serde(skip_serializing_if = "is_default")]
     pub fade: f32,
@@ -2797,7 +2826,7 @@ pub struct UiButtonCircleYaml {
     #[serde(default)]
     pub glow_misc: GlowMisc,
 
-    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub misc: MiscButtonSettingsYaml,
 }
 
@@ -2810,8 +2839,8 @@ impl Default for UiButtonCircleYaml {
             x: 0,
             y: 0,
             radius: 0.0,
-            inside_border_thickness_percentage: 0.0,
-            border_thickness_percentage: 0.0,
+            inside_border_thickness: 0.0,
+            border_thickness: 0.0,
             fade: 0.0,
             fill_color: [0.0, 0.0, 0.0, 0.0],
             inside_border_color: [0.0, 0.0, 0.0, 0.0],
@@ -2849,7 +2878,7 @@ pub struct UiButtonHandleYaml {
     #[serde(skip_serializing_if = "is_default")]
     pub sub_handle_misc: HandleMisc,
 
-    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub misc: MiscButtonSettingsYaml,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2903,7 +2932,7 @@ pub struct UiButtonOutlineYaml {
     #[serde(skip_serializing_if = "is_default")]
     pub sub_dash_misc: DashMisc,
 
-    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub misc: MiscButtonSettingsYaml,
 }
 
@@ -2955,7 +2984,7 @@ pub struct UiButtonPolygonYaml {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub vertices: Vec<UiVertexYaml>,
 
-    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub misc: MiscButtonSettingsYaml,
 }
 

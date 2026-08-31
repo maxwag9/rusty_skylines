@@ -6,41 +6,8 @@ layers:
       - !Rect
         id: GUI Upper Background
         actions:
-          - on:screen_resize, set(str:self.size.x, var:screen.x)
-        x: 960
-        y: 1035
-        w: 1920
-        h: 90
-        rotation: 0.0
-        color:
-          - 0.025
-          - 0.05
-          - 0.11
-          - 0.4
-        border_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        texture: null
-        roundness: 0.0
-        border_thickness_percentage: 0.0
-        fade: 0.0
-        blur: 5.2
-        glow_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 0.0
-        glow_misc: { }
-        misc:
-          active: true
-          touchable: false
-          editable: true
-      - !Rect
-        id: GUI Background
-        actions:
-          - on:screen_resize, set(str:self.size.x, var:screen.x)
+          - on:screen_resize, set(str:self.size.x, screen.x)
+          - ifvareq(sim_running, bool:false, set_var(str:self.color.fill, [0.7, 0.05, 0.11, 0.6]), set_var(str:self.color.fill, [0.025, 0.05, 0.11, 0.5]))
         x: 960
         y: 970
         w: 1920
@@ -58,7 +25,40 @@ layers:
           - 1.0
         texture: null
         roundness: 0.0
-        border_thickness_percentage: 0.0
+        fade: 0.0
+        blur: 5.2
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          touchable: false
+          editable: true
+      - !Rect
+        id: GUI Lower Background
+        actions:
+          - on:screen_resize, set(str:self.size.x, var:screen.x)
+
+        x: 960
+        y: 1035
+        w: 1920
+        h: 90
+        rotation: 0.0
+        color:
+          - 0.025
+          - 0.05
+          - 0.11
+          - 0.4
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
         fade: 0.0
         blur: 5.2
         glow_color:
@@ -79,10 +79,7 @@ layers:
         y: 1040
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Text
         id: time_text
         x: 1740
@@ -105,14 +102,14 @@ layers:
           - 0.7
           - 0.3
           - 1.0
-        text: '{{money}:.0}€'
+        text: '{expr:{money}:.0}€'
         anchor: TopLeft
       - !Text
         id: world_population_text
-        actions:
-          - if({world_population}>300 && !bool({reached_300_pop}), set_var(str:reached_300_pop); close_all_layers(str:Milestones); open_layer(str:Milestones, str:milestone_300_citizens))
-          - if({world_population}>1200, close_all_layers(str:Milestones); open_layer(str:Milestones, str:milestone_1200_citizens))
-          - if({world_population}>4500, close_all_layers(str:Milestones); open_layer(str:Milestones, str:milestone_4500_citizens))
+        #        actions:
+        #          - if({world_population}>300 && !bool({reached_300_pop}), set_var(str:reached_300_pop, true); close_all_layers(str:Milestones); open_layer(str:Milestones, str:milestone_300_citizens))
+        #          - if({world_population}>1200, close_all_layers(str:Milestones); open_layer(str:Milestones, str:milestone_1200_citizens))
+        #          - if({world_population}>4500, close_all_layers(str:Milestones); open_layer(str:Milestones, str:milestone_4500_citizens))
         x: 1500
         y: 1040
         pt: 18.0
@@ -125,8 +122,8 @@ layers:
         anchor: TopLeft
       - !Text
         id: non_educated_population_text
-        x: 0.9
-        y: 0.86
+        x: 1800
+        y: 905
         pt: 10.0
         color:
           - 1.0
@@ -134,10 +131,11 @@ layers:
           - 1.0
           - 0.9
         text: 'Non Educated Population: {var:non_educated_population}'
+        anchor: TopLeft
       - !Text
         id: low_educated_population_text
-        x: 0.9
-        y: 0.88
+        x: 1800
+        y: 915
         pt: 10.0
         color:
           - 1.0
@@ -145,10 +143,11 @@ layers:
           - 1.0
           - 0.9
         text: 'Low Educated Population: {var:low_educated_population}'
+        anchor: TopLeft
       - !Text
         id: medium_educated_population_text
-        x: 0.9
-        y: 0.9
+        x: 1800
+        y: 925
         pt: 10.0
         color:
           - 1.0
@@ -156,10 +155,11 @@ layers:
           - 1.0
           - 0.9
         text: 'Medium Educated Population: {var:medium_educated_population}'
+        anchor: TopLeft
       - !Text
         id: highly_educated_population_text
-        x: 0.9
-        y: 0.92
+        x: 1800
+        y: 935
         pt: 10.0
         color:
           - 1.0
@@ -167,10 +167,11 @@ layers:
           - 1.0
           - 0.9
         text: 'Highly Educated Population: {var:highly_educated_population}'
+        anchor: TopLeft
       - !Text
         id: housing_capacity_text
-        x: 0.9
-        y: 0.77
+        x: 1800
+        y: 950
         pt: 10.0
         color:
           - 1.0
@@ -178,10 +179,11 @@ layers:
           - 1.0
           - 0.9
         text: 'Housing Capacity: {var:housing_capacity}'
+        anchor: TopLeft
       - !Text
         id: commercial_capacity_text
-        x: 0.9
-        y: 0.79
+        x: 1800
+        y: 960
         pt: 10.0
         color:
           - 1.0
@@ -189,10 +191,11 @@ layers:
           - 1.0
           - 0.9
         text: 'Commercial Capacity: {var:commercial_capacity}'
+        anchor: TopLeft
       - !Text
         id: industrial_capacity_text
-        x: 0.9
-        y: 0.81
+        x: 1800
+        y: 970
         pt: 10.0
         color:
           - 1.0
@@ -200,10 +203,11 @@ layers:
           - 1.0
           - 0.9
         text: 'Industrial Capacity: {var:industrial_capacity}'
+        anchor: TopLeft
       - !Text
         id: office_capacity_text
-        x: 0.9
-        y: 0.83
+        x: 1800
+        y: 980
         pt: 10.0
         color:
           - 1.0
@@ -211,61 +215,67 @@ layers:
           - 1.0
           - 0.9
         text: 'Office Capacity: {var:office_capacity}'
+        anchor: TopLeft
       - !Text
         id: prestige_text
-        x: 0.9
-        y: 0.65
+        x: 1800
+        y: 995
         pt: 10.0
         color:
           - 1.0
           - 1.0
           - 1.0
           - 0.9
-        text: 'Prestige: {var:prestige}'
+        text: 'Prestige: {var:prestige:.2}'
+        anchor: TopLeft
       - !Text
         id: residential_attractiveness_text
-        x: 0.9
-        y: 0.68
+        x: 1680
+        y: 950
         pt: 10.0
         color:
           - 1.0
           - 1.0
           - 1.0
           - 0.9
-        text: 'Residential Attractiveness: {var:residential_attractiveness}'
+        text: 'Residential Attractiveness: {var:residential_attractiveness:.2}'
+        anchor: TopLeft
       - !Text
         id: commercial_attractiveness_text
-        x: 0.9
-        y: 0.7
+        x: 1680
+        y: 960
         pt: 10.0
         color:
           - 1.0
           - 1.0
           - 1.0
           - 0.9
-        text: 'Commercial Attractiveness: {var:commercial_attractiveness}'
+        text: 'Commercial Attractiveness: {var:commercial_attractiveness:.2}'
+        anchor: TopLeft
       - !Text
         id: industrial_attractiveness_text
-        x: 0.9
-        y: 0.72
+        x: 1680
+        y: 970
         pt: 10.0
         color:
           - 1.0
           - 1.0
           - 1.0
           - 0.9
-        text: 'Industrial Attractiveness: {var:industrial_attractiveness}'
+        text: 'Industrial Attractiveness: {var:industrial_attractiveness:.2}'
+        anchor: TopLeft
       - !Text
         id: office_attractiveness_text
-        x: 1750
-        y: 900
+        x: 1680
+        y: 980
         pt: 10.0
         color:
           - 1.0
           - 1.0
           - 1.0
           - 0.9
-        text: 'Office Attractiveness: {var:office_attractiveness}'
+        text: 'Office Attractiveness: {var:office_attractiveness:.2}'
+        anchor: TopLeft
       - !Advanced
         name: residential_demand_indicator
         ap_name: zoning_demand_indicator
@@ -274,10 +284,7 @@ layers:
         y: 1040
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: commercial_demand_indicator
         ap_name: zoning_demand_indicator
@@ -286,10 +293,7 @@ layers:
         y: 1040
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: industrial_demand_indicator
         ap_name: zoning_demand_indicator
@@ -299,10 +303,7 @@ layers:
         y: 1040
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: office_demand_indicator
         ap_name: zoning_demand_indicator
@@ -311,10 +312,7 @@ layers:
         y: 1040
         scale: 1.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
       - !Advanced
         name: set_none_zone
         ap_name: set_zoning_type
@@ -324,10 +322,7 @@ layers:
         x: 600
         y: 1040
         scale: 1.0
-        misc:
-          active: true
-          touchable: true
-          editable: true
+
         editing_tool: false
       - !Advanced
         name: set_residential_zone
@@ -338,10 +333,7 @@ layers:
         x: 640
         y: 1040
         scale: 1.0
-        misc:
-          active: true
-          touchable: true
-          editable: true
+
         editing_tool: false
       - !Advanced
         name: set_commercial_zone
@@ -352,10 +344,7 @@ layers:
         x: 680
         y: 1040
         scale: 1.0
-        misc:
-          active: true
-          touchable: true
-          editable: true
+
         editing_tool: false
       - !Advanced
         name: set_industrial_zone
@@ -366,10 +355,7 @@ layers:
         x: 720
         y: 1040
         scale: 1.0
-        misc:
-          active: true
-          touchable: true
-          editable: true
+
         editing_tool: false
       - !Advanced
         name: set_office_zone
@@ -380,10 +366,7 @@ layers:
         x: 760
         y: 1040
         scale: 1.0
-        misc:
-          active: true
-          touchable: true
-          editable: true
+
         editing_tool: false
       - !Rect
         id: set_cursor_to_destruction
@@ -407,7 +390,6 @@ layers:
           - 1.0
         texture: null
         roundness: 0.1
-        border_thickness_percentage: 0.0
         fade: 0.0
         blur: 0.0
         glow_color:
@@ -419,10 +401,7 @@ layers:
           glow_size: 10.0
           glow_speed: 0.1
           glow_intensity: 0.5
-        misc:
-          active: true
-          touchable: true
-          editable: true
+
       - !Rect
         id: set_cursor_to_road
         actions:
@@ -445,7 +424,6 @@ layers:
           - 1.0
         texture: null
         roundness: 0.0
-        border_thickness_percentage: 0.0
         fade: 0.0
         blur: 0.0
         glow_color:
@@ -454,10 +432,7 @@ layers:
           - 0.0
           - 0.0
         glow_misc: { }
-        misc:
-          active: true
-          touchable: true
-          editable: true
+
       - !Rect
         id: add_road_lane
         actions:
@@ -480,7 +455,6 @@ layers:
           - 1.0
         texture: null
         roundness: 0.0
-        border_thickness_percentage: 0.0
         fade: 0.0
         blur: 0.0
         glow_color:
@@ -489,10 +463,7 @@ layers:
           - 0.0
           - 0.0
         glow_misc: { }
-        misc:
-          active: true
-          touchable: true
-          editable: true
+
       - !Rect
         id: less_road_lane
         actions:
@@ -515,7 +486,6 @@ layers:
           - 1.0
         texture: null
         roundness: 0.0
-        border_thickness_percentage: 0.0
         fade: 0.0
         blur: 0.0
         glow_color:
@@ -524,16 +494,13 @@ layers:
           - 0.0
           - 0.0
         glow_misc: { }
-        misc:
-          active: true
-          touchable: true
-          editable: true
+
       - !Advanced
         name: forest_cluster_strength_slider
         ap_name: slider
         ap_var:
-          - "forest_cluster_strength"
-          - "Forest tendency"
+          - "str:forest_cluster_strength"
+          - "str:Forest tendency"
           - "0.0"
           - "1.0"
           - "0.05"
@@ -544,8 +511,5 @@ layers:
         y: 800
         scale: 1.5
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
     editing_tool: false

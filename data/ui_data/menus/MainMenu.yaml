@@ -22,7 +22,7 @@ layers:
           - 1.0
         texture: null
         roundness: 0.0
-        border_thickness_percentage: 0.00
+        border_thickness: 0.00
         fade: 0.0
         blur: 5.5
         glow_color:
@@ -54,7 +54,7 @@ layers:
           - 1.0
         texture: null
         roundness: 0.2
-        border_thickness_percentage: 0.01
+        border_thickness: 4
         fade: 0.0
         blur: 5.5
         glow_color:
@@ -63,45 +63,36 @@ layers:
           - 0.0
           - 0.0
         glow_misc: { }
-        misc:
-          active: true
-          touchable: true
-          editable: true
+
       - !Advanced
         name: play_button
         ap_name: button
         ap_vars:
-          - "str:str:Play"
+          - "str:Play"
           - "40"
-          - "str:on:r set(str:show_world, true); set(str:editor_mode, false); set(str:override_mode, false); call(open_save_menus);"
+          - "str:on:r set(str:editor_mode, false); set(str:override_mode, false); call(open_save_menus);"
         x: 960
         y: 330
         scale: 1.0
-        misc:
-          active: true
-          touchable: true
-          editable: true
+
         editing_tool: false
       - !Advanced
         name: settings_button
         ap_name: button
         ap_vars:
-          - "str:str:Settings"
+          - "str:Settings"
           - "30"
           - "str:on:r set(str:editor_mode, false); set(str:override_mode, false); call(open_settings_menus);"
         x: 960
         y: 440
         scale: 1.0
-        misc:
-          active: true
-          touchable: true
-          editable: true
+
         editing_tool: false
       - !Advanced
         name: pingpong_button
         ap_name: button
         ap_vars:
-          - "str:str:Ping Pong!"
+          - "str:Ping Pong!"
           - "30"
           - "str:on:r close_all_menus; open_menu(str:PingPong); set(str:ball.direction, 0.9); set(str:ball.speed, 3.0); 
               set(str:ball.velocity.x, expr:cos({ball.direction})*2); set(str:ball.velocity.y, expr:sin({ball.direction})*2); 
@@ -109,25 +100,19 @@ layers:
         x: 960
         y: 540
         scale: 1.0
-        misc:
-          active: true
-          touchable: true
-          editable: true
+
         editing_tool: false
       - !Advanced
         name: exit_game_button
         ap_name: button
         ap_vars:
-          - "str:str:Exit Game"
+          - "str:Exit Game"
           - "30"
           - "str:on:r exit_game()"
         x: 960
         y: 610
         scale: 1.0
-        misc:
-          active: true
-          touchable: true
-          editable: true
+
         editing_tool: false
     editing_tool: false
 #  - name: test_buttons

@@ -11,10 +11,7 @@ layers:
         y: 0.0
         scale: 0.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
     editing_tool: false
   - name: milestone_1200_citizens
     order: 20
@@ -27,10 +24,7 @@ layers:
         y: 0.0
         scale: 0.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
     editing_tool: false
   - name: milestone_4500_citizens
     order: 20
@@ -43,8 +37,5 @@ layers:
         y: 0.0
         scale: 0.0
         misc:
-          active: true
           touchable: false
-          editable: true
-        editing_tool: false
     editing_tool: false

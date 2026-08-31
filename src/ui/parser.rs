@@ -1,14 +1,14 @@
 use crate::data::{SettingKey, Settings};
-use crate::helpers::hsv::{hsv_to_rgb, HSV};
+use crate::helpers::hsv::{HSV, hsv_to_rgb};
 use crate::ui::variables::Variables;
-use rand::rngs::ThreadRng;
+use chrono::{DateTime, Utc};
 use rand::RngExt;
+use rand::rngs::ThreadRng;
 use std::collections::HashSet;
 use std::fmt;
 use std::hash::{DefaultHasher, Hasher};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use chrono::{DateTime, Utc};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -17,7 +17,7 @@ pub enum Value {
     I64(i64),
     Bool(bool),
     String(String),
-    Array(Vec<Value>)
+    Array(Vec<Value>),
 }
 
 impl fmt::Display for Value {
@@ -32,7 +32,7 @@ impl Value {
         variables: &Variables,
         s: &str,
         with_expr: bool,
-        with_post_expr: bool
+        with_post_expr: bool,
     ) -> Self {
         //println!("Before Replace: '{}'", s);
         //let s = Self::replace_inline_variables(variables, settings, s);
@@ -42,6 +42,35 @@ impl Value {
         if s.is_empty() {
             return Value::String(String::new());
         }
+        let (s, precision) = match s.rsplit_once(':') {
+            Some((base, suffix)) if suffix.starts_with('.') => {
+                let decimals = &suffix[1..];
+
+                if !decimals.is_empty() && decimals.chars().all(|c| c.is_ascii_digit()) {
+                    match decimals.parse::<usize>() {
+                        Ok(n) => (base.trim(), Some(n)),
+                        Err(_) => (s, None),
+                    }
+                } else {
+                    (s, None)
+                }
+            }
+            _ => (s, None),
+        };
+        let value = Self::from_str_unrounded(settings, variables, s, with_expr, with_post_expr);
+
+        match precision {
+            Some(decimals) => Self::apply_precision(value, decimals),
+            None => value,
+        }
+    }
+    fn from_str_unrounded(
+        settings: &Settings,
+        variables: &Variables,
+        s: &str,
+        with_expr: bool,
+        with_post_expr: bool,
+    ) -> Value {
         // Auto-detect array (bracket notation)
         if s.starts_with('[') && s.ends_with(']') {
             if let Some(arr) = Self::parse_array(settings, variables, s) {
@@ -61,18 +90,26 @@ impl Value {
                     "int" => {
                         return if let Ok(i) = value.parse::<i64>() {
                             Value::I64(i)
-                        } else { Value::String(format!("'{}' couldn't get converted to int!", s)) }
+                        } else {
+                            Value::String(format!("'{}' couldn't get converted to int!", s))
+                        };
                     }
                     "float" | "f32" | "f64" => {
                         return if let Ok(f) = value.parse::<f64>() {
                             Value::F64(f)
-                        } else { Value::String(format!("'{}' couldn't get converted to float!", s)) }
+                        } else {
+                            Value::String(format!("'{}' couldn't get converted to float!", s))
+                        };
                     }
-                    "bool" => return match value.to_ascii_lowercase().as_str() {
-                        "true" | "1" | "yes" | "on" | "some" => Value::Bool(true),
-                        "false" | "0" | "no" | "off" | "none" | "null" => Value::Bool(false),
-                        _ => { Value::String(format!("'{}' couldn't get converted to boolean!", s)) }
-                    },
+                    "bool" => {
+                        return match value.to_ascii_lowercase().as_str() {
+                            "true" | "1" | "yes" | "on" | "some" => Value::Bool(true),
+                            "false" | "0" | "no" | "off" | "none" | "null" => Value::Bool(false),
+                            _ => {
+                                Value::String(format!("'{}' couldn't get converted to boolean!", s))
+                            }
+                        };
+                    }
                     "string" | "str" => {
                         return Value::String(value.to_string());
                     }
@@ -87,16 +124,10 @@ impl Value {
                     "expr" => {
                         let expr_value = match eval_expr(value, variables, settings) {
                             Some(value) => match value {
-                                Value::None => {
-                                    Value::String(value.to_string())
-                                }
-                                _ => {
-                                    value
-                                }
+                                Value::None => Value::String(value.to_string()),
+                                _ => value,
                             },
-                            None => {
-                                Value::String(value.to_string())
-                            }
+                            None => Value::String(value.to_string()),
                         };
                         //println!("expr gets: '{value}' and returns: '{:?}'", expr_value);
                         return expr_value;
@@ -104,20 +135,18 @@ impl Value {
                     "exprvar" => {
                         let expr_value = match eval_expr(value, variables, settings) {
                             Some(value) => match value {
-                                Value::None => {
-                                    Value::String(value.to_string())
-                                }
-                                _ => {
-                                    value
-                                }
+                                Value::None => Value::String(value.to_string()),
+                                _ => value,
                             },
-                            None => {
-                                Value::String(value.to_string())
-                            }
+                            None => Value::String(value.to_string()),
                         };
                         let expr_value = expr_value.into_string();
-                        let post_value = Value::from_str(settings, variables, expr_value.as_str(), true, false);
-                        println!("exprvar gets: '{value}' and returns: '{expr_value}', then returns '{:?}'", post_value);
+                        let post_value =
+                            Value::from_str(settings, variables, expr_value.as_str(), true, false);
+                        println!(
+                            "exprvar gets: '{value}' and returns: '{expr_value}', then returns '{:?}'",
+                            post_value
+                        );
                         return post_value;
                     }
                     "setting" => {
@@ -146,10 +175,12 @@ impl Value {
                             }
                         }
                     }
-                    "var" | "variable" => return match Self::load_variable(variables, &value.to_string()) {
-                        Some(value) => value,
-                        None => { Value::String(format!("'{}' variable doesn't exist yet!", s)) }
-                    },
+                    "var" | "variable" => {
+                        return match Self::load_variable(variables, &value.to_string()) {
+                            Some(value) => value,
+                            None => Value::String(format!("'{}' variable doesn't exist yet!", s)),
+                        };
+                    }
                     "array" | "list" | "vec" | "slice" => {
                         if let Some(arr) = Self::parse_array(settings, variables, value) {
                             return Value::Array(arr);
@@ -159,7 +190,10 @@ impl Value {
                         return Value::None;
                     }
                     _ => {
-                        return Value::String(format!("'{}', the type '{}' doesn't exist. Use 'expr:xyz' for Expressions.", s, ty));
+                        return Value::String(format!(
+                            "'{}', the type '{}' doesn't exist. Use 'expr:xyz' for Expressions.",
+                            s, ty
+                        ));
                     }
                 }
             }
@@ -223,6 +257,20 @@ impl Value {
         }
 
         Value::String(s.to_string())
+    }
+    fn apply_precision(value: Value, decimals: usize) -> Value {
+        match value {
+            Value::F64(f) => {
+                let factor = 10_f64.powi(decimals as i32);
+                Value::F64((f * factor).round() / factor)
+            }
+
+            // Integers are already exact.
+            Value::I64(i) => Value::I64(i),
+
+            // Everything else stays unchanged.
+            other => other,
+        }
     }
     pub fn from_vec<I, T>(iter: I) -> Self
     where
@@ -606,23 +654,61 @@ impl From<&str> for Value {
 
 #[derive(Debug, Clone)]
 pub enum FunctionError {
-    MissingArgument { index: usize, function: &'static str },
-    InvalidType { expected: &'static str, got: &'static str, function: &'static str },
-    InvalidValue { message: String, function: &'static str },
-    InvalidArgumentCount { expected: usize, got: usize, function: &'static str },
-    ConversionFailed { from: &'static str, to: &'static str, function: &'static str },
-    IndexOutOfBounds { index: usize, len: usize, function: &'static str },
-    EmptyInput { function: &'static str },
-    Other { message: String, function: &'static str },
+    MissingArgument {
+        index: usize,
+        function: &'static str,
+    },
+    InvalidType {
+        expected: &'static str,
+        got: &'static str,
+        function: &'static str,
+    },
+    InvalidValue {
+        message: String,
+        function: &'static str,
+    },
+    InvalidArgumentCount {
+        expected: usize,
+        got: usize,
+        function: &'static str,
+    },
+    ConversionFailed {
+        from: &'static str,
+        to: &'static str,
+        function: &'static str,
+    },
+    IndexOutOfBounds {
+        index: usize,
+        len: usize,
+        function: &'static str,
+    },
+    EmptyInput {
+        function: &'static str,
+    },
+    Other {
+        message: String,
+        function: &'static str,
+    },
 }
 
-fn get_arg<'a>(args: &'a [Value], idx: usize, func: &'static str) -> Result<&'a Value, FunctionError> {
-    args.get(idx).ok_or(FunctionError::MissingArgument { index: idx, function: func })
+fn get_arg<'a>(
+    args: &'a [Value],
+    idx: usize,
+    func: &'static str,
+) -> Result<&'a Value, FunctionError> {
+    args.get(idx).ok_or(FunctionError::MissingArgument {
+        index: idx,
+        function: func,
+    })
 }
 
 fn arg_f64(args: &[Value], idx: usize, func: &'static str) -> Result<f64, FunctionError> {
     let v = get_arg(args, idx, func)?;
-    v.as_f64().ok_or(FunctionError::ConversionFailed { from: v.type_name(), to: "f64", function: func })
+    v.as_f64().ok_or(FunctionError::ConversionFailed {
+        from: v.type_name(),
+        to: "f64",
+        function: func,
+    })
 }
 fn arg_bool(args: &[Value], idx: usize, func: &'static str) -> Result<bool, FunctionError> {
     let v = get_arg(args, idx, func)?;
@@ -630,14 +716,14 @@ fn arg_bool(args: &[Value], idx: usize, func: &'static str) -> Result<bool, Func
 }
 fn arg_i64(args: &[Value], idx: usize, func: &'static str) -> Result<i64, FunctionError> {
     let v = get_arg(args, idx, func)?;
-    v.as_i64().ok_or(FunctionError::ConversionFailed { from: v.type_name(), to: "i64", function: func })
+    v.as_i64().ok_or(FunctionError::ConversionFailed {
+        from: v.type_name(),
+        to: "i64",
+        function: func,
+    })
 }
 
-fn arg_time_seconds(
-    args: &[Value],
-    idx: usize,
-    func: &'static str,
-) -> Result<f64, FunctionError> {
+fn arg_time_seconds(args: &[Value], idx: usize, func: &'static str) -> Result<f64, FunctionError> {
     let mut value = arg_f64(args, idx, func)?;
     let from_millis = arg_bool(args, idx + 1, func)?;
 
@@ -693,7 +779,13 @@ fn format_elapsed(secs: f64) -> String {
         format!("{n:.1} years")
     }
 }
-fn format_custom_time(secs: f64, day_seconds: f64) -> String {
+
+fn format_custom_time(
+    secs: f64,
+    day_seconds: f64,
+    max_parts: usize,
+    use_day_seconds: bool,
+) -> String {
     if day_seconds <= 0.0 {
         return "invalid day length".to_string();
     }
@@ -701,9 +793,21 @@ fn format_custom_time(secs: f64, day_seconds: f64) -> String {
     let negative = secs < 0.0;
     let mut secs = secs.abs();
 
-    let minute = 60.0;
-    let hour = 60.0 * minute;
-    let day = day_seconds;
+    let (second, minute, hour, day) = if use_day_seconds {
+        let second = day_seconds / 86_400.0;
+        let minute = second * 60.0;
+        let hour = minute * 60.0;
+
+        (second, minute, hour, day_seconds)
+    } else {
+        let second = 1.0;
+        let minute = 60.0;
+        let hour = 3_600.0;
+        let day = day_seconds;
+
+        (second, minute, hour, day)
+    };
+
     let week = 7.0 * day;
     let month = 30.0 * day;
     let year = 12.0 * month;
@@ -719,12 +823,16 @@ fn format_custom_time(secs: f64, day_seconds: f64) -> String {
         ("day", day),
         ("hour", hour),
         ("minute", minute),
-        ("second", 1.0),
+        ("second", second),
     ];
 
     let mut parts = Vec::new();
 
     for (name, unit) in units {
+        if parts.len() >= max_parts {
+            break;
+        }
+
         if secs >= unit {
             let amount = (secs / unit).floor() as i64;
             secs -= amount as f64 * unit;
@@ -757,9 +865,16 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
     Some(match name {
         "fix" => |args| {
             let val = get_arg(&args, 0, "fix")?;
-            let n = val.as_f64().ok_or(FunctionError::ConversionFailed { from: val.type_name(), to: "f64", function: "fix" })?;
+            let n = val.as_f64().ok_or(FunctionError::ConversionFailed {
+                from: val.type_name(),
+                to: "f64",
+                function: "fix",
+            })?;
             let decimals = args.get(1).and_then(|v| v.as_f64()).unwrap_or(3.0) as usize;
-            let min_int = args.get(2).and_then(|v| v.as_f64()).unwrap_or(f64::INFINITY) as usize;
+            let min_int = args
+                .get(2)
+                .and_then(|v| v.as_f64())
+                .unwrap_or(f64::INFINITY) as usize;
             let sign = if n < 0.0 { "-" } else { "" };
             let abs = n.abs();
             let formatted = format!("{:.*}", decimals, abs);
@@ -786,7 +901,11 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             match val {
                 Value::F64(n) => Ok(Value::F64(n.abs())),
                 Value::I64(n) => Ok(Value::I64(n.abs())),
-                v => Err(FunctionError::InvalidType { expected: "number", got: v.type_name(), function: "abs" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "number",
+                    got: v.type_name(),
+                    function: "abs",
+                }),
             }
         },
         "floor" => |args| {
@@ -897,7 +1016,10 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     min_val = Some(min_val.map_or(n, |m| m.min(n)));
                 }
             }
-            min_val.map(Value::F64).ok_or(FunctionError::Other { message: "no numeric arguments provided".to_string(), function: "min" })
+            min_val.map(Value::F64).ok_or(FunctionError::Other {
+                message: "no numeric arguments provided".to_string(),
+                function: "min",
+            })
         },
         "max" => |args| {
             let mut max_val: Option<f64> = None;
@@ -906,7 +1028,10 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     max_val = Some(max_val.map_or(n, |m| m.max(n)));
                 }
             }
-            max_val.map(Value::F64).ok_or(FunctionError::Other { message: "no numeric arguments provided".to_string(), function: "max" })
+            max_val.map(Value::F64).ok_or(FunctionError::Other {
+                message: "no numeric arguments provided".to_string(),
+                function: "max",
+            })
         },
         "clamp" => |args| {
             let val = arg_f64(&args, 0, "clamp")?;
@@ -922,7 +1047,13 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
         },
         "sign" => |args| {
             let n = arg_f64(&args, 0, "sign")?;
-            Ok(Value::F64(if n > 0.0 { 1.0 } else if n < 0.0 { -1.0 } else { 0.0 }))
+            Ok(Value::F64(if n > 0.0 {
+                1.0
+            } else if n < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }))
         },
         "fract" => |args| {
             let n = arg_f64(&args, 0, "fract")?;
@@ -932,7 +1063,10 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             let a = arg_f64(&args, 0, "mod")?;
             let b = arg_f64(&args, 1, "mod")?;
             if b == 0.0 {
-                return Err(FunctionError::InvalidValue { message: "modulo by zero".to_string(), function: "mod" });
+                return Err(FunctionError::InvalidValue {
+                    message: "modulo by zero".to_string(),
+                    function: "mod",
+                });
             }
             Ok(Value::F64(a % b))
         },
@@ -963,7 +1097,11 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             match val {
                 Value::String(s) => Ok(Value::F64(s.len() as f64)),
                 Value::Array(arr) => Ok(Value::F64(arr.len() as f64)),
-                v => Err(FunctionError::InvalidType { expected: "string or array", got: v.type_name(), function: "len" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string or array",
+                    got: v.type_name(),
+                    function: "len",
+                }),
             }
         },
         "upper" => |args| {
@@ -985,7 +1123,11 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     };
                     Ok(Value::String(result))
                 }
-                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "capitalize" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string",
+                    got: v.type_name(),
+                    function: "capitalize",
+                }),
             }
         },
         "title" => |args| {
@@ -997,7 +1139,10 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                         .map(|word| {
                             let mut chars = word.chars();
                             match chars.next() {
-                                Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+                                Some(first) => {
+                                    first.to_uppercase().collect::<String>()
+                                        + &chars.as_str().to_lowercase()
+                                }
                                 None => String::new(),
                             }
                         })
@@ -1005,28 +1150,44 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                         .join(" ");
                     Ok(Value::String(result))
                 }
-                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "title" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string",
+                    got: v.type_name(),
+                    function: "title",
+                }),
             }
         },
         "trim" => |args| {
             let val = get_arg(&args, 0, "trim")?;
             match val {
                 Value::String(s) => Ok(Value::String(s.trim().to_string())),
-                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "trim" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string",
+                    got: v.type_name(),
+                    function: "trim",
+                }),
             }
         },
         "ltrim" => |args| {
             let val = get_arg(&args, 0, "ltrim")?;
             match val {
                 Value::String(s) => Ok(Value::String(s.trim_start().to_string())),
-                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "ltrim" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string",
+                    got: v.type_name(),
+                    function: "ltrim",
+                }),
             }
         },
         "rtrim" => |args| {
             let val = get_arg(&args, 0, "rtrim")?;
             match val {
                 Value::String(s) => Ok(Value::String(s.trim_end().to_string())),
-                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "rtrim" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string",
+                    got: v.type_name(),
+                    function: "rtrim",
+                }),
             }
         },
         "reverse" => |args| {
@@ -1034,7 +1195,11 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             match val {
                 Value::String(s) => Ok(Value::String(s.chars().rev().collect())),
                 Value::Array(arr) => Ok(Value::Array(arr.iter().rev().cloned().collect())),
-                v => Err(FunctionError::InvalidType { expected: "string or array", got: v.type_name(), function: "reverse" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string or array",
+                    got: v.type_name(),
+                    function: "reverse",
+                }),
             }
         },
         "repeat" => |args| {
@@ -1060,7 +1225,11 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     };
                     Ok(Value::String(s.replace(&from, &to)))
                 }
-                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "replace" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string",
+                    got: v.type_name(),
+                    function: "replace",
+                }),
             }
         },
         "split" => |args| {
@@ -1071,10 +1240,17 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                         Some(Value::String(d)) => d.clone(),
                         _ => " ".to_string(),
                     };
-                    let parts: Vec<Value> = s.split(&delim).map(|p| Value::String(p.to_string())).collect();
+                    let parts: Vec<Value> = s
+                        .split(&delim)
+                        .map(|p| Value::String(p.to_string()))
+                        .collect();
                     Ok(Value::Array(parts))
                 }
-                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "split" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string",
+                    got: v.type_name(),
+                    function: "split",
+                }),
             }
         },
         "join" => |args| {
@@ -1088,7 +1264,11 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     let result: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
                     Ok(Value::String(result.join(&delim)))
                 }
-                v => Err(FunctionError::InvalidType { expected: "array", got: v.type_name(), function: "join" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "array",
+                    got: v.type_name(),
+                    function: "join",
+                }),
             }
         },
         "substr" => |args| {
@@ -1098,14 +1278,20 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     let start = arg_f64(&args, 1, "substr")? as usize;
                     let len = args.get(2).and_then(|v| v.as_f64()).map(|n| n as usize);
                     let chars: Vec<char> = s.chars().collect();
-                    let end = len.map(|l| (start + l).min(chars.len())).unwrap_or(chars.len());
+                    let end = len
+                        .map(|l| (start + l).min(chars.len()))
+                        .unwrap_or(chars.len());
                     if start >= chars.len() {
                         Ok(Value::String(String::new()))
                     } else {
                         Ok(Value::String(chars[start..end].iter().collect()))
                     }
                 }
-                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "substr" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string",
+                    got: v.type_name(),
+                    function: "substr",
+                }),
             }
         },
         "contains" => |args| {
@@ -1122,7 +1308,11 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     let needle = get_arg(&args, 1, "contains")?;
                     Ok(Value::Bool(arr.iter().any(|v| v == needle)))
                 }
-                v => Err(FunctionError::InvalidType { expected: "string or array", got: v.type_name(), function: "contains" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string or array",
+                    got: v.type_name(),
+                    function: "contains",
+                }),
             }
         },
         "startswith" => |args| {
@@ -1135,7 +1325,11 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     };
                     Ok(Value::Bool(s.starts_with(&prefix)))
                 }
-                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "startswith" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string",
+                    got: v.type_name(),
+                    function: "startswith",
+                }),
             }
         },
         "endswith" => |args| {
@@ -1148,7 +1342,11 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     };
                     Ok(Value::Bool(s.ends_with(&suffix)))
                 }
-                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "endswith" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string",
+                    got: v.type_name(),
+                    function: "endswith",
+                }),
             }
         },
         "indexof" => |args| {
@@ -1159,7 +1357,9 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                         Value::String(n) => n.clone(),
                         v => v.to_string(),
                     };
-                    Ok(Value::F64(s.find(&needle).map(|i| i as f64).unwrap_or(-1.0)))
+                    Ok(Value::F64(
+                        s.find(&needle).map(|i| i as f64).unwrap_or(-1.0),
+                    ))
                 }
                 Value::Array(arr) => {
                     let needle = get_arg(&args, 1, "indexof")?;
@@ -1170,16 +1370,32 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     }
                     Ok(Value::F64(-1.0))
                 }
-                v => Err(FunctionError::InvalidType { expected: "string or array", got: v.type_name(), function: "indexof" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string or array",
+                    got: v.type_name(),
+                    function: "indexof",
+                }),
             }
         },
         "get" => |args| {
             let arr = match args.get(0) {
                 Some(Value::Array(arr)) => arr,
-                _ => return Err(FunctionError::InvalidType { expected: "array", got: "value", function: "get" }),
+                _ => {
+                    return Err(FunctionError::InvalidType {
+                        expected: "array",
+                        got: "value",
+                        function: "get",
+                    });
+                }
             };
             let index = arg_i64(&args, 1, "get")? as usize;
-            arr.get(index).cloned().ok_or(FunctionError::IndexOutOfBounds { index, len: arr.len(), function: "get" })
+            arr.get(index)
+                .cloned()
+                .ok_or(FunctionError::IndexOutOfBounds {
+                    index,
+                    len: arr.len(),
+                    function: "get",
+                })
         },
         "padleft" => |args| {
             let val = get_arg(&args, 0, "padleft")?;
@@ -1208,11 +1424,16 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     if s.len() >= width {
                         Ok(Value::String(s.clone()))
                     } else {
-                        let padding: String = std::iter::repeat(pad_char).take(width - s.len()).collect();
+                        let padding: String =
+                            std::iter::repeat(pad_char).take(width - s.len()).collect();
                         Ok(Value::String(s.clone() + &padding))
                     }
                 }
-                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "padright" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string",
+                    got: v.type_name(),
+                    function: "padright",
+                }),
             }
         },
         "center" => |args| {
@@ -1235,18 +1456,39 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                         Ok(Value::String(left + s + &right))
                     }
                 }
-                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "center" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string",
+                    got: v.type_name(),
+                    function: "center",
+                }),
             }
         },
         "char" => |args| {
             let code = arg_f64(&args, 0, "char")? as u32;
-            char::from_u32(code).map(|c| Value::String(c.to_string())).ok_or_else(|| FunctionError::InvalidValue { message: format!("invalid unicode codepoint: {}", code), function: "char" })
+            char::from_u32(code)
+                .map(|c| Value::String(c.to_string()))
+                .ok_or_else(|| FunctionError::InvalidValue {
+                    message: format!("invalid unicode codepoint: {}", code),
+                    function: "char",
+                })
         },
         "ord" => |args| {
             let val = get_arg(&args, 0, "ord")?;
             match val {
-                Value::String(s) => s.chars().next().map(|c| Value::I64(c as i64)).ok_or_else(|| FunctionError::InvalidValue { message: "empty string".to_string(), function: "ord" }),
-                v => Err(FunctionError::InvalidType { expected: "string", got: v.type_name(), function: "ord" }),
+                Value::String(s) => {
+                    s.chars()
+                        .next()
+                        .map(|c| Value::I64(c as i64))
+                        .ok_or_else(|| FunctionError::InvalidValue {
+                            message: "empty string".to_string(),
+                            function: "ord",
+                        })
+                }
+                v => Err(FunctionError::InvalidType {
+                    expected: "string",
+                    got: v.type_name(),
+                    function: "ord",
+                }),
             }
         },
         "hex" => |args| {
@@ -1264,17 +1506,39 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
         "first" => |args| {
             let val = get_arg(&args, 0, "first")?;
             match val {
-                Value::Array(arr) => arr.first().cloned().ok_or(FunctionError::EmptyInput { function: "first" }),
-                Value::String(s) => s.chars().next().map(|c| Value::String(c.to_string())).ok_or(FunctionError::EmptyInput { function: "first" }),
-                v => Err(FunctionError::InvalidType { expected: "string or array", got: v.type_name(), function: "first" }),
+                Value::Array(arr) => arr
+                    .first()
+                    .cloned()
+                    .ok_or(FunctionError::EmptyInput { function: "first" }),
+                Value::String(s) => s
+                    .chars()
+                    .next()
+                    .map(|c| Value::String(c.to_string()))
+                    .ok_or(FunctionError::EmptyInput { function: "first" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string or array",
+                    got: v.type_name(),
+                    function: "first",
+                }),
             }
         },
         "last" => |args| {
             let val = get_arg(&args, 0, "last")?;
             match val {
-                Value::Array(arr) => arr.last().cloned().ok_or(FunctionError::EmptyInput { function: "last" }),
-                Value::String(s) => s.chars().last().map(|c| Value::String(c.to_string())).ok_or(FunctionError::EmptyInput { function: "last" }),
-                v => Err(FunctionError::InvalidType { expected: "string or array", got: v.type_name(), function: "last" }),
+                Value::Array(arr) => arr
+                    .last()
+                    .cloned()
+                    .ok_or(FunctionError::EmptyInput { function: "last" }),
+                Value::String(s) => s
+                    .chars()
+                    .last()
+                    .map(|c| Value::String(c.to_string()))
+                    .ok_or(FunctionError::EmptyInput { function: "last" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string or array",
+                    got: v.type_name(),
+                    function: "last",
+                }),
             }
         },
         "sum" => |args| {
@@ -1319,52 +1583,104 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             let value = arg_f64(&args, 0, "nearest")?;
             let choices: Vec<f64> = choices_arr.iter().filter_map(|v| v.as_f64()).collect();
             if choices.is_empty() {
-                return Err(FunctionError::EmptyInput { function: "nearest" });
+                return Err(FunctionError::EmptyInput {
+                    function: "nearest",
+                });
             }
-            let nearest = choices.into_iter().min_by(|a, b| {
-                (value - a).abs().partial_cmp(&(value - b).abs()).unwrap_or(std::cmp::Ordering::Equal)
-            }).ok_or(FunctionError::EmptyInput { function: "nearest" })?;
+            let nearest = choices
+                .into_iter()
+                .min_by(|a, b| {
+                    (value - a)
+                        .abs()
+                        .partial_cmp(&(value - b).abs())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .ok_or(FunctionError::EmptyInput {
+                    function: "nearest",
+                })?;
             Ok(Value::F64(nearest))
         },
         "nearest_index" => |args| {
             let choices_arr = match args.get(0) {
                 Some(Value::Array(arr)) => arr,
-                _ => return Err(FunctionError::InvalidType { expected: "array", got: "value", function: "nearest_index" }),
+                _ => {
+                    return Err(FunctionError::InvalidType {
+                        expected: "array",
+                        got: "value",
+                        function: "nearest_index",
+                    });
+                }
             };
             let choices: Vec<f64> = choices_arr.iter().filter_map(|v| v.as_f64()).collect();
             if choices.is_empty() {
-                return Err(FunctionError::EmptyInput { function: "nearest_index" });
+                return Err(FunctionError::EmptyInput {
+                    function: "nearest_index",
+                });
             }
             let value = arg_f64(&args, 1, "nearest_index")?;
-            let index = choices.iter().enumerate().min_by(|(_, a), (_, b)| {
-                (value - **a).abs().partial_cmp(&(value - **b).abs()).unwrap_or(std::cmp::Ordering::Equal)
-            }).map(|(i, _)| i).ok_or(FunctionError::EmptyInput { function: "nearest_index" })?;
+            let index = choices
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| {
+                    (value - **a)
+                        .abs()
+                        .partial_cmp(&(value - **b).abs())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(i, _)| i)
+                .ok_or(FunctionError::EmptyInput {
+                    function: "nearest_index",
+                })?;
             Ok(Value::I64(index as i64))
         },
         "array_get" => |args| {
             let arr = match args.get(0) {
                 Some(Value::Array(arr)) => arr,
-                _ => return Err(FunctionError::InvalidType { expected: "array", got: "value", function: "array_get" }),
+                _ => {
+                    return Err(FunctionError::InvalidType {
+                        expected: "array",
+                        got: "value",
+                        function: "array_get",
+                    });
+                }
             };
             let index = arg_i64(&args, 1, "array_get")? as usize;
-            arr.get(index).cloned().ok_or(FunctionError::IndexOutOfBounds { index, len: arr.len(), function: "array_get" })
+            arr.get(index)
+                .cloned()
+                .ok_or(FunctionError::IndexOutOfBounds {
+                    index,
+                    len: arr.len(),
+                    function: "array_get",
+                })
         },
         "index_of" => |args| {
             let array = match args.get(0) {
                 Some(Value::Array(arr)) => arr,
-                _ => return Err(FunctionError::InvalidType { expected: "array", got: "value", function: "index_of" }),
+                _ => {
+                    return Err(FunctionError::InvalidType {
+                        expected: "array",
+                        got: "value",
+                        function: "index_of",
+                    });
+                }
             };
             let value = get_arg(&args, 1, "index_of")?;
 
-            let index = array.iter().position(|v| {
-                if v == value {
-                    return true;
-                }
-                match (v.as_f64(), value.as_f64()) {
-                    (Some(a), Some(b)) => a == b,
-                    _ => false,
-                }
-            }).ok_or_else(|| FunctionError::Other { message: "value not found in array".to_string(), function: "index_of" })?;
+            let index = array
+                .iter()
+                .position(|v| {
+                    if v == value {
+                        return true;
+                    }
+                    match (v.as_f64(), value.as_f64()) {
+                        (Some(a), Some(b)) => a == b,
+                        _ => false,
+                    }
+                })
+                .ok_or_else(|| FunctionError::Other {
+                    message: "value not found in array".to_string(),
+                    function: "index_of",
+                })?;
 
             Ok(Value::I64(index as i64))
         },
@@ -1381,7 +1697,10 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             let end = arg_f64(&args, 1, "range")? as i64;
             let step = args.get(2).and_then(|v| v.as_f64()).unwrap_or(1.0) as i64;
             if step == 0 {
-                return Err(FunctionError::InvalidValue { message: "step cannot be zero".to_string(), function: "range" });
+                return Err(FunctionError::InvalidValue {
+                    message: "step cannot be zero".to_string(),
+                    function: "range",
+                });
             }
             let mut result = Vec::new();
             let mut i = start;
@@ -1405,7 +1724,11 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     let start = arg_f64(&args, 1, "slice")? as i64;
                     let end = args.get(2).and_then(|v| v.as_f64()).map(|n| n as i64);
                     let len = arr.len() as i64;
-                    let start = if start < 0 { (len + start).max(0) } else { start.min(len) } as usize;
+                    let start = if start < 0 {
+                        (len + start).max(0)
+                    } else {
+                        start.min(len)
+                    } as usize;
                     let end = match end {
                         Some(e) => (if e < 0 { (len + e).max(0) } else { e.min(len) }) as usize,
                         None => arr.len(),
@@ -1421,7 +1744,11 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     let start = arg_f64(&args, 1, "slice")? as i64;
                     let end = args.get(2).and_then(|v| v.as_f64()).map(|n| n as i64);
                     let len = chars.len() as i64;
-                    let start = if start < 0 { (len + start).max(0) } else { start.min(len) } as usize;
+                    let start = if start < 0 {
+                        (len + start).max(0)
+                    } else {
+                        start.min(len)
+                    } as usize;
                     let end = match end {
                         Some(e) => (if e < 0 { (len + e).max(0) } else { e.min(len) }) as usize,
                         None => chars.len(),
@@ -1432,7 +1759,11 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                         Ok(Value::String(chars[start..end].iter().collect()))
                     }
                 }
-                v => Err(FunctionError::InvalidType { expected: "string or array", got: v.type_name(), function: "slice" }),
+                v => Err(FunctionError::InvalidType {
+                    expected: "string or array",
+                    got: v.type_name(),
+                    function: "slice",
+                }),
             }
         },
         "type" => |args| {
@@ -1440,7 +1771,9 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             Ok(Value::String(val.type_name().to_string()))
         },
         "isnone" => |args| {
-            Ok(Value::Bool(args.first().map(|v| v.is_none()).unwrap_or(true)))
+            Ok(Value::Bool(
+                args.first().map(|v| v.is_none()).unwrap_or(true),
+            ))
         },
         "isfloat" => |args| Ok(Value::Bool(matches!(args.first(), Some(Value::F64(_))))),
         "isint" => |args| Ok(Value::Bool(matches!(args.first(), Some(Value::I64(_))))),
@@ -1486,7 +1819,11 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             let negative = int_part.starts_with('-');
             let digits: String = int_part.chars().filter(|c| c.is_ascii_digit()).collect();
             let with_commas = insert_thousands_commas(&digits);
-            let result = if negative { format!("-{}", with_commas) } else { with_commas };
+            let result = if negative {
+                format!("-{}", with_commas)
+            } else {
+                with_commas
+            };
             match frac_part {
                 Some(frac) => Ok(Value::String(format!("{}.{}", result, frac))),
                 None => Ok(Value::String(result)),
@@ -1548,7 +1885,10 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 unit_idx += 1;
             }
             let sign = if n < 0.0 { "-" } else { "" };
-            Ok(Value::String(format!("{}{:.*} {}", sign, decimals, value, units[unit_idx])))
+            Ok(Value::String(format!(
+                "{}{:.*} {}",
+                sign, decimals, value, units[unit_idx]
+            )))
         },
         "if" => |args| {
             let cond = get_arg(&args, 0, "if")?.is_truthy();
@@ -1582,7 +1922,13 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
         },
         "choose" => |args| {
             let idx = arg_f64(&args, 0, "choose")? as usize;
-            args.get(idx + 1).cloned().ok_or(FunctionError::IndexOutOfBounds { index: idx, len: args.len().saturating_sub(1), function: "choose" })
+            args.get(idx + 1)
+                .cloned()
+                .ok_or(FunctionError::IndexOutOfBounds {
+                    index: idx,
+                    len: args.len().saturating_sub(1),
+                    function: "choose",
+                })
         },
         "switch" => |args| {
             let val = get_arg(&args, 0, "switch")?;
@@ -1636,26 +1982,32 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             Ok(Value::String(result))
         },
         "fancy_time" => |args| {
-            let secs = arg_f64(&args, 0, "fancy_time")?;
-            let day_seconds = arg_f64(&args, 1, "fancy_time")?;
-
+            let secs = arg_time_seconds(&args, 0, "fancy_time")?;
+            let day_seconds = arg_f64(&args, 2, "fancy_time")?;
+            let max_parts = arg_i64(&args, 3, "fancy_time")? as usize;
+            let use_day_seconds = arg_bool(&args, 4, "fancy_time")?;
             Ok(Value::String(format_custom_time(
                 secs,
                 day_seconds,
+                max_parts,
+                use_day_seconds,
             )))
         },
         "datetime" => |args| {
             let timestamp = arg_time_seconds(&args, 0, "datetime")?;
 
-            let dt = DateTime::<Utc>::from_timestamp(timestamp as i64, ((timestamp.fract().abs()) * 1_000_000_000.0) as u32)
-                .ok_or(FunctionError::ConversionFailed {
-                    from: "unix timestamp",
-                    to: "datetime",
-                    function: "datetime",
-                })?;
+            let dt = DateTime::<Utc>::from_timestamp(
+                timestamp as i64,
+                ((timestamp.fract().abs()) * 1_000_000_000.0) as u32,
+            )
+            .ok_or(FunctionError::ConversionFailed {
+                from: "unix timestamp",
+                to: "datetime",
+                function: "datetime",
+            })?;
 
             Ok(Value::String(
-                dt.format("%A, %d %B %Y, %H:%M:%S UTC").to_string()
+                dt.format("%A, %d %B %Y, %H:%M:%S UTC").to_string(),
             ))
         },
         "debug" => |args| {
@@ -1667,48 +2019,69 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             Ok(Value::String(val.type_name().to_string()))
         },
         "defined" => |args| {
-            Ok(Value::Bool(!args.first().map(|v| v.is_none()).unwrap_or(true)))
+            Ok(Value::Bool(
+                !args.first().map(|v| v.is_none()).unwrap_or(true),
+            ))
         },
-        "empty" => |args| {
-            match args.first() {
-                Some(Value::String(s)) => Ok(Value::Bool(s.is_empty())),
-                Some(Value::Array(arr)) => Ok(Value::Bool(arr.is_empty())),
-                Some(Value::None) => Ok(Value::Bool(true)),
-                _ => Ok(Value::Bool(false)),
-            }
+        "empty" => |args| match args.first() {
+            Some(Value::String(s)) => Ok(Value::Bool(s.is_empty())),
+            Some(Value::Array(arr)) => Ok(Value::Bool(arr.is_empty())),
+            Some(Value::None) => Ok(Value::Bool(true)),
+            _ => Ok(Value::Bool(false)),
         },
         "is_some" => |args| {
             //println!("In is_some(xyz): {:?}", args.first());
             match args.first() {
-                Some(v) => {
-                    Ok(Value::Bool(value_exists(v)))
-                }
-                _ => Err(FunctionError::MissingArgument { index: 0, function: "is_some" }),
+                Some(v) => Ok(Value::Bool(value_exists(v))),
+                _ => Err(FunctionError::MissingArgument {
+                    index: 0,
+                    function: "is_some",
+                }),
             }
         },
-        "hsv_to_rgb" => |args| {
-            match args.first() {
-                Some(Value::Array(hsv)) => {
-                    if hsv.len() < 3 {
-                        return Err(FunctionError::InvalidValue { message: "expected array of 3 elements [h, s, v]".to_string(), function: "hsv_to_rgb" });
-                    }
-                    let hsv_obj = HSV {
-                        h: hsv[0].as_f64().ok_or(FunctionError::ConversionFailed { from: hsv[0].type_name(), to: "f32", function: "hsv_to_rgb" })? as f32,
-                        s: hsv[1].as_f64().ok_or(FunctionError::ConversionFailed { from: hsv[1].type_name(), to: "f32", function: "hsv_to_rgb" })? as f32,
-                        v: hsv[2].as_f64().ok_or(FunctionError::ConversionFailed { from: hsv[2].type_name(), to: "f32", function: "hsv_to_rgb" })? as f32,
-                    };
-                    Ok(Value::from_vec(hsv_to_rgb(hsv_obj)))
+        "hsv_to_rgb" => |args| match args.first() {
+            Some(Value::Array(hsv)) => {
+                if hsv.len() < 3 {
+                    return Err(FunctionError::InvalidValue {
+                        message: "expected array of 3 elements [h, s, v]".to_string(),
+                        function: "hsv_to_rgb",
+                    });
                 }
-                Some(Value::F64(hue)) => {
-                    let h = *hue as f32;
-                    let s = arg_f64(&args, 1, "hsv_to_rgb")? as f32;
-                    let v = arg_f64(&args, 2, "hsv_to_rgb")? as f32;
-                    let hsv_obj = HSV { h, s, v };
-                    Ok(Value::from_vec(hsv_to_rgb(hsv_obj)))
-                }
-                Some(v) => Err(FunctionError::InvalidType { expected: "array or number", got: v.type_name(), function: "hsv_to_rgb" }),
-                None => Err(FunctionError::MissingArgument { index: 0, function: "hsv_to_rgb" }),
+                let hsv_obj = HSV {
+                    h: hsv[0].as_f64().ok_or(FunctionError::ConversionFailed {
+                        from: hsv[0].type_name(),
+                        to: "f32",
+                        function: "hsv_to_rgb",
+                    })? as f32,
+                    s: hsv[1].as_f64().ok_or(FunctionError::ConversionFailed {
+                        from: hsv[1].type_name(),
+                        to: "f32",
+                        function: "hsv_to_rgb",
+                    })? as f32,
+                    v: hsv[2].as_f64().ok_or(FunctionError::ConversionFailed {
+                        from: hsv[2].type_name(),
+                        to: "f32",
+                        function: "hsv_to_rgb",
+                    })? as f32,
+                };
+                Ok(Value::from_vec(hsv_to_rgb(hsv_obj)))
             }
+            Some(Value::F64(hue)) => {
+                let h = *hue as f32;
+                let s = arg_f64(&args, 1, "hsv_to_rgb")? as f32;
+                let v = arg_f64(&args, 2, "hsv_to_rgb")? as f32;
+                let hsv_obj = HSV { h, s, v };
+                Ok(Value::from_vec(hsv_to_rgb(hsv_obj)))
+            }
+            Some(v) => Err(FunctionError::InvalidType {
+                expected: "array or number",
+                got: v.type_name(),
+                function: "hsv_to_rgb",
+            }),
+            None => Err(FunctionError::MissingArgument {
+                index: 0,
+                function: "hsv_to_rgb",
+            }),
         },
         "random" => |args| {
             let mut rng = ThreadRng::default();
@@ -1716,9 +2089,17 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 Some(Value::Array(array)) => {
                     if array.len() == 2 {
                         match (&array[0], &array[1]) {
-                            (Value::F64(min), Value::F64(max)) => Ok(Value::F64(rng.random_range(*min..=*max))),
-                            (Value::I64(min), Value::I64(max)) => Ok(Value::I64(rng.random_range(*min..=*max))),
-                            _ => Err(FunctionError::InvalidType { expected: "matching numeric pair", got: "mixed types", function: "random" }),
+                            (Value::F64(min), Value::F64(max)) => {
+                                Ok(Value::F64(rng.random_range(*min..=*max)))
+                            }
+                            (Value::I64(min), Value::I64(max)) => {
+                                Ok(Value::I64(rng.random_range(*min..=*max)))
+                            }
+                            _ => Err(FunctionError::InvalidType {
+                                expected: "matching numeric pair",
+                                got: "mixed types",
+                                function: "random",
+                            }),
                         }
                     } else if !array.is_empty() {
                         let idx = rng.random_range(0..array.len());
@@ -1727,20 +2108,20 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                         Err(FunctionError::EmptyInput { function: "random" })
                     }
                 }
-                Some(Value::F64(first)) => {
-                    match args.get(1) {
-                        Some(Value::F64(second)) => Ok(Value::F64(rng.random_range(*first..=*second))),
-                        Some(Value::I64(second)) => Ok(Value::F64(rng.random_range(*first..=*second as f64))),
-                        _ => Ok(Value::F64(rng.random_range(0.0..=*first))),
+                Some(Value::F64(first)) => match args.get(1) {
+                    Some(Value::F64(second)) => Ok(Value::F64(rng.random_range(*first..=*second))),
+                    Some(Value::I64(second)) => {
+                        Ok(Value::F64(rng.random_range(*first..=*second as f64)))
                     }
-                }
-                Some(Value::I64(first)) => {
-                    match args.get(1) {
-                        Some(Value::F64(second)) => Ok(Value::F64(rng.random_range(*first as f64..=*second))),
-                        Some(Value::I64(second)) => Ok(Value::I64(rng.random_range(*first..=*second))),
-                        _ => Ok(Value::I64(rng.random_range(0..=*first))),
+                    _ => Ok(Value::F64(rng.random_range(0.0..=*first))),
+                },
+                Some(Value::I64(first)) => match args.get(1) {
+                    Some(Value::F64(second)) => {
+                        Ok(Value::F64(rng.random_range(*first as f64..=*second)))
                     }
-                }
+                    Some(Value::I64(second)) => Ok(Value::I64(rng.random_range(*first..=*second))),
+                    _ => Ok(Value::I64(rng.random_range(0..=*first))),
+                },
                 Some(Value::String(string)) => {
                     use std::collections::hash_map::DefaultHasher;
                     use std::hash::{Hash, Hasher};
@@ -1791,14 +2172,18 @@ pub enum ParseError {
         on_type: String,
         pos: usize,
     },
-    ErrorInFunction { name: String, args: Vec<Value>, function_error: FunctionError },
+    ErrorInFunction {
+        name: String,
+        args: Vec<Value>,
+        function_error: FunctionError,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum AnnoyingError {
     DivisionByZero { pos: usize },
     NoneValue { pos: usize },
-    OverflowWarning { pos: usize }
+    OverflowWarning { pos: usize },
 }
 
 use owo_colors::OwoColorize;
@@ -1937,7 +2322,6 @@ impl fmt::Display for AnnoyingError {
 
 type ParseResult<T> = Result<T, ParseError>;
 
-
 fn get_var(variables: &Variables, settings: &Settings, name: &str) -> Value {
     if let Some(key) = SettingKey::from_str(name) {
         return settings.read_setting(key).to_value();
@@ -2013,12 +2397,8 @@ fn add_values(a: Value, b: Value) -> Option<Value> {
         (Value::Array(x), Value::Array(y)) => {
             combine_array_values(x, y, add_values).map(Value::Array)
         }
-        (Value::Array(x), v) => {
-            map_array_values(x, v, add_values).map(Value::Array)
-        }
-        (v, Value::Array(y)) => {
-            map_array_values_right(v, y, add_values).map(Value::Array)
-        }
+        (Value::Array(x), v) => map_array_values(x, v, add_values).map(Value::Array),
+        (v, Value::Array(y)) => map_array_values_right(v, y, add_values).map(Value::Array),
         (Value::String(s), Value::None) => Some(Value::String(s)),
         (Value::None, Value::String(s)) => Some(Value::String(s)),
         _ => None,
@@ -2034,12 +2414,8 @@ fn sub_values(a: Value, b: Value) -> Option<Value> {
         (Value::Array(x), Value::Array(y)) => {
             combine_array_values(x, y, sub_values).map(Value::Array)
         }
-        (Value::Array(x), v) => {
-            map_array_values(x, v, sub_values).map(Value::Array)
-        }
-        (v, Value::Array(y)) => {
-            map_array_values_right(v, y, sub_values).map(Value::Array)
-        }
+        (Value::Array(x), v) => map_array_values(x, v, sub_values).map(Value::Array),
+        (v, Value::Array(y)) => map_array_values_right(v, y, sub_values).map(Value::Array),
         _ => None,
     }
 }
@@ -2049,9 +2425,7 @@ fn multiply_values(l: Value, r: Value) -> Option<Value> {
         (Value::Array(x), Value::Array(y)) => {
             combine_array_values(x.clone(), y.clone(), multiply_values).map(Value::Array)
         }
-        (Value::Array(x), _) => {
-            map_array_values(x.clone(), r, multiply_values).map(Value::Array)
-        }
+        (Value::Array(x), _) => map_array_values(x.clone(), r, multiply_values).map(Value::Array),
         (_, Value::Array(y)) => {
             map_array_values_right(l, y.clone(), multiply_values).map(Value::Array)
         }
@@ -2077,12 +2451,12 @@ fn get_property(value: &Value, prop: &str) -> Option<Value> {
 fn value_exists(value: &Value) -> bool {
     //println!("In xyz.is_some: {}", value);
     match value {
-        Value::None => { false }
-        Value::F64(_) => { true }
-        Value::I64(_) => { true }
-        Value::Bool(_) => { true }
-        Value::String(_) => { true }
-        Value::Array(_) => { true }
+        Value::None => false,
+        Value::F64(_) => true,
+        Value::I64(_) => true,
+        Value::Bool(_) => true,
+        Value::String(_) => true,
+        Value::Array(_) => true,
     }
 }
 fn string_property(s: &str, prop: &str) -> Option<Value> {
@@ -2293,23 +2667,6 @@ fn insert_thousands_commas(digits: &str) -> String {
         .collect()
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Span {
     pub start: usize,
@@ -2391,19 +2748,60 @@ pub enum Expr {
     None(Span),
     VarOrSetting(String, Span),
     Array(Vec<Expr>, Span),
-    Binary { left: Box<Expr>, operator: TokenKind, right: Box<Expr>, span: Span },
-    Unary { operator: TokenKind, expr: Box<Expr>, span: Span },
-    FunctionCall { name: String, args: Vec<Expr>, span: Span },
-    Index { value: Box<Expr>, index: Box<Expr>, span: Span },
-    Property { value: Box<Expr>, property: String, span: Span },
-    Ternary { cond: Box<Expr>, then_expr: Box<Expr>, else_expr: Box<Expr>, span: Span },
-    Format { value: Box<Expr>, precision: Box<Expr>, span: Span },
+    Binary {
+        left: Box<Expr>,
+        operator: TokenKind,
+        right: Box<Expr>,
+        span: Span,
+    },
+    Unary {
+        operator: TokenKind,
+        expr: Box<Expr>,
+        span: Span,
+    },
+    FunctionCall {
+        name: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
+    Index {
+        value: Box<Expr>,
+        index: Box<Expr>,
+        span: Span,
+    },
+    Property {
+        value: Box<Expr>,
+        property: String,
+        span: Span,
+    },
+    Ternary {
+        cond: Box<Expr>,
+        then_expr: Box<Expr>,
+        else_expr: Box<Expr>,
+        span: Span,
+    },
+    Format {
+        value: Box<Expr>,
+        precision: Box<Expr>,
+        span: Span,
+    },
 }
 
 fn get_span(expr: &Expr) -> Span {
     match expr {
-        Expr::Number(_, s) | Expr::String(_, s) | Expr::Bool(_, s) | Expr::None(s) | Expr::VarOrSetting(_, s) | Expr::Array(_, s) => s.clone(),
-        Expr::Binary { span, .. } | Expr::Unary { span, .. } | Expr::FunctionCall { span, .. } | Expr::Index { span, .. } | Expr::Property { span, .. } | Expr::Ternary { span, .. } | Expr::Format { span, .. } => span.clone(),
+        Expr::Number(_, s)
+        | Expr::String(_, s)
+        | Expr::Bool(_, s)
+        | Expr::None(s)
+        | Expr::VarOrSetting(_, s)
+        | Expr::Array(_, s) => s.clone(),
+        Expr::Binary { span, .. }
+        | Expr::Unary { span, .. }
+        | Expr::FunctionCall { span, .. }
+        | Expr::Index { span, .. }
+        | Expr::Property { span, .. }
+        | Expr::Ternary { span, .. }
+        | Expr::Format { span, .. } => span.clone(),
     }
 }
 
@@ -2426,7 +2824,10 @@ pub fn tokenize_expr(input: &str) -> Result<Vec<Token>, ParseError> {
                 chars.next();
                 if d == quote {
                     let end = j + 1;
-                    tokens.push(Token { kind: TokenKind::StrLit(s), span: Span { start, end } });
+                    tokens.push(Token {
+                        kind: TokenKind::StrLit(s),
+                        span: Span { start, end },
+                    });
                     break;
                 } else if d == '\\' {
                     if let Some(&(_, e)) = chars.peek() {
@@ -2463,9 +2864,12 @@ pub fn tokenize_expr(input: &str) -> Result<Vec<Token>, ParseError> {
 
         if c.is_ascii_digit()
             || (c == '.'
-            && !prev_is_operand
-            && !matches!(tokens.last().map(|t| &t.kind), Some(TokenKind::Colon))
-            && chars.clone().nth(1).map_or(false, |(_, n)| n.is_ascii_digit()))
+                && !prev_is_operand
+                && !matches!(tokens.last().map(|t| &t.kind), Some(TokenKind::Colon))
+                && chars
+                    .clone()
+                    .nth(1)
+                    .map_or(false, |(_, n)| n.is_ascii_digit()))
         {
             let start = i;
             let mut s = String::new();
@@ -2482,7 +2886,9 @@ pub fn tokenize_expr(input: &str) -> Result<Vec<Token>, ParseError> {
                             chars.next();
                             while let Some(&(_, d)) = chars.peek() {
                                 if d.is_ascii_hexdigit() || d == '_' {
-                                    if d != '_' { s.push(d); }
+                                    if d != '_' {
+                                        s.push(d);
+                                    }
                                     chars.next();
                                 } else {
                                     break;
@@ -2490,7 +2896,10 @@ pub fn tokenize_expr(input: &str) -> Result<Vec<Token>, ParseError> {
                             }
                             if let Ok(v) = i64::from_str_radix(&s[2..], 16) {
                                 let end = i + s.len();
-                                tokens.push(Token { kind: TokenKind::Number(v as f64), span: Span { start, end } });
+                                tokens.push(Token {
+                                    kind: TokenKind::Number(v as f64),
+                                    span: Span { start, end },
+                                });
                             }
                             continue;
                         }
@@ -2499,7 +2908,9 @@ pub fn tokenize_expr(input: &str) -> Result<Vec<Token>, ParseError> {
                             chars.next();
                             while let Some(&(_, d)) = chars.peek() {
                                 if d == '0' || d == '1' || d == '_' {
-                                    if d != '_' { s.push(d); }
+                                    if d != '_' {
+                                        s.push(d);
+                                    }
                                     chars.next();
                                 } else {
                                     break;
@@ -2507,7 +2918,10 @@ pub fn tokenize_expr(input: &str) -> Result<Vec<Token>, ParseError> {
                             }
                             if let Ok(v) = i64::from_str_radix(&s[2..], 2) {
                                 let end = i + s.len();
-                                tokens.push(Token { kind: TokenKind::Number(v as f64), span: Span { start, end } });
+                                tokens.push(Token {
+                                    kind: TokenKind::Number(v as f64),
+                                    span: Span { start, end },
+                                });
                             }
                             continue;
                         }
@@ -2516,7 +2930,9 @@ pub fn tokenize_expr(input: &str) -> Result<Vec<Token>, ParseError> {
                             chars.next();
                             while let Some(&(_, d)) = chars.peek() {
                                 if ('0'..='7').contains(&d) || d == '_' {
-                                    if d != '_' { s.push(d); }
+                                    if d != '_' {
+                                        s.push(d);
+                                    }
                                     chars.next();
                                 } else {
                                     break;
@@ -2524,7 +2940,10 @@ pub fn tokenize_expr(input: &str) -> Result<Vec<Token>, ParseError> {
                             }
                             if let Ok(v) = i64::from_str_radix(&s[2..], 8) {
                                 let end = i + s.len();
-                                tokens.push(Token { kind: TokenKind::Number(v as f64), span: Span { start, end } });
+                                tokens.push(Token {
+                                    kind: TokenKind::Number(v as f64),
+                                    span: Span { start, end },
+                                });
                             }
                             continue;
                         }
@@ -2538,7 +2957,9 @@ pub fn tokenize_expr(input: &str) -> Result<Vec<Token>, ParseError> {
 
             while let Some(&(_, d)) = chars.peek() {
                 if d.is_ascii_digit() || d == '_' {
-                    if d != '_' { s.push(d); }
+                    if d != '_' {
+                        s.push(d);
+                    }
                     chars.next();
                 } else if d == '.' && !has_dot && !has_exp {
                     let mut peek_chars = chars.clone();
@@ -2565,7 +2986,10 @@ pub fn tokenize_expr(input: &str) -> Result<Vec<Token>, ParseError> {
             }
             let end = i + s.len();
             if let Ok(v) = s.parse() {
-                tokens.push(Token { kind: TokenKind::Number(v), span: Span { start, end } });
+                tokens.push(Token {
+                    kind: TokenKind::Number(v),
+                    span: Span { start, end },
+                });
             }
             continue;
         }
@@ -2588,7 +3012,10 @@ pub fn tokenize_expr(input: &str) -> Result<Vec<Token>, ParseError> {
                 "none" | "null" => TokenKind::None,
                 _ => TokenKind::Ident(s),
             };
-            tokens.push(Token { kind, span: Span { start, end } });
+            tokens.push(Token {
+                kind,
+                span: Span { start, end },
+            });
             continue;
         }
 
@@ -2676,7 +3103,10 @@ pub fn tokenize_expr(input: &str) -> Result<Vec<Token>, ParseError> {
                 } else {
                     return Err(ParseError::UnexpectedToken {
                         expected: "==".to_string(),
-                        found: Token { kind: TokenKind::Ident(c.to_string()), span: Span { start, end } },
+                        found: Token {
+                            kind: TokenKind::Ident(c.to_string()),
+                            span: Span { start, end },
+                        },
                         pos: start,
                     });
                 }
@@ -2730,16 +3160,30 @@ pub fn tokenize_expr(input: &str) -> Result<Vec<Token>, ParseError> {
                 }
             }
             '^' => TokenKind::BitXor,
-            _ => return Err(ParseError::UnexpectedToken {
-                expected: "valid character".to_string(),
-                found: Token { kind: TokenKind::Ident(c.to_string()), span: Span { start, end } },
-                pos: start,
-            }),
+            _ => {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "valid character".to_string(),
+                    found: Token {
+                        kind: TokenKind::Ident(c.to_string()),
+                        span: Span { start, end },
+                    },
+                    pos: start,
+                });
+            }
         };
-        tokens.push(Token { kind, span: Span { start, end } });
+        tokens.push(Token {
+            kind,
+            span: Span { start, end },
+        });
     }
 
-    tokens.push(Token { kind: TokenKind::End, span: Span { start: input.len(), end: input.len() } });
+    tokens.push(Token {
+        kind: TokenKind::End,
+        span: Span {
+            start: input.len(),
+            end: input.len(),
+        },
+    });
     Ok(tokens)
 }
 
@@ -2754,7 +3198,10 @@ impl<'a> Parser<'a> {
     }
 
     fn peek(&self) -> Token {
-        self.tokens.get(self.pos).cloned().unwrap_or(Token { kind: TokenKind::End, span: Span { start: 0, end: 0 } })
+        self.tokens.get(self.pos).cloned().unwrap_or(Token {
+            kind: TokenKind::End,
+            span: Span { start: 0, end: 0 },
+        })
     }
     fn peek_n(&self, n: usize) -> Token {
         self.tokens.get(self.pos + n).cloned().unwrap_or(Token {
@@ -2797,7 +3244,9 @@ impl<'a> Parser<'a> {
                 TokenKind::BitOr => (6, 7),
                 TokenKind::BitXor => (7, 8),
                 TokenKind::BitAnd => (8, 9),
-                TokenKind::Eq | TokenKind::Neq | TokenKind::StrictEq | TokenKind::StrictNeq => (9, 10),
+                TokenKind::Eq | TokenKind::Neq | TokenKind::StrictEq | TokenKind::StrictNeq => {
+                    (9, 10)
+                }
                 TokenKind::Lt | TokenKind::Gt | TokenKind::Le | TokenKind::Ge => (10, 11),
                 TokenKind::Shl | TokenKind::Shr => (11, 12),
                 TokenKind::Plus | TokenKind::Minus => (12, 13),
@@ -2825,8 +3274,16 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
 
                 let no = self.parse_expr_bp(2)?;
-                let span = Span { start: left_span.start, end: get_span(&no).end };
-                left = Expr::Ternary { cond: Box::new(left), then_expr: Box::new(yes), else_expr: Box::new(no), span };
+                let span = Span {
+                    start: left_span.start,
+                    end: get_span(&no).end,
+                };
+                left = Expr::Ternary {
+                    cond: Box::new(left),
+                    then_expr: Box::new(yes),
+                    else_expr: Box::new(no),
+                    span,
+                };
                 continue;
             }
 
@@ -2853,15 +3310,26 @@ impl<'a> Parser<'a> {
                         loop {
                             args.push(self.parse_expr_bp(0)?);
                             match self.peek().kind {
-                                TokenKind::Comma => { self.pos += 1; }
+                                TokenKind::Comma => {
+                                    self.pos += 1;
+                                }
                                 TokenKind::RParen => break,
-                                _ => return Err(ParseError::UnexpectedToken { expected: "',' or ')'".to_string(), found: self.peek(), pos: self.pos }),
+                                _ => {
+                                    return Err(ParseError::UnexpectedToken {
+                                        expected: "',' or ')'".to_string(),
+                                        found: self.peek(),
+                                        pos: self.pos,
+                                    });
+                                }
                             }
                         }
                     }
                     self.pos += 1;
                 }
-                let span = Span { start: left_span.start, end: self.peek().span.start };
+                let span = Span {
+                    start: left_span.start,
+                    end: self.peek().span.start,
+                };
                 left = Expr::FunctionCall { name, args, span };
                 continue;
             }
@@ -2870,8 +3338,15 @@ impl<'a> Parser<'a> {
                 // We already checked above that it's followed by a Dot
                 self.pos += 1; // consume the Dot
                 let precision = self.parse_expr_bp(17)?;
-                let span = Span { start: left_span.start, end: get_span(&precision).end };
-                left = Expr::Format { value: Box::new(left), precision: Box::new(precision), span };
+                let span = Span {
+                    start: left_span.start,
+                    end: get_span(&precision).end,
+                };
+                left = Expr::Format {
+                    value: Box::new(left),
+                    precision: Box::new(precision),
+                    span,
+                };
                 continue;
             }
 
@@ -2888,23 +3363,48 @@ impl<'a> Parser<'a> {
                                 loop {
                                     args.push(self.parse_expr_bp(0)?);
                                     match self.peek().kind {
-                                        TokenKind::Comma => { self.pos += 1; }
+                                        TokenKind::Comma => {
+                                            self.pos += 1;
+                                        }
                                         TokenKind::RParen => break,
-                                        _ => return Err(ParseError::UnexpectedToken { expected: "',' or ')'".to_string(), found: self.peek(), pos: self.pos }),
+                                        _ => {
+                                            return Err(ParseError::UnexpectedToken {
+                                                expected: "',' or ')'".to_string(),
+                                                found: self.peek(),
+                                                pos: self.pos,
+                                            });
+                                        }
                                     }
                                 }
                             }
                             self.pos += 1;
-                            let span = Span { start: left_span.start, end: self.peek().span.start };
+                            let span = Span {
+                                start: left_span.start,
+                                end: self.peek().span.start,
+                            };
                             left = Expr::FunctionCall { name, args, span };
                         } else {
-                            let span = Span { start: left_span.start, end: prop_tok.span.end };
-                            left = Expr::Property { value: Box::new(left), property: name, span };
+                            let span = Span {
+                                start: left_span.start,
+                                end: prop_tok.span.end,
+                            };
+                            left = Expr::Property {
+                                value: Box::new(left),
+                                property: name,
+                                span,
+                            };
                         }
                     }
                     TokenKind::Number(n) => {
-                        let span = Span { start: left_span.start, end: prop_tok.span.end };
-                        left = Expr::Index { value: Box::new(left), index: Box::new(Expr::Number(n, prop_tok.span)), span };
+                        let span = Span {
+                            start: left_span.start,
+                            end: prop_tok.span.end,
+                        };
+                        left = Expr::Index {
+                            value: Box::new(left),
+                            index: Box::new(Expr::Number(n, prop_tok.span)),
+                            span,
+                        };
                     }
                     _ => {
                         return Err(ParseError::UnexpectedToken {
@@ -2916,8 +3416,16 @@ impl<'a> Parser<'a> {
                 }
             } else {
                 let right = self.parse_expr_bp(r_bp)?;
-                let span = Span { start: left_span.start, end: get_span(&right).end };
-                left = Expr::Binary { left: Box::new(left), operator: op.kind, right: Box::new(right), span };
+                let span = Span {
+                    start: left_span.start,
+                    end: get_span(&right).end,
+                };
+                left = Expr::Binary {
+                    left: Box::new(left),
+                    operator: op.kind,
+                    right: Box::new(right),
+                    span,
+                };
             }
         }
 
@@ -2938,8 +3446,15 @@ impl<'a> Parser<'a> {
 
             TokenKind::Minus | TokenKind::Not | TokenKind::BitNot => {
                 let expr = self.parse_expr_bp(15)?;
-                let span = Span { start: pos, end: get_span(&expr).end };
-                Ok(Expr::Unary { operator: tok.kind, expr: Box::new(expr), span })
+                let span = Span {
+                    start: pos,
+                    end: get_span(&expr).end,
+                };
+                Ok(Expr::Unary {
+                    operator: tok.kind,
+                    expr: Box::new(expr),
+                    span,
+                })
             }
 
             TokenKind::LBrace => {
@@ -2954,11 +3469,11 @@ impl<'a> Parser<'a> {
                                 name.push('.');
                                 name.push_str(&prop);
                                 self.pos += 1;
-                            },
+                            }
                             TokenKind::Number(n) => {
                                 name.push_str(&format!(".{}", n as i64));
                                 self.pos += 1;
-                            },
+                            }
                             _ => {
                                 return Err(ParseError::UnexpectedToken {
                                     expected: "identifier or number after '.'".to_string(),
@@ -2981,7 +3496,8 @@ impl<'a> Parser<'a> {
                     Ok(Expr::VarOrSetting(name, Span { start: pos, end }))
                 } else {
                     Err(ParseError::UnexpectedToken {
-                        expected: "identifier inside braces for variable/setting access".to_string(),
+                        expected: "identifier inside braces for variable/setting access"
+                            .to_string(),
                         found: next.clone(),
                         pos: next.span.start,
                     })
@@ -3017,15 +3533,24 @@ impl<'a> Parser<'a> {
                             self.parse_expr_bp(0)?
                         };
 
-                        if self.peek().kind == TokenKind::DotDot || self.peek().kind == TokenKind::DotDotEq {
+                        if self.peek().kind == TokenKind::DotDot
+                            || self.peek().kind == TokenKind::DotDotEq
+                        {
                             let inclusive = self.peek().kind == TokenKind::DotDotEq;
                             self.pos += 1;
 
                             let end_val = self.parse_expr_bp(0)?;
-                            let span = Span { start: get_span(&item).start, end: get_span(&end_val).end };
+                            let span = Span {
+                                start: get_span(&item).start,
+                                end: get_span(&end_val).end,
+                            };
                             items.push(Expr::Binary {
                                 left: Box::new(item),
-                                operator: if inclusive { TokenKind::DotDotEq } else { TokenKind::DotDot },
+                                operator: if inclusive {
+                                    TokenKind::DotDotEq
+                                } else {
+                                    TokenKind::DotDot
+                                },
                                 right: Box::new(end_val),
                                 span,
                             });
@@ -3034,15 +3559,27 @@ impl<'a> Parser<'a> {
                         }
 
                         match self.peek().kind {
-                            TokenKind::Comma => { self.pos += 1; }
+                            TokenKind::Comma => {
+                                self.pos += 1;
+                            }
                             TokenKind::RBracket => break,
-                            _ => return Err(ParseError::UnexpectedToken { expected: "',' or ']'".to_string(), found: self.peek(), pos: self.pos }),
+                            _ => {
+                                return Err(ParseError::UnexpectedToken {
+                                    expected: "',' or ']'".to_string(),
+                                    found: self.peek(),
+                                    pos: self.pos,
+                                });
+                            }
                         }
                     }
                 }
 
                 self.pos += 1;
-                let end = self.tokens.get(self.pos - 1).map(|t| t.span.end).unwrap_or(pos);
+                let end = self
+                    .tokens
+                    .get(self.pos - 1)
+                    .map(|t| t.span.end)
+                    .unwrap_or(pos);
                 Ok(Expr::Array(items, Span { start, end }))
             }
 
@@ -3054,15 +3591,31 @@ impl<'a> Parser<'a> {
                         loop {
                             args.push(self.parse_expr_bp(0)?);
                             match self.peek().kind {
-                                TokenKind::Comma => { self.pos += 1; }
+                                TokenKind::Comma => {
+                                    self.pos += 1;
+                                }
                                 TokenKind::RParen => break,
-                                _ => return Err(ParseError::UnexpectedToken { expected: "',' or ')'".to_string(), found: self.peek(), pos: self.pos }),
+                                _ => {
+                                    return Err(ParseError::UnexpectedToken {
+                                        expected: "',' or ')'".to_string(),
+                                        found: self.peek(),
+                                        pos: self.pos,
+                                    });
+                                }
                             }
                         }
                     }
                     self.pos += 1;
-                    let end = self.tokens.get(self.pos - 1).map(|t| t.span.end).unwrap_or(pos);
-                    Ok(Expr::FunctionCall { name: name.clone(), args, span: Span { start: pos, end } })
+                    let end = self
+                        .tokens
+                        .get(self.pos - 1)
+                        .map(|t| t.span.end)
+                        .unwrap_or(pos);
+                    Ok(Expr::FunctionCall {
+                        name: name.clone(),
+                        args,
+                        span: Span { start: pos, end },
+                    })
                 } else {
                     Err(ParseError::UnexpectedToken {
                         expected: "string literal, variable {name}, or function call".to_string(),
@@ -3081,18 +3634,28 @@ impl<'a> Parser<'a> {
     }
 }
 
-pub fn type_check_and_resolve(expr: &Expr, vars: &Variables, settings: &Settings) -> Result<Expr, ParseError> {
+pub fn type_check_and_resolve(
+    expr: &Expr,
+    vars: &Variables,
+    settings: &Settings,
+) -> Result<Expr, ParseError> {
     match expr {
         Expr::VarOrSetting(name, span) => {
             if SettingKey::from_str(name).is_some() || vars.get(name).is_some() {
                 Ok(expr.clone())
             } else {
-                Err(ParseError::UndefinedVariable { name: name.clone(), pos: span.start })
+                Err(ParseError::UndefinedVariable {
+                    name: name.clone(),
+                    pos: span.start,
+                })
             }
         }
         Expr::FunctionCall { name, args, span } => {
             if get_builtin(name).is_none() {
-                return Err(ParseError::UndefinedFunction { name: name.clone(), pos: span.start });
+                return Err(ParseError::UndefinedFunction {
+                    name: name.clone(),
+                    pos: span.start,
+                });
             }
             for arg in args {
                 type_check_and_resolve(arg, vars, settings)?;
@@ -3104,7 +3667,11 @@ pub fn type_check_and_resolve(expr: &Expr, vars: &Variables, settings: &Settings
             type_check_and_resolve(right, vars, settings)?;
             Ok(expr.clone())
         }
-        Expr::Unary { operator, expr, span } => {
+        Expr::Unary {
+            operator,
+            expr,
+            span,
+        } => {
             let resolved = type_check_and_resolve(expr, vars, settings)?;
             Ok(Expr::Unary {
                 operator: operator.clone(),
@@ -3118,13 +3685,20 @@ pub fn type_check_and_resolve(expr: &Expr, vars: &Variables, settings: &Settings
             Ok(expr.clone())
         }
         Expr::Property { value, .. } => type_check_and_resolve(value, vars, settings),
-        Expr::Ternary { cond, then_expr, else_expr, .. } => {
+        Expr::Ternary {
+            cond,
+            then_expr,
+            else_expr,
+            ..
+        } => {
             type_check_and_resolve(cond, vars, settings)?;
             type_check_and_resolve(then_expr, vars, settings)?;
             type_check_and_resolve(else_expr, vars, settings)?;
             Ok(expr.clone())
         }
-        Expr::Format { value, precision, .. } => {
+        Expr::Format {
+            value, precision, ..
+        } => {
             type_check_and_resolve(value, vars, settings)?;
             type_check_and_resolve(precision, vars, settings)?;
             Ok(expr.clone())
@@ -3135,7 +3709,7 @@ pub fn type_check_and_resolve(expr: &Expr, vars: &Variables, settings: &Settings
             }
             Ok(expr.clone())
         }
-        _ => Ok(expr.clone())
+        _ => Ok(expr.clone()),
     }
 }
 
@@ -3146,7 +3720,10 @@ pub fn eval_ast(expr: &Expr, vars: &Variables, settings: &Settings) -> Result<Va
         Expr::Bool(b, _) => Ok(Value::Bool(*b)),
         Expr::None(_) => Ok(Value::None),
         Expr::VarOrSetting(name, span) => {
-            get_var_opt(vars, settings, name).ok_or(ParseError::UndefinedVariable { name: name.clone(), pos: span.start })
+            get_var_opt(vars, settings, name).ok_or(ParseError::UndefinedVariable {
+                name: name.clone(),
+                pos: span.start,
+            })
         }
         Expr::Array(items, _) => {
             let mut vals = Vec::new();
@@ -3160,20 +3737,50 @@ pub fn eval_ast(expr: &Expr, vars: &Variables, settings: &Settings) -> Result<Va
             for arg in args {
                 arg_vals.push(eval_ast(arg, vars, settings)?);
             }
-            let function = get_builtin(name).ok_or(ParseError::UndefinedFunction { name: name.clone(), pos: span.start })?;
-            function(arg_vals.clone()).map_err(|e| ParseError::ErrorInFunction { name: name.clone(), args: arg_vals, function_error: e })
+            let function = get_builtin(name).ok_or(ParseError::UndefinedFunction {
+                name: name.clone(),
+                pos: span.start,
+            })?;
+            function(arg_vals.clone()).map_err(|e| ParseError::ErrorInFunction {
+                name: name.clone(),
+                args: arg_vals,
+                function_error: e,
+            })
         }
-        Expr::Binary { left, operator, right, span } => {
+        Expr::Binary {
+            left,
+            operator,
+            right,
+            span,
+        } => {
             let l = eval_ast(left, vars, settings)?;
             let r = eval_ast(right, vars, settings)?;
             eval_binary(l, r, operator, span.start)
         }
-        Expr::Unary { operator, expr, span } => {
+        Expr::Unary {
+            operator,
+            expr,
+            span,
+        } => {
             let val = eval_ast(expr, vars, settings)?;
             match operator {
-                TokenKind::Minus => Ok(Value::F64(-val.as_f64().ok_or(ParseError::TypeMismatch { operation: "negation".to_string(), expected: "number".to_string(), found: val.type_name().to_string(), pos: span.start })?)),
+                TokenKind::Minus => Ok(Value::F64(-val.as_f64().ok_or(
+                    ParseError::TypeMismatch {
+                        operation: "negation".to_string(),
+                        expected: "number".to_string(),
+                        found: val.type_name().to_string(),
+                        pos: span.start,
+                    },
+                )?)),
                 TokenKind::Not => Ok(Value::Bool(!val.is_truthy())),
-                TokenKind::BitNot => Ok(Value::I64(!val.as_i64().ok_or(ParseError::TypeMismatch { operation: "bitnot".to_string(), expected: "integer".to_string(), found: val.type_name().to_string(), pos: span.start })?)),
+                TokenKind::BitNot => Ok(Value::I64(!val.as_i64().ok_or(
+                    ParseError::TypeMismatch {
+                        operation: "bitnot".to_string(),
+                        expected: "integer".to_string(),
+                        found: val.type_name().to_string(),
+                        pos: span.start,
+                    },
+                )?)),
                 _ => unreachable!(),
             }
         }
@@ -3186,7 +3793,11 @@ pub fn eval_ast(expr: &Expr, vars: &Variables, settings: &Settings) -> Result<Va
                 pos: span.start,
             })
         }
-        Expr::Property { value, property, span } => {
+        Expr::Property {
+            value,
+            property,
+            span,
+        } => {
             let val = eval_ast(value, vars, settings)?;
             if let Some(idx) = Variables::component_index(property) {
                 get_index(&val, &Value::I64(idx as i64)).ok_or(ParseError::InvalidIndexAccess {
@@ -3202,7 +3813,12 @@ pub fn eval_ast(expr: &Expr, vars: &Variables, settings: &Settings) -> Result<Va
                 })
             }
         }
-        Expr::Ternary { cond, then_expr, else_expr, .. } => {
+        Expr::Ternary {
+            cond,
+            then_expr,
+            else_expr,
+            ..
+        } => {
             let cond_val = eval_ast(cond, vars, settings)?;
             if cond_val.is_truthy() {
                 eval_ast(then_expr, vars, settings)
@@ -3210,11 +3826,25 @@ pub fn eval_ast(expr: &Expr, vars: &Variables, settings: &Settings) -> Result<Va
                 eval_ast(else_expr, vars, settings)
             }
         }
-        Expr::Format { value, precision, span } => {
+        Expr::Format {
+            value,
+            precision,
+            span,
+        } => {
             let val = eval_ast(value, vars, settings)?;
             let prec_val = eval_ast(precision, vars, settings)?;
-            let n = val.as_f64().ok_or(ParseError::TypeMismatch { operation: "format".to_string(), expected: "number".to_string(), found: val.type_name().to_string(), pos: span.start })?;
-            let p = prec_val.as_f64().ok_or(ParseError::TypeMismatch { operation: "precision".to_string(), expected: "number".to_string(), found: prec_val.type_name().to_string(), pos: span.start })? as usize;
+            let n = val.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "format".to_string(),
+                expected: "number".to_string(),
+                found: val.type_name().to_string(),
+                pos: span.start,
+            })?;
+            let p = prec_val.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "precision".to_string(),
+                expected: "number".to_string(),
+                found: prec_val.type_name().to_string(),
+                pos: span.start,
+            })? as usize;
             Ok(Value::String(format!("{:.*}", p, n)))
         }
     }
@@ -3222,18 +3852,22 @@ pub fn eval_ast(expr: &Expr, vars: &Variables, settings: &Settings) -> Result<Va
 
 fn eval_binary(left: Value, right: Value, op: &TokenKind, pos: usize) -> ParseResult<Value> {
     match op {
-        TokenKind::Plus => add_values(left.clone(), right.clone()).ok_or(ParseError::TypeMismatch {
-            operation: "addition".to_string(),
-            expected: "number, string, or array".to_string(),
-            found: format!("{} + {}", left.type_name(), right.type_name()),
-            pos,
-        }),
-        TokenKind::Minus => sub_values(left.clone(), right.clone()).ok_or(ParseError::TypeMismatch {
-            operation: "subtraction".to_string(),
-            expected: "number or array".to_string(),
-            found: format!("{} - {}", left.type_name(), right.type_name()),
-            pos,
-        }),
+        TokenKind::Plus => {
+            add_values(left.clone(), right.clone()).ok_or(ParseError::TypeMismatch {
+                operation: "addition".to_string(),
+                expected: "number, string, or array".to_string(),
+                found: format!("{} + {}", left.type_name(), right.type_name()),
+                pos,
+            })
+        }
+        TokenKind::Minus => {
+            sub_values(left.clone(), right.clone()).ok_or(ParseError::TypeMismatch {
+                operation: "subtraction".to_string(),
+                expected: "number or array".to_string(),
+                found: format!("{} - {}", left.type_name(), right.type_name()),
+                pos,
+            })
+        }
         TokenKind::Star => {
             multiply_values(left.clone(), right.clone()).ok_or(ParseError::TypeMismatch {
                 operation: "multiplication".to_string(),
@@ -3243,20 +3877,54 @@ fn eval_binary(left: Value, right: Value, op: &TokenKind, pos: usize) -> ParseRe
             })
         }
         TokenKind::Slash | TokenKind::Percent => {
-            let a = left.as_f64().ok_or(ParseError::TypeMismatch { operation: "div/mod".to_string(), expected: "number".to_string(), found: left.type_name().to_string(), pos })?;
-            let b = right.as_f64().ok_or(ParseError::TypeMismatch { operation: "div/mod".to_string(), expected: "number".to_string(), found: right.type_name().to_string(), pos })?;
-            Ok(Value::F64(if matches!(op, TokenKind::Slash) { a / b } else { a % b }))
+            let a = left.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "div/mod".to_string(),
+                expected: "number".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })?;
+            let b = right.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "div/mod".to_string(),
+                expected: "number".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })?;
+            Ok(Value::F64(if matches!(op, TokenKind::Slash) {
+                a / b
+            } else {
+                a % b
+            }))
         }
         TokenKind::Power => {
-            let a = left.as_f64().ok_or(ParseError::TypeMismatch { operation: "power".to_string(), expected: "number".to_string(), found: left.type_name().to_string(), pos })?;
-            let b = right.as_f64().ok_or(ParseError::TypeMismatch { operation: "power".to_string(), expected: "number".to_string(), found: right.type_name().to_string(), pos })?;
+            let a = left.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "power".to_string(),
+                expected: "number".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })?;
+            let b = right.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "power".to_string(),
+                expected: "number".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })?;
             Ok(Value::F64(a.powf(b)))
         }
         TokenKind::Eq | TokenKind::StrictEq => Ok(Value::Bool(left == right)),
         TokenKind::Neq | TokenKind::StrictNeq => Ok(Value::Bool(left != right)),
         TokenKind::Lt | TokenKind::Gt | TokenKind::Le | TokenKind::Ge => {
-            let a = left.as_f64().ok_or(ParseError::TypeMismatch { operation: "comparison".to_string(), expected: "number".to_string(), found: left.type_name().to_string(), pos })?;
-            let b = right.as_f64().ok_or(ParseError::TypeMismatch { operation: "comparison".to_string(), expected: "number".to_string(), found: right.type_name().to_string(), pos })?;
+            let a = left.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "comparison".to_string(),
+                expected: "number".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })?;
+            let b = right.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "comparison".to_string(),
+                expected: "number".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })?;
             Ok(Value::Bool(match op {
                 TokenKind::Lt => a < b,
                 TokenKind::Gt => a > b,
@@ -3266,13 +3934,37 @@ fn eval_binary(left: Value, right: Value, op: &TokenKind, pos: usize) -> ParseRe
             }))
         }
         TokenKind::Shl | TokenKind::Shr => {
-            let a = left.as_i64().ok_or(ParseError::TypeMismatch { operation: "shift".to_string(), expected: "integer".to_string(), found: left.type_name().to_string(), pos })?;
-            let b = right.as_i64().ok_or(ParseError::TypeMismatch { operation: "shift".to_string(), expected: "integer".to_string(), found: right.type_name().to_string(), pos })?;
-            Ok(Value::I64(if matches!(op, TokenKind::Shl) { a << (b as u32) } else { a >> (b as u32) }))
+            let a = left.as_i64().ok_or(ParseError::TypeMismatch {
+                operation: "shift".to_string(),
+                expected: "integer".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })?;
+            let b = right.as_i64().ok_or(ParseError::TypeMismatch {
+                operation: "shift".to_string(),
+                expected: "integer".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })?;
+            Ok(Value::I64(if matches!(op, TokenKind::Shl) {
+                a << (b as u32)
+            } else {
+                a >> (b as u32)
+            }))
         }
         TokenKind::BitAnd | TokenKind::BitOr | TokenKind::BitXor => {
-            let a = left.as_i64().ok_or(ParseError::TypeMismatch { operation: "bitwise".to_string(), expected: "integer".to_string(), found: left.type_name().to_string(), pos })?;
-            let b = right.as_i64().ok_or(ParseError::TypeMismatch { operation: "bitwise".to_string(), expected: "integer".to_string(), found: right.type_name().to_string(), pos })?;
+            let a = left.as_i64().ok_or(ParseError::TypeMismatch {
+                operation: "bitwise".to_string(),
+                expected: "integer".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })?;
+            let b = right.as_i64().ok_or(ParseError::TypeMismatch {
+                operation: "bitwise".to_string(),
+                expected: "integer".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })?;
             Ok(Value::I64(match op {
                 TokenKind::BitAnd => a & b,
                 TokenKind::BitOr => a | b,
@@ -3284,9 +3976,19 @@ fn eval_binary(left: Value, right: Value, op: &TokenKind, pos: usize) -> ParseRe
         TokenKind::Or => Ok(Value::Bool(left.is_truthy() || right.is_truthy())),
         TokenKind::NullCoalesce => Ok(if left.is_truthy() { left } else { right }),
         TokenKind::DotDot | TokenKind::DotDotEq => {
-            let start = left.as_i64().ok_or(ParseError::TypeMismatch { operation: "range".to_string(), expected: "integer".to_string(), found: left.type_name().to_string(), pos })?;
-            let end = right.as_i64().ok_or(ParseError::TypeMismatch { operation: "range".to_string(), expected: "integer".to_string(), found: right.type_name().to_string(), pos })?;
-            let range: Box<dyn Iterator<Item=i64>> = if matches!(op, TokenKind::DotDotEq) {
+            let start = left.as_i64().ok_or(ParseError::TypeMismatch {
+                operation: "range".to_string(),
+                expected: "integer".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })?;
+            let end = right.as_i64().ok_or(ParseError::TypeMismatch {
+                operation: "range".to_string(),
+                expected: "integer".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })?;
+            let range: Box<dyn Iterator<Item = i64>> = if matches!(op, TokenKind::DotDotEq) {
                 Box::new(start..=end)
             } else {
                 Box::new(start..end)
@@ -3296,7 +3998,6 @@ fn eval_binary(left: Value, right: Value, op: &TokenKind, pos: usize) -> ParseRe
         _ => unreachable!(),
     }
 }
-
 
 pub fn eval_expr(expr: &str, vars: &Variables, settings: &Settings) -> Option<Value> {
     let hasher = &mut DefaultHasher::new();

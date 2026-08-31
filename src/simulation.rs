@@ -140,7 +140,9 @@ impl Simulation {
             &renderer.road_renderer.mesh_manager.road_edge_storage,
             camera.target,
         );
-        world.city_state.update(&world.time, &mut world.zoning, &world.buildings);
+        world
+            .city_state
+            .update(&world.time, &mut world.zoning, &world.buildings);
     }
 }
 
@@ -149,12 +151,14 @@ pub fn update_picked_pos(
     camera: &Camera,
     settings: &Settings,
     config: &SurfaceConfiguration,
-    input: &Input
+    input: &Input,
+    ui: &Ui,
 ) {
-    if !settings.show_world {
+    if !settings.show_world || ui.touch_manager.hovered().is_some() {
         terrain.last_picked = None;
         return;
     }
+
     let (view, proj, view_proj) = camera.matrices();
     let ray = WorldRay::from_mouse(
         Vec2::new(input.mouse.pos.x, input.mouse.pos.y),
@@ -162,7 +166,7 @@ pub fn update_picked_pos(
         config.height as f32,
         view,
         proj,
-        camera.eye_world()
+        camera.eye_world(),
     );
     terrain.pick_terrain_point(ray);
 }

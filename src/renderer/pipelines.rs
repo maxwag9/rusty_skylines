@@ -247,19 +247,24 @@ impl Default for PostProcessUniforms {
 }
 
 impl PostProcessUniforms {
-    pub fn new(tonemap: [f32; 5], color_grade: ColorGrade, variables: &mut Variables) -> Self {
+    pub fn new(
+        tonemap: [f32; 5],
+        color_grade: ColorGrade,
+        settings: &Settings,
+        variables: &mut Variables,
+    ) -> Self {
         let mut pp_uniforms = Self::default();
 
         pp_uniforms.tone_abcd = [tonemap[0], tonemap[1], tonemap[2], tonemap[3]];
 
-        let exposure = variables.get_or_set_f64("exposure", 0.0);
-        let brightness = variables.get_or_set_f64("brightness", 0.0);
-        let contrast = variables.get_or_set_f64("contrast", 1.0);
-        let saturation = variables.get_or_set_f64("saturation", 1.0);
+        let exposure = settings.exposure;
+        let brightness = settings.brightness;
+        let contrast = settings.contrast;
+        let saturation = settings.saturation;
 
-        let vignette_strength = variables.get_or_set_f64("vignette_strength", 0.0);
-        let vignette_radius = variables.get_or_set_f64("vignette_radius", 0.60);
-        let vignette_softness = variables.get_or_set_f64("vignette_softness", 0.70);
+        let vignette_strength = settings.vignette_strength;
+        let vignette_radius = settings.vignette_radius;
+        let vignette_softness = settings.vignette_softness;
 
         pp_uniforms.tone_e = [
             tonemap[4],

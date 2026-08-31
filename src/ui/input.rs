@@ -247,13 +247,9 @@ pub struct Input {
 
 impl Input {
     pub fn new() -> Self {
-        let keybinds = Keybinds::load(
-            data_dir("keybinds.toml"),
-            data_dir("default_keybinds.toml"),
-        );
+        let keybinds = Keybinds::load(data_dir("keybinds.toml"), data_dir("default_keybinds.toml"));
         let parsed = Self::parse_all(&keybinds);
-        let clipboard = Clipboard::new()
-            .expect("[Fatal] Clipboard creation failed in Input::new");
+        let clipboard = Clipboard::new().expect("[Fatal] Clipboard creation failed in Input::new");
 
         Self {
             physical: HashMap::new(),
@@ -311,6 +307,7 @@ impl Input {
 
     pub fn begin_frame(&mut self, now: f64) {
         self.now = now;
+
         self.scroll_up_hit = false;
         self.scroll_down_hit = false;
         self.scroll_left_hit = false;
@@ -321,8 +318,41 @@ impl Input {
         self.logical_just_pressed.clear();
 
         self.mark_changed();
-    }
 
+        let generation = self.generation;
+
+        // Snapshot all already-known action states at the beginning of the frame.
+        //
+        // This is critical for pressed_once/released:
+        // an action must remember what it was doing at the frame boundary,
+        // even if nobody queried it during the previous frame.
+        let action_keys: Vec<String> = self.action_cache.keys().cloned().collect();
+
+        for action in action_keys {
+            let down = self.action_down_raw(&action);
+
+            if let Some(entry) = self.action_cache.get_mut(&action) {
+                entry.generation = generation;
+                entry.down = down;
+                entry.pressed_once = false;
+                entry.released = false;
+            }
+        }
+
+        // Same treatment for raw combo cache.
+        let combo_keys: Vec<String> = self.combo_cache.keys().cloned().collect();
+
+        for combo in combo_keys {
+            let down = self.combo_down(&combo);
+
+            if let Some(entry) = self.combo_cache.get_mut(&combo) {
+                entry.generation = generation;
+                entry.down = down;
+                entry.pressed_once = false;
+                entry.released = false;
+            }
+        }
+    }
 
     pub fn reset_all(&mut self, now: f64) {
         self.now = now;
@@ -345,7 +375,6 @@ impl Input {
         self.logical_just_pressed.clear();
         self.repeat_timers.clear();
     }
-
 
     pub fn handle_mouse_button(&mut self, button: MouseButton, state: ElementState) {
         let down = state == ElementState::Pressed;
@@ -380,7 +409,6 @@ impl Input {
         self.add_scroll_delta(out);
         out
     }
-
 
     pub fn handle_gamepads(&mut self) {
         while let Some(Event { event, .. }) = self.gilrs.next_event() {

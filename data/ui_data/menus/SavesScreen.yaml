@@ -22,7 +22,7 @@ layers:
           - 1.0
         texture: null
         roundness: 0.0
-        border_thickness_percentage: 0.00
+        border_thickness: 0.00
         fade: 0.0
         blur: 5.5
         glow_color:
@@ -54,7 +54,7 @@ layers:
           - 1.0
         texture: null
         roundness: 0.02
-        border_thickness_percentage: 0.002
+        border_thickness: 2
         fade: 0.0
         blur: 5.5
         glow_color:
@@ -123,11 +123,7 @@ layers:
       - !Text
         id: play_save_text
         actions:
-          - on:r set(str:show_world, true)
-          - on:r set(str:editor_mode, false)
-          - on:r set(str:override_mode, false)
-          - on:r call(open_play_menus)
-          - on:r load_save(selected_save.0, false)
+          - on:r set(str:show_world, true); set(str:editor_mode, false); set(str:override_mode, false); load_save(selected_save.0, false); call(open_play_menus);
         x: 1060
         y: 950
         pt: 23.0
@@ -156,7 +152,7 @@ layers:
       - !Text
         id: create_save_text
         actions:
-          - on:press, set(str:prev_menus, active_menus); close_all_menus(); open_menu(CreateSave)
+          - on:press, set(str:prev_menus, active_menus); close_all_menus(); close_all_layers("CreateSave"); open_layer("CreateSave", "Difficulty")
         x: 440
         y: 950
         pt: 23.0

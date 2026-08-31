@@ -52,6 +52,7 @@ impl RoadEditor {
         }) else {
             return take(&mut self.pending_outside_commands);
         };
+        //println!("Well shit? {}", input.mouse.pos);
         let road_type_id = road_manager.road_types.add_road_type(&road_type);
         self.style.set_road_type_id(road_type_id);
         //self.allocator.update(&road_manager.roads);
@@ -86,7 +87,7 @@ impl RoadEditor {
         }
 
         let place_pressed = input.action_pressed_once("Place Road Node");
-
+        //println!("{}", place_pressed);
         match self.style.state().clone() {
             EditorState::Idle => {
                 self.handle_idle(storage, &snap, place_pressed, &mut output);
@@ -776,7 +777,6 @@ impl RoadEditor {
                     for lane_id in node.outgoing_lanes() {
                         let lane = storage.lane(*lane_id);
                         excluded.insert(lane.segment());
-
                     }
                 }
                 PlannedNode::New { .. } => {}
@@ -1574,14 +1574,12 @@ impl RoadEditor {
             node: b_node,
         });
 
-
         let split_node_id = storage.alloc_node_id();
 
         cmds.push(RoadCommand::AddNode {
             id: split_node_id,
             world_pos: split_pos,
         });
-
 
         let seg1_id = storage.alloc_segment_id();
         let seg2_id = storage.alloc_segment_id();
@@ -1604,14 +1602,10 @@ impl RoadEditor {
             road_type_id: old_segment.road_type_id,
         });
 
-
         for old_lane_id in old_segment.lanes() {
             let old_lane = storage.lane(*old_lane_id).clone();
 
-            let (geom1, geom2) = split_lane_geometry(
-                old_lane.geometry(),
-                split_pos,
-            );
+            let (geom1, geom2) = split_lane_geometry(old_lane.geometry(), split_pos);
 
             if old_lane.from_node() == a_id {
                 let lane1 = storage.alloc_lane_id();

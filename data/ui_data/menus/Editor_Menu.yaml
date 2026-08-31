@@ -31,10 +31,7 @@ layers:
           - 0.0
           - 0.0
         glow_misc: { }
-        misc:
-          active: true
-          touchable: true
-          editable: true
+
       - !Circle
         id: Add Circle
         actions:

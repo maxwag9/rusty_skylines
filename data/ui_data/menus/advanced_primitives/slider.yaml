@@ -18,7 +18,7 @@ elements:
       - 1.0
       - 0.2
     roundness: 0.05
-    border_thickness_percentage: 0.04
+    border_thickness: 4
 
   - !Rect
     id: slider_bar
@@ -37,7 +37,7 @@ elements:
   - !Circle
     id: Slider knob
     actions:
-      - as:[slider_bar],
+      - as:["slider_bar"],
         set(str:min_px, expr:{as.center.x} - {as.size.x} * 0.5);
         
         if({ap.7},
@@ -47,7 +47,7 @@ elements:
         );
       - on:h_enter, set(str:self.radius, expr:{self.radius}*1.1)
       - on:h_exit, set(str:self.radius, expr:{self.radius}/1.1)
-      - on:drag_move as:[slider_bar],
+      - on:drag_move as:["slider_bar"],
         set(str:min_px, expr:{as.center.x} - {as.size.x} * 0.5);
         set(str:max_px, expr:{as.center.x} + {as.size.x} * 0.5);
         set(str:clamped_mouse_x, expr:clamp({mouse_pos.x}, {min_px}, {max_px}));
@@ -95,11 +95,11 @@ elements:
 
       - "if(expr:is_some({ap.6}),
           set(str:self.template, str:{ap.1}: {expr:{ap.6}.get( index_of( {ap.5}, {{ap.0}} ) ) }  ),
-          set(str:self.template, str:{ap.1}: {{{ap.0}}});
+          set(str:self.template, str:{ap.1}: {{ap.0}});
         )"
     x: 0
     y: 0
-    pt: 12.0
+    pt: 19.0
     color:
       - 1
       - 0.0
@@ -115,7 +115,7 @@ elements:
     id: slider_min_text
     x: -110
     y: -17
-    pt: 8.0
+    pt: 10.0
     color:
       - 0.5
       - 0.5
@@ -127,7 +127,7 @@ elements:
     id: slider_max_text
     x: 110
     y: -17
-    pt: 8.0
+    pt: 10.0
     color:
       - 0.5
       - 0.5
