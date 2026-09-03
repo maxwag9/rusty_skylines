@@ -1,6 +1,8 @@
 # Rusty Skylines
 Drive the city. Build the city. Infinite scale. Tiny download. Real Sky. Procedural everything. Smart Traffic.
 
+# [→DEVLOG←](https://maxwag9.github.io/rusty_skylines_devlog/)
+
 ### You can drive a car in your city.
 
 The goal is to make **Rusty Skylines**: 
