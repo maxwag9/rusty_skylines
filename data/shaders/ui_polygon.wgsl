@@ -8,12 +8,12 @@ struct ScreenUniform {
 @group(0) @binding(0)
 var<uniform> screen: ScreenUniform;
 
-// CPU: UiVertexPoly { pos, data=[roundness_norm, polygon_index], color, misc }
 struct VertexInput {
     @location(0) pos: vec2<f32>,
-    @location(1) data: vec2<f32>,   // x = roundness_norm (0..1), y = polygon_index
+    @location(1) data: vec2<f32>,   // x = roundness_norm, y = polygon_index
     @location(2) color: vec4<f32>,
     @location(3) misc: vec4<f32>,
+    @location(4) depth: f32
 };
 
 struct VertexOutput {
@@ -21,8 +21,7 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
     @location(1) roundness_norm: f32,  // 0..1, interpolated per-fragment
     @location(2) vertex_pos: vec2<f32>,// screen-space position in pixels
-    @location(3) poly_index: f32,      // polygon index as float
-    @location(4) depth: f32
+    @location(3) poly_index: f32      // polygon index as float
 };
 
 struct PolygonInfo {

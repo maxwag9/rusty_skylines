@@ -19,13 +19,15 @@ elements:
       #- on:release button:left, print(split("{ap}", ".").0)
       #- on:release button:left, print({ap})
       - on:release button:left, set(str:{ap.1}, {ap.0});
-      - on:release button:left, ifvareq(exprvar:"{ap.1}" + "_open", bool:false, print("trying to delete them"); forin(exprvar:{ap.1}.options, del_ap(self.menu, {ap.2}, expr:"{ap.1}" + "_Option_" + {idx})))
+      - on:release button:left, ifvareq(exprvar:"{ap.1}" + "_open", bool:false, forin(exprvar:{ap.1}.options, del_ap(self.menu, {ap.2}, expr:"{ap.1}" + "_Option_" + {idx})))
+      - on:hover_enter, call(rust:play_sound, str:ButtonHover)
+      - on:press, call(rust:play_sound, str:ButtonPress)
       #- on:release button:left, print(After:, {split("{ap}", ".").0}_open)Haha you got the rabbit hide and I got the rabbit meat
-      - show_interaction(None, false)
+      - call(show_interaction, [[0.2, 0.2, 0.2, 1.0], false]))
     x: 0
     y: 0
-    w: 160
-    h: 40
+    w: 240
+    h: 60
     color:
       - 0.2
       - 0.2
@@ -43,7 +45,8 @@ elements:
     id: Option Text
     x: 0
     y: 0
-    pt: 18.0
+    pt: 16.0
+    border_width: 5.0
     color:
       - 1.0
       - 1.0

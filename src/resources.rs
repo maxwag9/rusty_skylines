@@ -9,11 +9,11 @@ use crate::renderer::render_core::{
 use crate::renderer::shadows::CSM_CASCADES;
 use crate::simulation::Simulation;
 use crate::ui::actions::CommandQueue;
+use crate::ui::parser::Value;
 use crate::ui::ui_editor::Ui;
 use crate::ui::variables::{Variables, load_colors};
 use crate::world::astronomy::Astronomy;
 use crate::world::game_state::GameState;
-use crate::world::sound::sound::Sounds;
 use crate::world::statisticals::demands::HOURS_PER_DAY;
 use crate::world::world::World;
 use gfxinfo::active_gpu;
@@ -48,7 +48,6 @@ pub struct Resources {
     pub render_core: Renderer,
 
     pub ui: Ui,
-    pub sounds: Sounds,
     pub surface: Surface<'static>,
     pub pending_fullscreen_change: Option<FullScreenMode>,
     pub pending_present_mode_change: bool,
@@ -205,37 +204,40 @@ impl Resources {
 
         let game_state = GameState::new();
         let props = Props::new(device);
-        let mut world_core = World::new(device, queue, &settings, &props);
-        let camera = &mut world_core.world_state.camera;
+        let mut world = World::new(device, queue, &settings, &props);
+        let camera = &mut world.world_state.camera;
 
         let render_core = Renderer::new(
-            device, queue, &config, size, adapter, &settings, camera, props,
+            device,
+            queue,
+            &config,
+            size.cast::<f32>(),
+            adapter,
+            &settings,
+            camera,
+            props,
         );
 
-        let mut ui_loader = Ui::new(&settings, variables, window.surface_size());
-        ui_loader
-            .variables
-            .set_bool("editor_mode", settings.editor_mode);
+        let mut ui = Ui::new(&settings, variables, window.surface_size().cast::<f32>());
+        ui.variables.set_bool("editor_mode", settings.editor_mode);
         load_colors(
             rusty_skylines_dir("colors.toml"),
             &settings,
-            &mut ui_loader.variables,
+            &mut ui.variables,
         );
-        let mut command_queues = CommandQueues::new();
-        ui_loader.set_starting_menu(&settings, &mut command_queues.ui_command_queue);
-        world_core.time.update_hour();
+        let command_queues = CommandQueues::new();
+        world.time.update_hour();
         let pending_fullscreen_change = Some(settings.fullscreen_mode);
         Self {
             surface,
             settings,
-            ui: ui_loader,
+            ui,
             window,
             command_queues,
-            world: world_core,
+            world,
             simulation: Simulation::new(),
             game_state,
             render_core,
-            sounds: Sounds::new(),
             pending_fullscreen_change,
             pending_present_mode_change: false,
         }
@@ -581,10 +583,21 @@ pub struct Uniforms {
     pub near_far_depth: [f32; 2],
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Timer {
     starts: HashMap<String, Instant>,
     checkpoints: HashMap<String, Vec<Duration>>,
+    totals_started: Instant,
+}
+
+impl Default for Timer {
+    fn default() -> Self {
+        Self {
+            starts: HashMap::new(),
+            checkpoints: HashMap::new(),
+            totals_started: Instant::now(),
+        }
+    }
 }
 
 impl Timer {
@@ -608,15 +621,54 @@ impl Timer {
     pub fn get(&self, name: &str) -> Option<&[Duration]> {
         self.checkpoints.get(name).map(Vec::as_slice)
     }
-    pub fn totals(&self) -> Vec<(String, Duration)> {
-        self.checkpoints
-            .iter()
+
+    pub fn totals(&mut self) -> Vec<(String, Duration)> {
+        // Only produce a new set of totals every 500 ms.
+        if self.totals_started.elapsed() < Duration::from_millis(500) {
+            return Vec::new();
+        }
+        //println!("YES");
+        self.totals_started = Instant::now();
+
+        let totals = self
+            .checkpoints
+            .drain()
             .map(|(name, durations)| {
-                let total = durations.iter().copied().sum();
-                (name.clone(), total)
+                if durations.is_empty() {
+                    return (name, Duration::ZERO);
+                }
+
+                let total: Duration = durations.iter().copied().sum();
+                let average = total / durations.len() as u32;
+
+                (name, average)
             })
-            .collect()
+            .collect();
+
+        totals
     }
+
+    pub fn set_totals(&mut self, variables: &mut Variables) {
+        let totals = self.totals();
+        //println!("{}", totals.len());
+        if totals.is_empty() {
+            return;
+        };
+        for (name, total) in totals.iter() {
+            variables.set_f64(name, total.as_secs_f64() * 1000.0);
+        }
+        let frametimes: Vec<Value> = totals
+            .into_iter()
+            .map(|(name, duration)| {
+                let ms = duration.as_secs_f64() * 1000.0;
+                let rounded = (ms * 10.0).round() / 10.0;
+
+                Value::Array(vec![Value::String(name), Value::F64(rounded)])
+            })
+            .collect();
+        variables.set_array("cpu_frametimes", frametimes);
+    }
+
     pub fn total(&self, name: &str) -> Duration {
         self.checkpoints
             .get(name)
@@ -627,5 +679,6 @@ impl Timer {
     pub fn clear(&mut self) {
         self.starts.clear();
         self.checkpoints.clear();
+        self.totals_started = Instant::now();
     }
 }

@@ -114,6 +114,18 @@ layers:
         scale: 1.0
 
         editing_tool: false
+      - !Text
+        id: rusty_skylines
+        actions: [ ]
+        x: 960
+        y: 100
+        pt: 200.0
+        color:
+          - 0.2
+          - 0.56
+          - 1.0
+          - 1.0
+        text: RUSTY SKYLINES
     editing_tool: false
 #  - name: test_buttons
 #    order: 3

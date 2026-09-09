@@ -7,9 +7,10 @@ use crate::ui::input::Input;
 use crate::ui::parser::Value;
 use crate::ui::variables::Variables;
 use crate::world::buildings::buildings::{
-    Building, BuildingComplaint, BuildingId, BuildingOccupancy, BuildingParams,
-    BuildingParamsLevels, BuildingStorage, BuildingUsage, Buildings, Color, DrivewayMaterial,
-    GarageParams, MiscBuildingParams, RoofMaterial, RoofType, WallMaterial,
+    Building, BuildingComplaint, BuildingDesignSource, BuildingId, BuildingOccupancy,
+    BuildingParams, BuildingParamsLevelsOld, BuildingStorage, BuildingUsage, Buildings, Color,
+    DrivewayMaterial, GarageParams, MiscBuildingParams, RevisionedSmallVec, RoofMaterial, RoofType,
+    WallMaterial,
 };
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::{Car, CarId, CarMode, CarStorage, SimTime};
@@ -39,10 +40,12 @@ use rayon::iter::ParallelIterator;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator};
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::slice::IterMut;
+use tracing::error;
 
 const SNAP_RADIUS: f64 = 20.0;
 const EPS: f64 = 0.0001;
@@ -159,13 +162,16 @@ impl District {
                 };
 
                 if let Some(building) = buildings.storage.get(lot.building_id) {
+                    let Some(zoning_type) = lot.zoning_type else {
+                        continue;
+                    };
                     if building.pos.chunk.dist2(target_chunk)
                         < ((terrain.view_radius_render as f32 * 0.8)
                             * (terrain.view_radius_render as f32 * 0.8))
                             as u64
                     {
                         let complaint = building.occupancy.complaint(
-                            lot.zoning_type,
+                            zoning_type,
                             &district.zoning_demand,
                             &job_occupancy,
                         );
@@ -186,16 +192,17 @@ impl District {
                         // }
                     };
                     let floor_area = lot.get_floor_area();
-                    let current_level = building.current_level_params();
+                    let Some(current_level) = building.current_level_params(&buildings.catalog)
+                    else {
+                        error!("Building had no Building Params");
+                        continue;
+                    };
                     let building_capacity = current_level.max_people(floor_area);
                     let full_area = floor_area * current_level.num_stories as f64;
 
-                    if matches!(
-                        lot.zoning_type,
-                        ZoningType::Commercial | ZoningType::Industrial | ZoningType::Office
-                    ) {
+                    if zoning_type.is_workplace() {
                         let tax = district.zoning_demand.corporate_tax_config.compute_lot_tax(
-                            lot.zoning_type,
+                            zoning_type,
                             full_area,
                             building.level,
                             &job_occupancy,
@@ -206,13 +213,13 @@ impl District {
                     }
 
                     let building_occ = district.zoning_demand.distribute_occupancy_to_building(
-                        lot.zoning_type,
+                        zoning_type,
                         building_capacity,
                         &job_occupancy,
                         building.occupancy.clone(),
                     );
                     let target_lv = district.zoning_demand.target_land_value(
-                        lot.zoning_type,
+                        zoning_type,
                         building.level,
                         &building_occ,
                     );
@@ -220,8 +227,7 @@ impl District {
                     // even though prestige feeds back into target_lv.
                     let new_land_value = lot.land_value + (target_lv - lot.land_value) * 0.02;
 
-                    match lot.zoning_type {
-                        ZoningType::None => {}
+                    match zoning_type {
                         ZoningType::Residential => {
                             callback.residential_capacity += building_capacity;
                             let mut aged_groups = building.occupancy.groups.clone();
@@ -272,25 +278,29 @@ impl District {
                     callback.land_value_updates.push((lot_id, new_land_value));
                     continue;
                 } else {
-                    let Some(district) = zoning
-                        .zoning_storage
-                        .districts
-                        .get(district_id as usize)
-                        .and_then(|d| d.as_ref())
-                    else {
-                        return callback;
-                    };
-                    if !rng.random_bool(
-                        district
-                            .zoning_demand
-                            .demand_from_zoning_type(lot.zoning_type)
-                            .clamp(0.0, 1.0) as f64,
-                    ) {
-                        continue;
-                    }
+                    if let Some(zoning_type) = lot.zoning_type {
+                        let Some(district) = zoning
+                            .zoning_storage
+                            .districts
+                            .get(district_id as usize)
+                            .and_then(|d| d.as_ref())
+                        else {
+                            return callback;
+                        };
+                        if !rng.random_bool(
+                            district
+                                .zoning_demand
+                                .demand_from_zoning_type(zoning_type)
+                                .clamp(0.0, 1.0) as f64,
+                        ) {
+                            continue;
+                        }
 
-                    let building = generate_building(terrain, lot);
-                    (lot.center.chunk, lot.zoning_type, building)
+                        let building = generate_building(terrain, lot);
+                        (lot.center.chunk, lot.zoning_type, building)
+                    } else {
+                        (lot.center.chunk, lot.zoning_type, None)
+                    }
                 }
             };
 
@@ -520,8 +530,10 @@ impl District {
             if !seen_segments.insert(lot.segment_id) {
                 continue;
             }
-
-            let Some(road_edges) = road_edge_storage.get(&lot.segment_id) else {
+            let Some(segment_id) = lot.segment_id else {
+                continue;
+            };
+            let Some(road_edges) = road_edge_storage.get(&segment_id) else {
                 continue;
             };
 
@@ -828,47 +840,41 @@ impl DistrictUpdateCallback {
     }
 }
 fn generate_building(terrain: &Terrain, lot: &Lot) -> Option<Building> {
-    if matches!(lot.zoning_type, ZoningType::None) {
+    let Some(zoning_type) = lot.zoning_type else {
         return None;
     };
 
-    let roof = match lot.zoning_type {
-        ZoningType::None => RoofType::Flat,
+    let roof = match zoning_type {
         ZoningType::Residential => RoofType::Triangle(30.0),
         ZoningType::Commercial => RoofType::Flat,
         ZoningType::Industrial => RoofType::Flat,
         ZoningType::Office => RoofType::Flat,
     };
-    let roof_material = match lot.zoning_type {
-        ZoningType::None => RoofMaterial::Metal,
+    let roof_material = match zoning_type {
         ZoningType::Residential => RoofMaterial::Shingles,
         ZoningType::Commercial => RoofMaterial::Metal,
         ZoningType::Industrial => RoofMaterial::Metal,
         ZoningType::Office => RoofMaterial::Shingles,
     };
-    let wall_material = match lot.zoning_type {
-        ZoningType::None => WallMaterial::default(),
+    let wall_material = match zoning_type {
         ZoningType::Residential => WallMaterial::Paint(Color([0.9f32, 0.9, 0.9, 1.0])),
         ZoningType::Commercial => WallMaterial::Paint(Color([0.9f32, 0.9, 0.9, 1.0])),
         ZoningType::Industrial => WallMaterial::Paint(Color([0.4f32, 0.4, 0.4, 1.0])),
         ZoningType::Office => WallMaterial::Paint(Color([0.9f32, 0.9, 0.9, 1.0])),
     };
-    let story_height = match lot.zoning_type {
-        ZoningType::None => 2.5,
+    let story_height = match zoning_type {
         ZoningType::Residential => 2.7,
         ZoningType::Commercial => 3.0,
         ZoningType::Industrial => 4.0,
         ZoningType::Office => 3.0,
     };
-    let num_stories = match lot.zoning_type {
-        ZoningType::None => 1,
+    let num_stories = match zoning_type {
         ZoningType::Residential => 2,
         ZoningType::Commercial => 1,
         ZoningType::Industrial => 2,
         ZoningType::Office => 3,
     };
-    let garage = match lot.zoning_type {
-        ZoningType::None => None,
+    let garage = match zoning_type {
         ZoningType::Residential => Some(GarageParams {
             story_height,
             num_stories: 1,
@@ -881,7 +887,7 @@ fn generate_building(terrain: &Terrain, lot: &Lot) -> Option<Building> {
         window_material_accent: Default::default(),
         solar_modules: false,
         antenna: false,
-        usage: BuildingUsage::from_zoning_type(&lot.zoning_type),
+        usage: BuildingUsage::from_zoning_type(zoning_type),
     };
     let level0 = BuildingParams {
         roof,
@@ -895,14 +901,14 @@ fn generate_building(terrain: &Terrain, lot: &Lot) -> Option<Building> {
         garage,
         miscellaneous: Default::default(),
     };
-    let building_params = BuildingParamsLevels {
+    let levels = RevisionedSmallVec(SmallVec::from_vec(vec![
         level0,
-        level1: Default::default(),
-        level2: Default::default(),
-        level3: Default::default(),
-        level4: Default::default(),
-        level5: Default::default(),
-    };
+        BuildingParams::default(),
+        BuildingParams::default(),
+        BuildingParams::default(),
+        BuildingParams::default(),
+        BuildingParams::default(),
+    ]));
 
     Some(Building {
         id: 631864891,
@@ -910,7 +916,7 @@ fn generate_building(terrain: &Terrain, lot: &Lot) -> Option<Building> {
         segment_id: lot.segment_id,
         lot_id: lot.id,
         level: Default::default(),
-        building_params,
+        design_source: BuildingDesignSource::BuildingParams { levels },
         edit_id: None,
         prop_instance_ids: vec![],
         occupancy: Default::default(),
@@ -925,30 +931,27 @@ struct ZoningState {
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[revisioned(revision = 1)]
 pub enum ZoningType {
-    None,
     Residential,
     Commercial,
     Industrial,
     Office,
 }
 impl ZoningType {
-    pub fn from_value(value: &Value) -> Self {
+    pub fn from_value(value: &Value) -> Option<Self> {
         match value {
             Value::String(s) => match s.to_lowercase().as_str() {
-                "none" => ZoningType::None,
-                "residential" => ZoningType::Residential,
-                "commercial" => ZoningType::Commercial,
-                "industrial" => ZoningType::Industrial,
-                "office" => ZoningType::Office,
-                _ => ZoningType::None,
+                "residential" => Some(ZoningType::Residential),
+                "commercial" => Some(ZoningType::Commercial),
+                "industrial" => Some(ZoningType::Industrial),
+                "office" => Some(ZoningType::Office),
+                _ => None,
             },
-            _ => ZoningType::None,
+            _ => None,
         }
     }
     pub fn is_workplace(&self) -> bool {
         // TODO: Too black and white for later... Later, I want buildings with multiple zoning types in percentages stored in the building (Or rather, lot layout?). So a Residential building with small shops on the ground floor can work, like in Baltimor, California. (New Hampshire)
         match self {
-            ZoningType::None => false,
             ZoningType::Residential => false,
             ZoningType::Commercial => true,
             ZoningType::Industrial => true,
@@ -959,7 +962,6 @@ impl ZoningType {
 impl Display for ZoningType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ZoningType::None => write!(f, "none"),
             ZoningType::Residential => write!(f, "residential"),
             ZoningType::Commercial => write!(f, "commercial"),
             ZoningType::Industrial => write!(f, "industrial"),
@@ -1045,13 +1047,15 @@ impl Zoning {
         if terrain.cursor.mode != CursorMode::Area && terrain.cursor.mode != CursorMode::Zoning {
             return;
         };
-        let new_district_type = terrain.cursor.zoning_type;
+        let Some(new_zone_type) = terrain.cursor.zoning_type else {
+            return;
+        };
         let active_district_id = self.zoning_state.as_ref().map(|state| state.district_id);
         for district in self.zoning_storage.iter_districts() {
             if Some(district.id) != active_district_id {
                 draw_area(
                     district.points.as_slice(),
-                    ZoningType::None,
+                    None,
                     variables,
                     gizmo,
                     Some([1.0, 1.0, 1.0, 0.2]),
@@ -1201,7 +1205,7 @@ impl Zoning {
                     variables,
                     lot_snap_point,
                     &picked,
-                    new_district_type,
+                    new_zone_type,
                     gizmo,
                 );
             }
@@ -1213,7 +1217,7 @@ impl Zoning {
                     variables,
                     &picked,
                     active_district_id,
-                    new_district_type,
+                    new_zone_type,
                     gizmo,
                 );
             }
@@ -1740,8 +1744,8 @@ impl Zoning {
                             center: Default::default(),
                             entrance: LotEntrance::new(snap_point.pos, snap_point.lateral),
                             layout: None,
-                            zoning_type: new_zoning_type.clone(),
-                            segment_id: snap_point.segment_id,
+                            zoning_type: Some(new_zoning_type),
+                            segment_id: Some(snap_point.segment_id),
                             district_id: 6378186,
                             building_id: None,
                             land_value: self.zoning_storage.sample_land_value(lot_center.chunk),
@@ -1775,7 +1779,7 @@ impl Zoning {
                         Some(new_zoning_type),
                     );
                     if input.action_pressed_once("Place Zoning Point") {
-                        lot.zoning_type = new_zoning_type;
+                        lot.zoning_type = Some(new_zoning_type);
                     }
                 }
             } else {
@@ -1825,7 +1829,7 @@ impl Zoning {
         variables: &Variables,
         picked: &PickedPoint,
         active_district_id: Option<DistrictId>,
-        new_district_type: ZoningType,
+        new_zone_type: ZoningType,
         gizmo: &mut Gizmo,
     ) {
         let mut best_place: PlacePos = PlacePos::Free(picked.pos, 0.0);
@@ -1863,13 +1867,13 @@ impl Zoning {
             }
         };
 
-        if let Some((pos, dist, _, _)) = roads
+        if let Some(projection) = roads
             .road_manager
             .roads
             .closest_lane_point_to(picked.pos)
-            .filter(|(_, dist, _, _)| *dist <= SNAP_RADIUS)
+            .filter(|projection| projection.distance <= SNAP_RADIUS)
         {
-            consider(PlacePos::RoadSnap(pos, dist));
+            consider(PlacePos::RoadSnap(projection.position, projection.distance));
         }
 
         if let Some(district_id) = active_district_id {
@@ -1968,11 +1972,11 @@ impl Zoning {
             if let Some(district) = self.zoning_storage.get_district(id) {
                 draw_area(
                     district.points.as_slice(),
-                    ZoningType::None,
+                    None,
                     variables,
                     gizmo,
                     Some([1.1, 1.1, 1.1, 1.0]),
-                    Some(new_district_type),
+                    Some(new_zone_type),
                 );
                 // for lot_id in &district.lots {
                 //     let Some(lot) = self.zoning_storage.get_lot(*lot_id) else {
@@ -2234,8 +2238,9 @@ pub struct Lot {
     pub center: WorldPos,
     pub entrance: LotEntrance, // From this point into the lot
     pub layout: Option<LotLayout>,
-    pub zoning_type: ZoningType,
-    pub segment_id: SegmentId,
+    pub zoning_type: Option<ZoningType>,
+
+    pub segment_id: Option<SegmentId>,
 
     pub district_id: DistrictId,
     pub building_id: Option<BuildingId>,
@@ -2295,7 +2300,19 @@ impl Lot {
 
         let width = max_x - min_x + 1;
         let depth = max_z - min_z + 1;
-
+        // for p in &self.bounds {
+        //     let local = origin.delta_xz(*p, right, forward);
+        //     println!("{:?} -> {:?}", p, local);
+        // }
+        //println!("{} {} {} {} {} {} {:?}", width, depth, min_x, max_x, min_z, max_x, self.bounds);
+        // if width < 8 || depth < 10 {
+        //     return LotLayout {
+        //         tiles: HashMap::new(),
+        //         driveway_entrances: Vec::new(),
+        //         unoccupied_parking_spots: Vec::new(),
+        //         occupied_parking_spots: Vec::new(),
+        //     };
+        // }
         let house_w = ((width as f32) * rng.random_range(0.38..0.52)).round() as i16;
         let house_d = ((depth as f32) * rng.random_range(0.32..0.45)).round() as i16;
 
@@ -2472,19 +2489,20 @@ impl Lot {
         let district = zoning.zoning_storage.get_district(lot.district_id)?;
 
         let tenants = building
-            .current_level_params()
-            .max_people(lot.get_floor_area());
+            .current_level_params(&buildings.catalog)?
+            .max_people(lot.get_floor_area()); // TODO: Beware the building params Optionality!
         if tenants == 0 {
             return None;
         }
 
         let age = district.zoning_demand.demography.get_random_age(rng);
 
-        let zoning_type = lot.zoning_type;
+        let Some(zoning_type) = lot.zoning_type else {
+            return None;
+        };
 
         let phase_factor = match schedule.phase {
             SchedulePhase::Night => match zoning_type {
-                ZoningType::None => 0.00001,
                 ZoningType::Residential => 0.002,
                 ZoningType::Commercial => 0.0005,
                 ZoningType::Industrial => 0.0002,
@@ -2492,7 +2510,6 @@ impl Lot {
             },
 
             SchedulePhase::CommuteToWork => match zoning_type {
-                ZoningType::None => 0.00001,
                 ZoningType::Residential => 0.020,
                 ZoningType::Commercial => 0.004,
                 ZoningType::Industrial => 0.006,
@@ -2500,7 +2517,6 @@ impl Lot {
             },
 
             SchedulePhase::Work => match zoning_type {
-                ZoningType::None => 0.00001,
                 ZoningType::Residential => 0.005,
                 ZoningType::Commercial => 0.012,
                 ZoningType::Industrial => 0.018,
@@ -2508,7 +2524,6 @@ impl Lot {
             },
 
             SchedulePhase::Lunch => match zoning_type {
-                ZoningType::None => 0.00001,
                 ZoningType::Residential => 0.006,
                 ZoningType::Commercial => 0.016,
                 ZoningType::Industrial => 0.035,
@@ -2516,7 +2531,6 @@ impl Lot {
             },
 
             SchedulePhase::CommuteHome => match zoning_type {
-                ZoningType::None => 0.00001,
                 ZoningType::Residential => 0.002,
                 ZoningType::Commercial => 0.035,
                 ZoningType::Industrial => 0.042,
@@ -2524,7 +2538,6 @@ impl Lot {
             },
 
             SchedulePhase::Evening => match zoning_type {
-                ZoningType::None => 0.00001,
                 ZoningType::Residential => 0.010,
                 ZoningType::Commercial => 0.012,
                 ZoningType::Industrial => 0.003,
@@ -2570,7 +2583,7 @@ impl Lot {
             return None;
         }
 
-        let car_trip_type = CarTripType::pick_car_trip_type(zoning_type, schedule.phase, rng);
+        let car_trip_type = CarTripType::pick_car_trip_type(Some(zoning_type), schedule.phase, rng); // TODO: I will change the zoning type naturally later.
 
         Some((lot.entrance.clone(), car_trip_type)) // TODO: huh? entrance
     }
@@ -2740,7 +2753,8 @@ impl ZoningStorage {
             if lot.layout.is_none() {
                 continue;
             };
-            if !lot.zoning_type.is_workplace() {
+            if lot.zoning_type.is_none_or(|z| !z.is_workplace()) {
+                // Right?
                 continue;
             }
 
@@ -2845,7 +2859,8 @@ impl ZoningStorage {
                 continue;
             };
 
-            if !lot.zoning_type.is_workplace() {
+            if lot.zoning_type.is_none_or(|z| !z.is_workplace()) {
+                // Right?
                 continue;
             }
 
@@ -2869,11 +2884,11 @@ impl ZoningStorage {
             let free_rate = 1.0 - fill_rate;
 
             let zoning_idx = match lot.zoning_type {
-                ZoningType::None => 0,
-                ZoningType::Residential => 4,
-                ZoningType::Commercial => 2,
-                ZoningType::Industrial => 3,
-                ZoningType::Office => 1,
+                None => 0,
+                Some(ZoningType::Residential) => 4,
+                Some(ZoningType::Commercial) => 2,
+                Some(ZoningType::Industrial) => 3,
+                Some(ZoningType::Office) => 1,
             };
             let education_bias = EDUCATION_BIASES[zoning_idx][education_idx];
             let age_bias = AGE_BIASES[zoning_idx][age_idx];
@@ -2935,7 +2950,8 @@ impl ZoningStorage {
 
         for lot_id in lot_ids_to_consider {
             let lot = self.get_lot(lot_id)?;
-            if lot.zoning_type.is_workplace() {
+            if lot.zoning_type.is_some_and(|z| z.is_workplace()) {
+                // Right?
                 continue;
             }
 
@@ -3357,20 +3373,20 @@ pub fn point_to_segment_distance(p: WorldPos, a: WorldPos, b: WorldPos) -> f32 {
 
 pub fn draw_area(
     points: &[WorldPos],
-    district_type: ZoningType,
+    zone_type: Option<ZoningType>,
     variables: &Variables,
     gizmo: &mut Gizmo,
     color_multiplier: Option<[f32; 4]>,
-    predicted_district_type: Option<ZoningType>,
+    predicted_zone_type: Option<ZoningType>,
 ) {
-    let district_type = predicted_district_type.unwrap_or(district_type);
+    let zone_type = predicted_zone_type.or(zone_type);
 
-    let key = match district_type {
-        ZoningType::None => "none_zone_color",
-        ZoningType::Residential => "residential_zone_color",
-        ZoningType::Commercial => "commercial_zone_color",
-        ZoningType::Industrial => "industrial_zone_color",
-        ZoningType::Office => "office_zone_color",
+    let key = match zone_type {
+        None => "none_zone_color",
+        Some(ZoningType::Residential) => "residential_zone_color",
+        Some(ZoningType::Commercial) => "commercial_zone_color",
+        Some(ZoningType::Industrial) => "industrial_zone_color",
+        Some(ZoningType::Office) => "office_zone_color",
     };
     //println!("{:?}", points.len());
     if let Some(mut c) = variables

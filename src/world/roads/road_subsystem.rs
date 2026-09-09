@@ -16,6 +16,7 @@ use crate::world::cars::car_subsystem::Cars;
 use crate::world::cars::parking::ParkingStorage;
 use crate::world::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
 use crate::world::roads::road_structs::RoadEditorCommand;
+use crate::world::sound::sound::Sounds;
 use crate::world::statisticals::CityState;
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
@@ -227,14 +228,20 @@ impl Roads {
         _time: &Time,
         settings: &Settings,
         gizmo: &mut Gizmo,
+        sounds: &mut Sounds,
     ) {
-        self.road_commands =
-            self.road_editor
-                .update(&mut self.road_manager, terrain, city_state, input, gizmo);
+        self.road_commands = self.road_editor.update(
+            &mut self.road_manager,
+            terrain,
+            city_state,
+            input,
+            gizmo,
+            sounds,
+        );
         self.preview_state.ingest(self.road_commands.as_slice());
         // Apply preview commands to preview_roads (world-side storage mutation only, no mesh)
         if self.preview_state.has_changed {
-            apply_road_commands_preview(terrain, self, cars, settings, gizmo);
+            apply_road_commands_preview(terrain, self, cars, settings, gizmo, sounds);
         }
 
         // Apply real commands to roads storage

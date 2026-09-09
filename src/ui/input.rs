@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
+use tracing::error;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 use winit::keyboard::{KeyCode, NamedKey, PhysicalKey};
 
@@ -404,6 +405,9 @@ impl Input {
                 out.x = p.x as f32 * 0.1;
                 out.y = p.y as f32 * 0.1;
             }
+            _ => {
+                error!("WTF?!")
+            } // TODO: Huh??
         };
 
         self.add_scroll_delta(out);

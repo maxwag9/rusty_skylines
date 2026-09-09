@@ -16,6 +16,7 @@ use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::parking::{PARK_L, PARK_W, ParkingStorage};
 use crate::world::cars::partitions::PartitionId;
 use crate::world::cars::signfinding::{SFTurnType, get_last_turn};
+use crate::world::roads::road_structs::SnapPreview;
 use crate::world::roads::roads::{RoadManager, RoadStorage};
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec3;
@@ -530,37 +531,39 @@ impl Gizmo {
         if let Some(destination) = car.mode.destination() {
             if let Some(building) = buildings.storage.get(destination.as_building_id()) {
                 if let Some(lot) = zoning.zoning_storage.get_lot(building.lot_id) {
-                    let pos = car.pos.add_vec3(Vec3::new(0.0, 5.0, 0.0));
-                    self.text(
-                        format!(
-                            "Current Turn: {:?}",
-                            get_last_turn(
-                                &sf_traj.turns,
-                                car,
-                                road_storage,
-                                building.pos,
-                                lot.segment_id
-                            )
-                        ),
-                        pos,
-                        1.0,
-                        [0.1, 0.96, 0.64, 0.9],
-                        None,
-                        false,
-                        0.0,
-                        0.0,
-                    );
-                    let pos = car.pos.add_vec3(Vec3::new(0.0, 4.0, 0.0));
-                    self.text(
-                        format!("Current Lane: {:?}", car.current_lane),
-                        pos,
-                        1.0,
-                        [0.1, 0.66, 0.64, 0.9],
-                        None,
-                        false,
-                        0.0,
-                        0.0,
-                    );
+                    if let Some(segment_id) = lot.segment_id {
+                        let pos = car.pos.add_vec3(Vec3::new(0.0, 5.0, 0.0));
+                        self.text(
+                            format!(
+                                "Current Turn: {:?}",
+                                get_last_turn(
+                                    &sf_traj.turns,
+                                    car,
+                                    road_storage,
+                                    building.pos,
+                                    segment_id
+                                )
+                            ),
+                            pos,
+                            1.0,
+                            [0.1, 0.96, 0.64, 0.9],
+                            None,
+                            false,
+                            0.0,
+                            0.0,
+                        );
+                        let pos = car.pos.add_vec3(Vec3::new(0.0, 4.0, 0.0));
+                        self.text(
+                            format!("Current Lane: {:?}", car.current_lane),
+                            pos,
+                            1.0,
+                            [0.1, 0.66, 0.64, 0.9],
+                            None,
+                            false,
+                            0.0,
+                            0.0,
+                        );
+                    }
                 };
             };
         };
@@ -766,7 +769,6 @@ impl Gizmo {
         thickness: f32,
         duration: f32,
     ) {
-        let cs = chunk_size() as f32;
         let corners = [
             center.add_vec3(Vec3::new(-half_size, 0.0, -half_size)),
             center.add_vec3(Vec3::new(half_size, 0.0, -half_size)),
@@ -2164,6 +2166,8 @@ impl Gizmo {
 
         result
     }
+
+    pub fn snap_preview(&mut self, snap_preview: &SnapPreview) {}
 }
 #[inline]
 fn flap_color(c: [f32; 4]) -> [f32; 4] {

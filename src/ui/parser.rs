@@ -30,9 +30,9 @@ impl Value {
     pub fn from_str(
         settings: &Settings,
         variables: &Variables,
+        menus: &Menus,
+        element_ctx: &ElementContext,
         s: &str,
-        with_expr: bool,
-        with_post_expr: bool,
     ) -> Self {
         //println!("Before Replace: '{}'", s);
         //let s = Self::replace_inline_variables(variables, settings, s);
@@ -57,7 +57,7 @@ impl Value {
             }
             _ => (s, None),
         };
-        let value = Self::from_str_unrounded(settings, variables, s, with_expr, with_post_expr);
+        let value = Self::from_str_unrounded(settings, variables, menus, element_ctx, s);
 
         match precision {
             Some(decimals) => Self::apply_precision(value, decimals),
@@ -67,13 +67,13 @@ impl Value {
     fn from_str_unrounded(
         settings: &Settings,
         variables: &Variables,
+        menus: &Menus,
+        element_ctx: &ElementContext,
         s: &str,
-        with_expr: bool,
-        with_post_expr: bool,
     ) -> Value {
         // Auto-detect array (bracket notation)
         if s.starts_with('[') && s.ends_with(']') {
-            if let Some(arr) = Self::parse_array(settings, variables, s) {
+            if let Some(arr) = Self::parse_array(settings, variables, menus, element_ctx, s) {
                 //println!("from_str color: {:?}", arr);
                 return Value::Array(arr);
             }
@@ -122,27 +122,34 @@ impl Value {
                     //     return s;
                     // }
                     "expr" => {
-                        let expr_value = match eval_expr(value, variables, settings) {
-                            Some(value) => match value {
-                                Value::None => Value::String(value.to_string()),
-                                _ => value,
-                            },
-                            None => Value::String(value.to_string()),
-                        };
+                        let expr_value =
+                            match eval_expr(value, variables, settings, menus, element_ctx) {
+                                Some(value) => match value {
+                                    Value::None => Value::String(value.to_string()),
+                                    _ => value,
+                                },
+                                None => Value::String(value.to_string()),
+                            };
                         //println!("expr gets: '{value}' and returns: '{:?}'", expr_value);
                         return expr_value;
                     }
                     "exprvar" => {
-                        let expr_value = match eval_expr(value, variables, settings) {
-                            Some(value) => match value {
-                                Value::None => Value::String(value.to_string()),
-                                _ => value,
-                            },
-                            None => Value::String(value.to_string()),
-                        };
+                        let expr_value =
+                            match eval_expr(value, variables, settings, menus, element_ctx) {
+                                Some(value) => match value {
+                                    Value::None => Value::String(value.to_string()),
+                                    _ => value,
+                                },
+                                None => Value::String(value.to_string()),
+                            };
                         let expr_value = expr_value.into_string();
-                        let post_value =
-                            Value::from_str(settings, variables, expr_value.as_str(), true, false);
+                        let post_value = Value::from_str(
+                            settings,
+                            variables,
+                            menus,
+                            element_ctx,
+                            expr_value.as_str(),
+                        );
                         println!(
                             "exprvar gets: '{value}' and returns: '{expr_value}', then returns '{:?}'",
                             post_value
@@ -176,13 +183,20 @@ impl Value {
                         }
                     }
                     "var" | "variable" => {
-                        return match Self::load_variable(variables, &value.to_string()) {
+                        return match Self::load_variable(
+                            variables,
+                            menus,
+                            element_ctx,
+                            &value.to_string(),
+                        ) {
                             Some(value) => value,
                             None => Value::String(format!("'{}' variable doesn't exist yet!", s)),
                         };
                     }
                     "array" | "list" | "vec" | "slice" => {
-                        if let Some(arr) = Self::parse_array(settings, variables, value) {
+                        if let Some(arr) =
+                            Self::parse_array(settings, variables, menus, element_ctx, value)
+                        {
                             return Value::Array(arr);
                         }
                     }
@@ -241,10 +255,110 @@ impl Value {
             }
         }
 
-        match Self::load_variable(variables, &s.to_string()) {
+        match Self::load_variable(variables, menus, element_ctx, &s.to_string()) {
             Some(value) => return value,
             None => {}
         };
+
+        // Auto-detect integer
+        if let Ok(i) = s.parse::<i64>() {
+            return Value::I64(i);
+        }
+
+        // Auto-detect float
+        if let Ok(f) = s.parse::<f64>() {
+            return Value::F64(f);
+        }
+
+        Value::String(s.to_string())
+    }
+    pub fn from_str_pure(s: &str) -> Self {
+        let s = s.trim();
+        if s.is_empty() {
+            return Value::String(String::new());
+        }
+        let (s, precision) = match s.rsplit_once(':') {
+            Some((base, suffix)) if suffix.starts_with('.') => {
+                let decimals = &suffix[1..];
+
+                if !decimals.is_empty() && decimals.chars().all(|c| c.is_ascii_digit()) {
+                    match decimals.parse::<usize>() {
+                        Ok(n) => (base.trim(), Some(n)),
+                        Err(_) => (s, None),
+                    }
+                } else {
+                    (s, None)
+                }
+            }
+            _ => (s, None),
+        };
+        let value = Self::from_str_unrounded_pure(s);
+
+        match precision {
+            Some(decimals) => Self::apply_precision(value, decimals),
+            None => value,
+        }
+    }
+    fn from_str_unrounded_pure(s: &str) -> Value {
+        // Auto-detect array (bracket notation)
+        if s.starts_with('[') && s.ends_with(']') {
+            if let Some(arr) = Self::parse_array_pure(s) {
+                //println!("from_str color: {:?}", arr);
+                return Value::Array(arr);
+            }
+        }
+
+        // Auto-detect string
+        if let Some(stripped) = s.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+            return Value::String(stripped.to_string());
+        }
+        // Explicit type prefix
+        if let Some((ty, value)) = s.split_once(':') {
+            if !ty.contains(char::is_whitespace) {
+                match ty.to_ascii_lowercase().as_str() {
+                    "int" => {
+                        return if let Ok(i) = value.parse::<i64>() {
+                            Value::I64(i)
+                        } else {
+                            Value::String(format!("'{}' couldn't get converted to int!", s))
+                        };
+                    }
+                    "float" | "f32" | "f64" => {
+                        return if let Ok(f) = value.parse::<f64>() {
+                            Value::F64(f)
+                        } else {
+                            Value::String(format!("'{}' couldn't get converted to float!", s))
+                        };
+                    }
+                    "bool" => {
+                        return match value.to_ascii_lowercase().as_str() {
+                            "true" | "1" | "yes" | "on" | "some" => Value::Bool(true),
+                            "false" | "0" | "no" | "off" | "none" | "null" => Value::Bool(false),
+                            _ => {
+                                Value::String(format!("'{}' couldn't get converted to boolean!", s))
+                            }
+                        };
+                    }
+                    "string" | "str" => {
+                        return Value::String(value.to_string());
+                    }
+                    "array" | "list" | "vec" | "slice" => {
+                        if let Some(arr) = Self::parse_array_pure(value) {
+                            return Value::Array(arr);
+                        }
+                    }
+                    "none" => {
+                        return Value::None;
+                    }
+                    _ => {
+                        return Value::String(format!(
+                            "'{}', the type '{}' doesn't exist. Use 'expr:xyz' for Expressions.",
+                            s, ty
+                        ));
+                    }
+                }
+            }
+        }
 
         // Auto-detect integer
         if let Ok(i) = s.parse::<i64>() {
@@ -279,8 +393,184 @@ impl Value {
     {
         Value::Array(iter.into_iter().map(|e| Value::F64(e.into())).collect())
     }
-    fn load_variable(variables: &Variables, name: &String) -> Option<Value> {
-        variables.get(name).map(|v| v.into_owned())
+    pub fn load_variable(
+        variables: &Variables,
+        menus: &Menus,
+        element_ctx: &ElementContext,
+        name: &str,
+    ) -> Option<Value> {
+        if let Some(var) = Self::get_element_property(menus, element_ctx, name) {
+            // Maybe optimize here? But low priority, because it just checks sef/as anyway.
+            return Some(var);
+        }
+        //println!("Name: '{}', Element Context: {:?}", name, element_ctx);
+        let val = variables.get(name).map(|v| v.into_owned());
+        //println!("Became: '{:?}'", val.as_ref().map(|v| v.to_string()));
+        val
+
+        // if let Some(var) = variables.get(name) {
+        //     return Some(var.into_owned())
+        // }
+        // //println!("Name: '{}', Element Context: {:?}", name, element_ctx);
+        // let val = Self::get_element_property(menus, element_ctx, name);
+        // //println!("Became: '{:?}'", val.as_ref().map(|v| v.to_string()));
+        // val
+    }
+    fn get_element_property(
+        menus: &Menus,
+        element_ctx: &ElementContext,
+        name: &str,
+    ) -> Option<Value> {
+        let mut parts = name.split('.');
+
+        let element_ref = match parts.next()? {
+            "self" => element_ctx.self_element.as_ref(),
+            "as" => element_ctx.as_element.as_ref(),
+            _ => return None,
+        }?;
+
+        let property = parts.next()?;
+
+        let first = parts.next();
+        let (component, index) = match first {
+            None => (None, None),
+            Some(part) => {
+                if let Some(index) = Variables::component_index(part) {
+                    (None, Some(index))
+                } else {
+                    let index = parts.next().and_then(Variables::component_index);
+                    (Some(part), index)
+                }
+            }
+        };
+
+        if parts.next().is_some() {
+            return None;
+        }
+
+        let value = Self::get_element_property2(menus, element_ref, property, component)?;
+
+        match index {
+            Some(index) => value.as_array().and_then(|array| array.get(index).cloned()),
+            None => Some(value),
+        }
+    }
+    fn get_element_property2(
+        menus: &Menus,
+        element_ref: &ElementRef,
+        property: &str,
+        component: Option<&str>,
+    ) -> Option<Value> {
+        match property {
+            "menu" => {
+                return Some(Value::String(element_ref.menu.clone()));
+            }
+            "layer" => {
+                return Some(Value::String(element_ref.layer.clone()));
+            }
+            "id" => {
+                return Some(Value::String(element_ref.id.clone()));
+            }
+            "kind" => {
+                return Some(Value::String(element_ref.kind.to_string()));
+            }
+            _ => {}
+        };
+
+        let Some(menu) = menus.get(&element_ref.menu) else {
+            return None;
+        };
+        let Some(layer) = menu.layers.iter().find(|l| l.name == element_ref.layer) else {
+            return None;
+        };
+        let Some(element_idx) = layer
+            .elements
+            .iter()
+            .position(|e| e.id() == element_ref.id.as_str())
+        else {
+            return None;
+        };
+        let element = &layer.elements[element_idx];
+        match property {
+            "idx" => Some(Value::I64(element_idx as i64)),
+            "active" => Some(Value::Bool(
+                menu.active && layer.active && element.is_active(),
+            )),
+            "center" => Some(Value::Array(vec![
+                Value::F64(element.center()[0] as f64),
+                Value::F64(element.center()[1] as f64),
+            ])),
+            "anchor_center" => {
+                if let Some(text) = element.as_text() {
+                    let center = anchor_to(text.anchor, text.center(), text.width, text.height);
+                    Some(Value::Array(vec![
+                        Value::F64(center[0] as f64),
+                        Value::F64(center[1] as f64),
+                    ]))
+                } else {
+                    None
+                }
+            }
+            "radius" => {
+                if let Some(radius) = element.radius() {
+                    Some(Value::F64(radius as f64))
+                } else {
+                    None
+                }
+            }
+            "pt" => {
+                if let Some(pt) = element.pt() {
+                    Some(Value::F64(pt as f64))
+                } else {
+                    None
+                }
+            }
+            "size" => {
+                let prop = element.main_size();
+                Some(prop.to_value())
+            }
+            "rect" => {
+                if let Some(prop) = element.size2() {
+                    Some(Value::from_vec(prop))
+                } else {
+                    None
+                }
+            }
+            "color_components" => {
+                let color_components = element.color_components();
+                let comps = color_components
+                    .iter()
+                    .map(|c| Value::String(c.to_string()))
+                    .collect::<Vec<Value>>();
+                Some(Value::Array(comps))
+            }
+            "color" => {
+                if let Some(component) = component {
+                    if let Some(color) = element.color(ColorComponent::from_str(component)) {
+                        Some(Value::from_vec(color))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            "text" => {
+                if let Some(text) = element.text() {
+                    Some(Value::String(text.to_string()))
+                } else {
+                    None
+                }
+            }
+            "template" => {
+                if let Some(template) = element.template() {
+                    Some(Value::String(template.to_string()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
     pub fn is_f64(&self) -> Option<Value> {
         match self {
@@ -474,7 +764,7 @@ impl Value {
     }
 
     /// Split a string by commas, respecting nested brackets and quoted strings
-    fn split_array_elements(s: &str) -> Vec<&str> {
+    pub fn split_array_elements(s: &str) -> Vec<&str> {
         let mut elements = Vec::new();
         let mut start = 0;
         let mut bracket_depth: i32 = 0i32;
@@ -514,7 +804,13 @@ impl Value {
     }
 
     /// Parse an array from a string like "[1, 2, 3]" or "1, 2, 3"
-    pub fn parse_array(settings: &Settings, variables: &Variables, s: &str) -> Option<Vec<Value>> {
+    pub fn parse_array(
+        settings: &Settings,
+        variables: &Variables,
+        menus: &Menus,
+        element_ctx: &ElementContext,
+        s: &str,
+    ) -> Option<Vec<Value>> {
         let s = s.trim();
 
         // Handle empty input
@@ -542,55 +838,96 @@ impl Value {
         for elem in elements {
             let elem = elem.trim();
             if !elem.is_empty() {
-                result.push(Value::from_str(settings, variables, elem, true, true));
+                result.push(Value::from_str(
+                    settings,
+                    variables,
+                    menus,
+                    element_ctx,
+                    elem,
+                ));
             }
         }
 
         Some(result)
     }
-    fn replace_inline_variables(variables: &Variables, settings: &Settings, s: &str) -> String {
-        let mut result = String::with_capacity(s.len());
-        let mut chars = s.chars().peekable();
+    /// Parse an array from a string like "[1, 2, 3]" or "1, 2, 3", but without dynamic variables or expressions.
+    pub fn parse_array_pure(s: &str) -> Option<Vec<Value>> {
+        let s = s.trim();
 
-        while let Some(c) = chars.next() {
-            if c == '{' {
-                let mut var_name = String::new();
-                let mut found_end = false;
+        // Handle empty input
+        if s.is_empty() {
+            return Some(Vec::new());
+        }
 
-                // Consume characters until we find the closing '}'
-                for inner_c in chars.by_ref() {
-                    if inner_c == '}' {
-                        found_end = true;
-                        break;
-                    }
-                    var_name.push(inner_c);
-                }
+        // Remove surrounding brackets if present
+        let inner = if s.starts_with('[') && s.ends_with(']') {
+            &s[1..s.len() - 1]
+        } else {
+            s
+        };
 
-                if found_end && !var_name.is_empty() {
-                    // Try to load the variable
-                    if let Some(value) = get_var_opt(variables, settings, var_name.as_str()) {
-                        // Replace with the variable's string representation
-                        result.push_str(&value.to_string());
-                    } else {
-                        // Variable doesn't exist yet, leave it exactly as it was
-                        result.push('{');
-                        result.push_str(&var_name);
-                        result.push('}');
-                    }
-                } else {
-                    // Unclosed brace or empty {}, leave as is
-                    result.push('{');
-                    result.push_str(&var_name);
-                    if found_end {
-                        result.push('}');
-                    }
-                }
-            } else {
-                result.push(c);
+        let inner = inner.trim();
+
+        if inner.is_empty() {
+            return Some(Vec::new());
+        }
+
+        // Split by commas, respecting nested brackets and quotes
+        let elements = Self::split_array_elements(inner);
+
+        let mut result = Vec::with_capacity(elements.len());
+        for elem in elements {
+            let elem = elem.trim();
+            if !elem.is_empty() {
+                result.push(Value::from_str_pure(elem));
             }
         }
-        result
+
+        Some(result)
     }
+    // fn replace_inline_variables(variables: &Variables, settings: &Settings, menus: &Menus, element_ctx: &ElementContext, s: &str) -> String {
+    //     let mut result = String::with_capacity(s.len());
+    //     let mut chars = s.chars().peekable();
+    //
+    //     while let Some(c) = chars.next() {
+    //         if c == '{' {
+    //             let mut var_name = String::new();
+    //             let mut found_end = false;
+    //
+    //             // Consume characters until we find the closing '}'
+    //             for inner_c in chars.by_ref() {
+    //                 if inner_c == '}' {
+    //                     found_end = true;
+    //                     break;
+    //                 }
+    //                 var_name.push(inner_c);
+    //             }
+    //
+    //             if found_end && !var_name.is_empty() {
+    //                 // Try to load the variable
+    //                 if let Some(value) = get_var_opt(variables, settings, var_name.as_str()) {
+    //                     // Replace with the variable's string representation
+    //                     result.push_str(&value.to_string());
+    //                 } else {
+    //                     // Variable doesn't exist yet, leave it exactly as it was
+    //                     result.push('{');
+    //                     result.push_str(&var_name);
+    //                     result.push('}');
+    //                 }
+    //             } else {
+    //                 // Unclosed brace or empty {}, leave as is
+    //                 result.push('{');
+    //                 result.push_str(&var_name);
+    //                 if found_end {
+    //                     result.push('}');
+    //                 }
+    //             }
+    //         } else {
+    //             result.push(c);
+    //         }
+    //     }
+    //     result
+    // }
 }
 impl From<f64> for Value {
     fn from(v: f64) -> Self {
@@ -1038,6 +1375,10 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             let min = arg_f64(&args, 1, "clamp")?;
             let max = arg_f64(&args, 2, "clamp")?;
             Ok(Value::F64(val.clamp(min, max)))
+        },
+        "saturate" => |args| {
+            let val = arg_f64(&args, 0, "saturate")?;
+            Ok(Value::F64(val.clamp(0.0, 1.0)))
         },
         "lerp" => |args| {
             let a = arg_f64(&args, 0, "lerp")?;
@@ -2186,6 +2527,11 @@ pub enum AnnoyingError {
     OverflowWarning { pos: usize },
 }
 
+use crate::renderer::ui_text_rendering::anchor_to;
+use crate::ui::actions::ElementContext;
+use crate::ui::ui_edit_manager::ColorComponent;
+use crate::ui::ui_editor::Menus;
+use crate::ui::ui_touch_manager::{ElementRef, Touchable};
 use owo_colors::OwoColorize;
 
 impl fmt::Display for ParseError {
@@ -2322,23 +2668,24 @@ impl fmt::Display for AnnoyingError {
 
 type ParseResult<T> = Result<T, ParseError>;
 
-fn get_var(variables: &Variables, settings: &Settings, name: &str) -> Value {
-    if let Some(key) = SettingKey::from_str(name) {
-        return settings.read_setting(key).to_value();
-    }
-    match variables.get(name) {
-        Some(v) => v.into_owned(),
-        None => Value::String(name.to_string()),
-    }
-}
-fn get_var_opt(variables: &Variables, settings: &Settings, name: &str) -> Option<Value> {
+// fn get_var(variables: &Variables, settings: &Settings, menus: &Menus, element_ctx: &ElementContext, name: &str) -> Value {
+//     if let Some(key) = SettingKey::from_str(name) {
+//         return settings.read_setting(key).to_value(); // TODO: setting.options!! Is missing, that's what I wanted to say, insecure mind, lizard brain...- HUH?!
+//     }
+//     Value::load_variable(variables, menus, element_ctx, name)
+// }
+fn get_var_opt(
+    variables: &Variables,
+    settings: &Settings,
+    menus: &Menus,
+    element_ctx: &ElementContext,
+    name: &str,
+) -> Option<Value> {
     if let Some(key) = SettingKey::from_str(name) {
         return Some(settings.read_setting(key).to_value());
     }
-    match variables.get(name) {
-        Some(v) => Some(v.into_owned()),
-        None => None,
-    }
+
+    Value::load_variable(variables, menus, element_ctx, name)
 }
 
 fn combine_array_values<F>(left: Vec<Value>, right: Vec<Value>, mut op: F) -> Option<Vec<Value>>
@@ -2575,7 +2922,13 @@ fn printed_parse_errors() -> &'static Mutex<HashSet<u64>> {
     PRINTED_PARSE_ERRORS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-pub fn resolve_template(template: &str, vars: &Variables, settings: &Settings) -> String {
+pub fn resolve_template(
+    template: &str,
+    vars: &Variables,
+    settings: &Settings,
+    menus: &Menus,
+    element_ctx: &ElementContext,
+) -> String {
     let mut out = String::new();
     let mut chars = template.char_indices().peekable();
 
@@ -2601,7 +2954,7 @@ pub fn resolve_template(template: &str, vars: &Variables, settings: &Settings) -
                 let val = if let Some(key) = SettingKey::from_str(inside) {
                     settings.read_setting(key).to_string()
                 } else {
-                    Value::from_str(settings, vars, inside.trim(), true, true).into_string()
+                    Value::from_str(settings, vars, menus, element_ctx, inside.trim()).into_string()
                 };
                 out.push_str(&val);
             } else {
@@ -3483,6 +3836,13 @@ impl<'a> Parser<'a> {
                             }
                         }
                     }
+                    // Optional inline default: {name ?? default_expr}
+                    let default = if self.peek().kind == TokenKind::NullCoalesce {
+                        self.pos += 1;
+                        Some(self.parse_expr_bp(4)?)
+                    } else {
+                        None
+                    };
 
                     if self.peek().kind != TokenKind::RBrace {
                         return Err(ParseError::UnexpectedToken {
@@ -3493,7 +3853,17 @@ impl<'a> Parser<'a> {
                     }
                     let end = self.peek().span.end;
                     self.pos += 1;
-                    Ok(Expr::VarOrSetting(name, Span { start: pos, end }))
+
+                    let var_expr = Expr::VarOrSetting(name, Span { start: pos, end });
+                    Ok(match default {
+                        Some(default_expr) => Expr::Binary {
+                            left: Box::new(var_expr),
+                            operator: TokenKind::NullCoalesce,
+                            right: Box::new(default_expr),
+                            span: Span { start: pos, end },
+                        },
+                        None => var_expr,
+                    })
                 } else {
                     Err(ParseError::UnexpectedToken {
                         expected: "identifier inside braces for variable/setting access"
@@ -3638,10 +4008,14 @@ pub fn type_check_and_resolve(
     expr: &Expr,
     vars: &Variables,
     settings: &Settings,
+    menus: &Menus,
+    element_ctx: &ElementContext,
 ) -> Result<Expr, ParseError> {
     match expr {
         Expr::VarOrSetting(name, span) => {
-            if SettingKey::from_str(name).is_some() || vars.get(name).is_some() {
+            if SettingKey::from_str(name).is_some()
+                || Value::load_variable(vars, menus, element_ctx, name).is_some()
+            {
                 Ok(expr.clone())
             } else {
                 Err(ParseError::UndefinedVariable {
@@ -3658,13 +4032,26 @@ pub fn type_check_and_resolve(
                 });
             }
             for arg in args {
-                type_check_and_resolve(arg, vars, settings)?;
+                type_check_and_resolve(arg, vars, settings, menus, element_ctx)?;
             }
             Ok(expr.clone())
         }
-        Expr::Binary { left, right, .. } => {
-            type_check_and_resolve(left, vars, settings)?;
-            type_check_and_resolve(right, vars, settings)?;
+        Expr::Binary {
+            left,
+            operator,
+            right,
+            ..
+        } => {
+            if matches!(operator, TokenKind::NullCoalesce) {
+                type_check_and_resolve(right, vars, settings, menus, element_ctx)?; // default must be valid
+                match type_check_and_resolve(left, vars, settings, menus, element_ctx) {
+                    Ok(_) | Err(ParseError::UndefinedVariable { .. }) => {}
+                    Err(e) => return Err(e), // other errors still propagate
+                }
+                return Ok(expr.clone());
+            }
+            type_check_and_resolve(left, vars, settings, menus, element_ctx)?;
+            type_check_and_resolve(right, vars, settings, menus, element_ctx)?;
             Ok(expr.clone())
         }
         Expr::Unary {
@@ -3672,7 +4059,7 @@ pub fn type_check_and_resolve(
             expr,
             span,
         } => {
-            let resolved = type_check_and_resolve(expr, vars, settings)?;
+            let resolved = type_check_and_resolve(expr, vars, settings, menus, element_ctx)?;
             Ok(Expr::Unary {
                 operator: operator.clone(),
                 expr: Box::new(resolved),
@@ -3680,32 +4067,34 @@ pub fn type_check_and_resolve(
             })
         }
         Expr::Index { value, index, .. } => {
-            type_check_and_resolve(value, vars, settings)?;
-            type_check_and_resolve(index, vars, settings)?;
+            type_check_and_resolve(value, vars, settings, menus, element_ctx)?;
+            type_check_and_resolve(index, vars, settings, menus, element_ctx)?;
             Ok(expr.clone())
         }
-        Expr::Property { value, .. } => type_check_and_resolve(value, vars, settings),
+        Expr::Property { value, .. } => {
+            type_check_and_resolve(value, vars, settings, menus, element_ctx)
+        }
         Expr::Ternary {
             cond,
             then_expr,
             else_expr,
             ..
         } => {
-            type_check_and_resolve(cond, vars, settings)?;
-            type_check_and_resolve(then_expr, vars, settings)?;
-            type_check_and_resolve(else_expr, vars, settings)?;
+            type_check_and_resolve(cond, vars, settings, menus, element_ctx)?;
+            type_check_and_resolve(then_expr, vars, settings, menus, element_ctx)?;
+            type_check_and_resolve(else_expr, vars, settings, menus, element_ctx)?;
             Ok(expr.clone())
         }
         Expr::Format {
             value, precision, ..
         } => {
-            type_check_and_resolve(value, vars, settings)?;
-            type_check_and_resolve(precision, vars, settings)?;
+            type_check_and_resolve(value, vars, settings, menus, element_ctx)?;
+            type_check_and_resolve(precision, vars, settings, menus, element_ctx)?;
             Ok(expr.clone())
         }
         Expr::Array(items, _) => {
             for item in items {
-                type_check_and_resolve(item, vars, settings)?;
+                type_check_and_resolve(item, vars, settings, menus, element_ctx)?;
             }
             Ok(expr.clone())
         }
@@ -3713,29 +4102,34 @@ pub fn type_check_and_resolve(
     }
 }
 
-pub fn eval_ast(expr: &Expr, vars: &Variables, settings: &Settings) -> Result<Value, ParseError> {
+pub fn eval_ast(
+    expr: &Expr,
+    vars: &Variables,
+    settings: &Settings,
+    menus: &Menus,
+    element_ctx: &ElementContext,
+) -> Result<Value, ParseError> {
     match expr {
         Expr::Number(n, _) => Ok(Value::F64(*n)),
         Expr::String(s, _) => Ok(Value::String(s.clone())),
         Expr::Bool(b, _) => Ok(Value::Bool(*b)),
         Expr::None(_) => Ok(Value::None),
-        Expr::VarOrSetting(name, span) => {
-            get_var_opt(vars, settings, name).ok_or(ParseError::UndefinedVariable {
+        Expr::VarOrSetting(name, span) => get_var_opt(vars, settings, menus, element_ctx, name)
+            .ok_or(ParseError::UndefinedVariable {
                 name: name.clone(),
                 pos: span.start,
-            })
-        }
+            }),
         Expr::Array(items, _) => {
             let mut vals = Vec::new();
             for item in items {
-                vals.push(eval_ast(item, vars, settings)?);
+                vals.push(eval_ast(item, vars, settings, menus, element_ctx)?);
             }
             Ok(Value::Array(vals))
         }
         Expr::FunctionCall { name, args, span } => {
             let mut arg_vals = Vec::new();
             for arg in args {
-                arg_vals.push(eval_ast(arg, vars, settings)?);
+                arg_vals.push(eval_ast(arg, vars, settings, menus, element_ctx)?);
             }
             let function = get_builtin(name).ok_or(ParseError::UndefinedFunction {
                 name: name.clone(),
@@ -3753,16 +4147,27 @@ pub fn eval_ast(expr: &Expr, vars: &Variables, settings: &Settings) -> Result<Va
             right,
             span,
         } => {
-            let l = eval_ast(left, vars, settings)?;
-            let r = eval_ast(right, vars, settings)?;
-            eval_binary(l, r, operator, span.start)
+            if matches!(operator, TokenKind::NullCoalesce) {
+                match eval_ast(left, vars, settings, menus, element_ctx) {
+                    Ok(l) if l.is_truthy() => Ok(l),
+                    Ok(_) => eval_ast(right, vars, settings, menus, element_ctx),
+                    Err(ParseError::UndefinedVariable { .. }) => {
+                        eval_ast(right, vars, settings, menus, element_ctx)
+                    }
+                    Err(e) => Err(e),
+                }
+            } else {
+                let l = eval_ast(left, vars, settings, menus, element_ctx)?;
+                let r = eval_ast(right, vars, settings, menus, element_ctx)?;
+                eval_binary(l, r, operator, span.start)
+            }
         }
         Expr::Unary {
             operator,
             expr,
             span,
         } => {
-            let val = eval_ast(expr, vars, settings)?;
+            let val = eval_ast(expr, vars, settings, menus, element_ctx)?;
             match operator {
                 TokenKind::Minus => Ok(Value::F64(-val.as_f64().ok_or(
                     ParseError::TypeMismatch {
@@ -3785,8 +4190,8 @@ pub fn eval_ast(expr: &Expr, vars: &Variables, settings: &Settings) -> Result<Va
             }
         }
         Expr::Index { value, index, span } => {
-            let val = eval_ast(value, vars, settings)?;
-            let idx = eval_ast(index, vars, settings)?;
+            let val = eval_ast(value, vars, settings, menus, element_ctx)?;
+            let idx = eval_ast(index, vars, settings, menus, element_ctx)?;
             get_index(&val, &idx).ok_or(ParseError::InvalidIndexAccess {
                 index_type: idx.type_name().to_string(),
                 on_type: val.type_name().to_string(),
@@ -3798,7 +4203,7 @@ pub fn eval_ast(expr: &Expr, vars: &Variables, settings: &Settings) -> Result<Va
             property,
             span,
         } => {
-            let val = eval_ast(value, vars, settings)?;
+            let val = eval_ast(value, vars, settings, menus, element_ctx)?;
             if let Some(idx) = Variables::component_index(property) {
                 get_index(&val, &Value::I64(idx as i64)).ok_or(ParseError::InvalidIndexAccess {
                     index_type: property.clone(),
@@ -3819,11 +4224,11 @@ pub fn eval_ast(expr: &Expr, vars: &Variables, settings: &Settings) -> Result<Va
             else_expr,
             ..
         } => {
-            let cond_val = eval_ast(cond, vars, settings)?;
+            let cond_val = eval_ast(cond, vars, settings, menus, element_ctx)?;
             if cond_val.is_truthy() {
-                eval_ast(then_expr, vars, settings)
+                eval_ast(then_expr, vars, settings, menus, element_ctx)
             } else {
-                eval_ast(else_expr, vars, settings)
+                eval_ast(else_expr, vars, settings, menus, element_ctx)
             }
         }
         Expr::Format {
@@ -3831,8 +4236,8 @@ pub fn eval_ast(expr: &Expr, vars: &Variables, settings: &Settings) -> Result<Va
             precision,
             span,
         } => {
-            let val = eval_ast(value, vars, settings)?;
-            let prec_val = eval_ast(precision, vars, settings)?;
+            let val = eval_ast(value, vars, settings, menus, element_ctx)?;
+            let prec_val = eval_ast(precision, vars, settings, menus, element_ctx)?;
             let n = val.as_f64().ok_or(ParseError::TypeMismatch {
                 operation: "format".to_string(),
                 expected: "number".to_string(),
@@ -3999,7 +4404,13 @@ fn eval_binary(left: Value, right: Value, op: &TokenKind, pos: usize) -> ParseRe
     }
 }
 
-pub fn eval_expr(expr: &str, vars: &Variables, settings: &Settings) -> Option<Value> {
+pub fn eval_expr(
+    expr: &str,
+    vars: &Variables,
+    settings: &Settings,
+    menus: &Menus,
+    element_ctx: &ElementContext,
+) -> Option<Value> {
     let hasher = &mut DefaultHasher::new();
     hasher.write(expr.as_bytes());
     let expr_hash = hasher.finish();
@@ -4037,7 +4448,7 @@ pub fn eval_expr(expr: &str, vars: &Variables, settings: &Settings) -> Option<Va
         }
     };
     //println!("AST: {ast:?}");
-    let resolved_ast = match type_check_and_resolve(&ast, vars, settings) {
+    let resolved_ast = match type_check_and_resolve(&ast, vars, settings, menus, element_ctx) {
         Ok(a) => a,
         Err(e) => {
             if settings.print_parse_errors {
@@ -4047,7 +4458,7 @@ pub fn eval_expr(expr: &str, vars: &Variables, settings: &Settings) -> Option<Va
         }
     };
     //println!("RESOLVED_AST: {resolved_ast:?}");
-    match eval_ast(&resolved_ast, vars, settings) {
+    match eval_ast(&resolved_ast, vars, settings, menus, element_ctx) {
         Ok(v) => Some(v),
         Err(e) => {
             if settings.print_parse_errors {

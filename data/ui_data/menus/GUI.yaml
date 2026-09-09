@@ -85,6 +85,9 @@ layers:
         x: 1740
         y: 1000
         pt: 18.0
+        resize_behaviour:
+          width: uniform
+          height: uniform
         color:
           - 1.0
           - 1.0
@@ -97,6 +100,9 @@ layers:
         x: 1740
         y: 1040
         pt: 18.0
+        resize_behaviour:
+          width: uniform
+          height: uniform
         color:
           - 0.27
           - 0.7
@@ -113,6 +119,9 @@ layers:
         x: 1500
         y: 1040
         pt: 18.0
+        resize_behaviour:
+          width: uniform
+          height: uniform
         color:
           - 0.0027
           - 0.005
@@ -122,9 +131,12 @@ layers:
         anchor: TopLeft
       - !Text
         id: non_educated_population_text
-        x: 1800
+        x: 1760
         y: 905
         pt: 10.0
+        resize_behaviour:
+          width: uniform
+          height: uniform
         color:
           - 1.0
           - 1.0
@@ -134,9 +146,12 @@ layers:
         anchor: TopLeft
       - !Text
         id: low_educated_population_text
-        x: 1800
+        x: 1760
         y: 915
         pt: 10.0
+        resize_behaviour:
+          width: uniform
+          height: uniform
         color:
           - 1.0
           - 1.0
@@ -146,9 +161,12 @@ layers:
         anchor: TopLeft
       - !Text
         id: medium_educated_population_text
-        x: 1800
+        x: 1760
         y: 925
         pt: 10.0
+        resize_behaviour:
+          width: uniform
+          height: uniform
         color:
           - 1.0
           - 1.0
@@ -158,9 +176,12 @@ layers:
         anchor: TopLeft
       - !Text
         id: highly_educated_population_text
-        x: 1800
+        x: 1760
         y: 935
         pt: 10.0
+        resize_behaviour:
+          width: uniform
+          height: uniform
         color:
           - 1.0
           - 1.0
@@ -170,9 +191,12 @@ layers:
         anchor: TopLeft
       - !Text
         id: housing_capacity_text
-        x: 1800
+        x: 1760
         y: 950
         pt: 10.0
+        resize_behaviour:
+          width: uniform
+          height: uniform
         color:
           - 1.0
           - 1.0
@@ -182,9 +206,12 @@ layers:
         anchor: TopLeft
       - !Text
         id: commercial_capacity_text
-        x: 1800
+        x: 1760
         y: 960
         pt: 10.0
+        resize_behaviour:
+          width: uniform
+          height: uniform
         color:
           - 1.0
           - 1.0
@@ -194,9 +221,12 @@ layers:
         anchor: TopLeft
       - !Text
         id: industrial_capacity_text
-        x: 1800
+        x: 1760
         y: 970
         pt: 10.0
+        resize_behaviour:
+          width: uniform
+          height: uniform
         color:
           - 1.0
           - 1.0
@@ -206,9 +236,12 @@ layers:
         anchor: TopLeft
       - !Text
         id: office_capacity_text
-        x: 1800
+        x: 1760
         y: 980
         pt: 10.0
+        resize_behaviour:
+          width: uniform
+          height: uniform
         color:
           - 1.0
           - 1.0
@@ -218,9 +251,12 @@ layers:
         anchor: TopLeft
       - !Text
         id: prestige_text
-        x: 1800
-        y: 995
+        x: 1760
+        y: 890
         pt: 10.0
+        resize_behaviour:
+          width: uniform
+          height: uniform
         color:
           - 1.0
           - 1.0
@@ -230,9 +266,12 @@ layers:
         anchor: TopLeft
       - !Text
         id: residential_attractiveness_text
-        x: 1680
+        x: 1600
         y: 950
         pt: 10.0
+        resize_behaviour:
+          width: uniform
+          height: uniform
         color:
           - 1.0
           - 1.0
@@ -242,9 +281,12 @@ layers:
         anchor: TopLeft
       - !Text
         id: commercial_attractiveness_text
-        x: 1680
+        x: 1600
         y: 960
         pt: 10.0
+        resize_behaviour:
+          width: uniform
+          height: uniform
         color:
           - 1.0
           - 1.0
@@ -254,9 +296,12 @@ layers:
         anchor: TopLeft
       - !Text
         id: industrial_attractiveness_text
-        x: 1680
+        x: 1600
         y: 970
         pt: 10.0
+        resize_behaviour:
+          width: uniform
+          height: uniform
         color:
           - 1.0
           - 1.0
@@ -266,9 +311,12 @@ layers:
         anchor: TopLeft
       - !Text
         id: office_attractiveness_text
-        x: 1680
+        x: 1600
         y: 980
         pt: 10.0
+        resize_behaviour:
+          width: uniform
+          height: uniform
         color:
           - 1.0
           - 1.0
@@ -372,11 +420,14 @@ layers:
         id: set_cursor_to_destruction
         actions:
           - on:r set(str:cursor_mode, str:Destruction)
-          - show_interaction([0.72, 0.72, 0.72, 1.0], true)
+          - call(show_interaction, [[0.72, 0.02, 0.02, 1.0], true]))
         x: 1560
         y: 1040
         w: 30
         h: 30
+        resize_behaviour:
+          width: uniform
+          height: uniform
         rotation: 0.0
         color:
           - 0.72
@@ -406,7 +457,7 @@ layers:
         id: set_cursor_to_road
         actions:
           - on:r set(str:cursor_mode, str:Roads)
-          - show_interaction([0.72, 0.72, 0.72, 1.0], true)
+          - call(show_interaction, [[0.02, 0.02, 0.05, 1.0], true]))
         x: 200
         y: 1040
         w: 35
@@ -437,7 +488,7 @@ layers:
         id: add_road_lane
         actions:
           - on:r inc(str:lanes, 1)
-          - show_interaction([0.72, 0.72, 0.72, 1.0], true)
+          - call(show_interaction, [[0.42, 0.82, 0.45, 1.0], true]))
         x: 250
         y: 960
         w: 30
@@ -468,7 +519,7 @@ layers:
         id: less_road_lane
         actions:
           - on:r dec(str:lanes, 1)
-          - show_interaction([0.72, 0.72, 0.72, 1.0], true)
+          - call(show_interaction, [[0.82, 0.42, 0.45, 1.0], true]))
         x: 150
         y: 1040
         w: 30
@@ -512,4 +563,142 @@ layers:
         scale: 1.5
         misc:
           touchable: false
-    editing_tool: false
+
+
+
+
+
+      - !Rect
+        id: set_road_mode_straight
+        actions:
+          - on:r set(str:road_mode, str:Straight)
+          - call(show_interaction, [[0.02, 0.02, 0.05, 1.0], true]))
+        x: 500
+        y: 760
+        w: 35
+        h: 35
+        rotation: 0.0
+        color:
+          - 0.02
+          - 0.02
+          - 0.02
+          - 0.99
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+
+      - !Rect
+        id: set_road_mode_curved
+        actions:
+          - on:r set(str:road_mode, str:Curved)
+          - call(show_interaction, [[0.02, 0.02, 0.05, 1.0], true]))
+        x: 550
+        y: 760
+        w: 35
+        h: 35
+        rotation: 0.0
+        color:
+          - 0.02
+          - 0.02
+          - 0.02
+          - 0.99
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+
+      - !Polygon
+        id: curved_road
+        x: 100
+        y: 100
+        scale: 1.0
+        vertices:
+          # Outer edge, starting at the bottom-left
+          - pos: [ 8.0, 56.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          - pos: [ 8.0, 48.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          - pos: [ 10.0, 39.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          - pos: [ 15.0, 31.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          - pos: [ 22.0, 24.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          - pos: [ 31.0, 19.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          - pos: [ 41.0, 17.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          - pos: [ 50.0, 18.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          - pos: [ 56.0, 22.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          # Outer end
+          - pos: [ 58.0, 30.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          # Inner edge, going back along the curve
+          - pos: [ 50.0, 31.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          - pos: [ 46.0, 27.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          - pos: [ 39.0, 26.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          - pos: [ 32.0, 28.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          - pos: [ 26.0, 32.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          - pos: [ 21.0, 38.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          - pos: [ 18.0, 45.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+
+          - pos: [ 18.0, 56.0 ]
+            color: [ 0.18, 0.18, 0.18, 1.0 ]
+      - !Advanced
+        name: place_building_test_button
+        ap_name: button
+        ap_vars:
+          - "str:Place Building"
+          - "40"
+          - "str:button:\"KeyF\" trigger:repeat call(rust:place_building, str:Aurora Spire)"
+        x: 960
+        y: 130
+        scale: 1.0

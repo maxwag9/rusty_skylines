@@ -1,14 +1,14 @@
 use crate::data::Cycle;
 use crate::data::FullScreenMode;
 use crate::data::SettingKey;
-use crate::helpers::paths::data_dir;
+use crate::helpers::paths::{data_dir, textures_dir};
 use crate::renderer::shadows::create_csm_shadow_texture;
 use crate::resources::{FrameTimeCheckpointType, Resources};
 use crate::simulation::update_picked_pos;
 use crate::systems::input::run_inputs;
 use crate::systems::small_systems::run_commands;
 use crate::systems::systems::{run_interpolation, run_render, run_sim, run_ticked, run_ui};
-use crate::ui::actions::{ElementContext, UiCommand};
+use crate::ui::actions::UiCommand;
 use crate::ui::parser::Value;
 use crate::ui::ui_edit_manager::CreateElementCommand;
 use crate::ui::vertex::UiButtonCircle;
@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
-use winit::cursor::CustomCursorSource;
+use winit::cursor::{Cursor, CustomCursorSource};
 use winit::event::{ElementState, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, NamedKey};
@@ -104,19 +104,25 @@ impl ApplicationHandler for App {
             "screen",
             vec![window.surface_size().width, window.surface_size().height],
         );
+        let pointer_path = textures_dir().join("pointer.png");
+        let image = image::open(&pointer_path)
+            .expect("Failed to load cursor image")
+            .to_rgba8();
 
-        let width = 32u16;
-        let height = 32u16;
+        let width = image.width() as u16;
+        let height = image.height() as u16;
 
-        let rgba: Vec<u8> = vec![64; width as usize * height as usize * 4];
+        let rgba = image.into_raw();
 
         let source = CustomCursorSource::from_rgba(
             rgba, width, height, 0, // hotspot x
             0, // hotspot y
         )
-        .unwrap();
-        let custom_cursor = event_loop.create_custom_cursor(source);
-        //window.set_cursor(Cursor::Custom(custom_cursor));
+        .expect("Invalid cursor image");
+
+        if let Ok(custom_cursor) = event_loop.create_custom_cursor(source) {
+            window.set_cursor(Cursor::Custom(custom_cursor));
+        }
 
         self.window = Some(window.clone());
         self.resources = Some(resources);
@@ -236,7 +242,7 @@ impl ApplicationHandler for App {
                     match ui.save_gui_to_file(
                         data_dir("ui_data/menus"),
                         data_dir("ui_data/menus/advanced_primitives"),
-                        resources.window.surface_size(),
+                        resources.window.surface_size().cast::<f32>(),
                     ) {
                         Ok(_) => println!("GUI layout saved"),
                         Err(e) => eprintln!("Failed to save GUI layout: {e}"),
@@ -250,7 +256,6 @@ impl ApplicationHandler for App {
                         .command_queues
                         .ui_command_queue
                         .push(UiCommand::ToggleMenu {
-                            element_ctx: ElementContext::default(),
                             menu_name: "str:Debug_Menu".to_string(),
                         });
                 }
@@ -404,42 +409,22 @@ impl ApplicationHandler for App {
 
                 update_stuff(resources);
 
-                resources
-                    .world
-                    .time
-                    .timer
-                    .checkpoint("cpu_frametime_movement", false);
+                resources.world.time.timer.checkpoint("Movement", false);
                 run_inputs(resources);
-                resources
-                    .world
-                    .time
-                    .timer
-                    .checkpoint("cpu_frametime_movement", true);
+                resources.world.time.timer.checkpoint("Movement", true);
 
                 resources.settings.new_settings_changes();
 
-                resources
-                    .world
-                    .time
-                    .timer
-                    .checkpoint("cpu_frametime_ui", false);
+                resources.world.time.timer.checkpoint("UI Logic", false);
                 run_ui(resources, event_loop);
-                resources
-                    .world
-                    .time
-                    .timer
-                    .checkpoint("cpu_frametime_ui", true);
+                resources.world.time.timer.checkpoint("UI Logic", true);
 
                 resources.settings.new_settings_changes();
                 apply_settings(resources);
 
                 run_commands(resources);
 
-                resources
-                    .world
-                    .time
-                    .timer
-                    .checkpoint("cpu_frametime_tick", false);
+                resources.world.time.timer.checkpoint("Tick", false);
                 run_ticked(resources);
 
                 resources.settings.new_settings_changes();
@@ -467,11 +452,7 @@ impl ApplicationHandler for App {
                         steps += 1;
                     }
                 }
-                resources
-                    .world
-                    .time
-                    .timer
-                    .checkpoint("cpu_frametime_tick", true);
+                resources.world.time.timer.checkpoint("Tick", true);
 
                 // Update achieved speed (windowed measurement)
                 resources.world.time.update_achieved_speed(steps);
@@ -492,44 +473,20 @@ impl ApplicationHandler for App {
                     );
                 }
 
-                resources
-                    .world
-                    .time
-                    .timer
-                    .checkpoint("cpu_frametime_sound", false);
+                resources.world.time.timer.checkpoint("Sound", false);
                 run_sounds(resources);
-                resources
-                    .world
-                    .time
-                    .timer
-                    .checkpoint("cpu_frametime_sound", true);
+                resources.world.time.timer.checkpoint("Sound", true);
 
-                resources
-                    .world
-                    .time
-                    .timer
-                    .checkpoint("cpu_frametime_cars", false);
+                resources.world.time.timer.checkpoint("Cars", false);
                 run_interpolation(resources);
-                resources
-                    .world
-                    .time
-                    .timer
-                    .checkpoint("cpu_frametime_cars", true);
+                resources.world.time.timer.checkpoint("Cars", true);
 
                 if resources.settings.render_debug_print {
                     print!("  [event] redraw: before run_render");
                 }
-                resources
-                    .world
-                    .time
-                    .timer
-                    .checkpoint("cpu_frametime_render", false);
+                resources.world.time.timer.checkpoint("Render", false);
                 run_render(resources); // use commands output
-                resources
-                    .world
-                    .time
-                    .timer
-                    .checkpoint("cpu_frametime_render", true);
+                resources.world.time.timer.checkpoint("Render", true);
                 if resources.settings.render_debug_print {
                     print!("  [event] redraw: after run_render");
                 }
@@ -563,29 +520,13 @@ impl ApplicationHandler for App {
                     "cpu_frametime",
                     resources.world.time.cpu_frame_duration.as_secs_f64() * 1000.0,
                 );
-                if resources.world.time.frame_count % 30 == 0 {
-                    let totals = resources.world.time.timer.totals();
-                    for (name, total) in totals.iter() {
-                        resources
-                            .ui
-                            .variables
-                            .set_f64(name, total.as_secs_f64() * 1000.0);
-                    }
-                    let frametimes: Vec<Value> = totals
-                        .into_iter()
-                        .map(|(name, duration)| {
-                            let ms = duration.as_secs_f64() * 1000.0;
-                            let rounded = (ms * 10.0).round() / 10.0;
+                resources
+                    .world
+                    .time
+                    .timer
+                    .set_totals(&mut resources.ui.variables);
 
-                            Value::Array(vec![Value::String(name), Value::F64(rounded)])
-                        })
-                        .collect();
-                    resources
-                        .ui
-                        .variables
-                        .set_array("cpu_frametimes", frametimes);
-                };
-                resources.world.time.timer.clear();
+                //resources.world.time.timer.clear();
                 //println!("CPU FRAMETIME: {}", resources.world.time.cpu_frame_duration.as_secs_f64() * 1000.0);
                 if target > Duration::ZERO && elapsed < target {
                     thread::sleep(target - elapsed);

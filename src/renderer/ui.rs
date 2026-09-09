@@ -7,17 +7,20 @@ use crate::renderer::ui_pipelines::{Background, UI_DEPTH_FORMAT, UiPipelines, mu
 use crate::renderer::ui_text_rendering::{Anchor, anchor_to};
 use crate::renderer::ui_upload::*;
 use crate::resources::Time;
+use crate::ui::action_parser::compile_actions;
 use crate::ui::input::Input;
 use crate::ui::ui_editor::Ui;
-use crate::ui::ui_touch_manager::UiTouchManager;
+use crate::ui::ui_touch_manager::{ElementRef, UiTouchManager};
 use crate::ui::vertex::{
     PolygonEdgeGpu, PolygonInfoGpu, RuntimeLayer, UiButtonPolygon, UiButtonText, UiElement,
     UiVertexPoly, UiVertexText,
 };
-use glyphon::{
-    Cache, FontSystem, Resolution, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer,
-    Viewport, fontdb,
-};
+use sluggrs::Color;
+// use glyphon::{
+//     Cache, FontSystem, Resolution, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer,
+//     Viewport, fontdb,
+// };
+use sluggrs::*;
 use std::fs;
 use wgpu::*;
 use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions};
@@ -158,7 +161,9 @@ impl Default for PolygonOutlineParams {
 pub struct TextParams {
     pub pos: [f32; 2],
     pub pt: f32,
+    pub border_width: f32,
     pub color: [f32; 4],
+    pub border_color: [f32; 4],
     pub id_hash: f32,
     pub misc: [f32; 4], // [active, touched_time, is_down, id_hash]
     pub text: String,
@@ -175,7 +180,9 @@ impl Default for TextParams {
         Self {
             pos: [0.0, 0.0],
             pt: 14.0,
-            color: [0.0, 0.0, 0.0, 0.0],
+            border_width: 5.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            border_color: [0.0, 0.0, 0.0, 1.0],
             id_hash: 0.0,
             misc: [0.0; 4], // active, touched_time, is_touched, id_hash
 
@@ -193,11 +200,11 @@ impl Default for TextParams {
 pub struct UiRenderer {
     pub pipelines: UiPipelines,
 
-    pub font_system: FontSystem,
-    pub swash_cache: SwashCache,
-    pub text_atlas: TextAtlas,
-    pub text_renderer: TextRenderer,
-    pub viewport: Viewport,
+    pub font_system: sluggrs::FontSystem,
+    pub swash_cache: sluggrs::SwashCache,
+    pub text_atlas: sluggrs::TextAtlas,
+    pub text_renderer: sluggrs::TextRenderer,
+    pub viewport: sluggrs::Viewport,
 
     pub device: Device,
     pub font_arc: FontArc,
@@ -208,7 +215,7 @@ impl UiRenderer {
         device: &Device,
         queue: &Queue,
         config: &SurfaceConfiguration,
-        size: PhysicalSize<u32>,
+        size: PhysicalSize<f32>,
         msaa_samples: u32,
     ) -> anyhow::Result<Self> {
         let pipelines = UiPipelines::new(device, config, msaa_samples, size)?;
@@ -216,7 +223,7 @@ impl UiRenderer {
         let mut font_system = FontSystem::new();
 
         let swash_cache = SwashCache::new();
-        let cache = Cache::new(&device);
+        let cache = Cache::new(device);
         let mut text_atlas = TextAtlas::new(device, queue, &cache, COLOR_FORMAT);
         let text_renderer = TextRenderer::new(
             &mut text_atlas,
@@ -264,9 +271,11 @@ impl UiRenderer {
                 .ok_or_else(|| anyhow::anyhow!("Failed to retrieve system font face"))?;
 
             match &face.source {
-                fontdb::Source::Binary(data) => data.as_ref().as_ref().to_vec(),
-                fontdb::Source::File(path) => fs::read(path)?,
-                fontdb::Source::SharedFile(path, _) => fs::read(path)?,
+                sluggrs::cosmic_text::fontdb::Source::Binary(data) => {
+                    data.as_ref().as_ref().to_vec()
+                }
+                sluggrs::cosmic_text::fontdb::Source::File(path) => fs::read(path)?,
+                sluggrs::cosmic_text::fontdb::Source::SharedFile(path, _) => fs::read(path)?,
             }
         } else {
             let dir = data_dir("ui_data/ttf");
@@ -302,11 +311,11 @@ impl UiRenderer {
 
     pub fn update(
         &mut self,
-        ui_loader: &mut Ui,
+        ui: &mut Ui,
         time: &Time,
         input_state: &Input,
         queue: &Queue,
-        window_size: PhysicalSize<u32>,
+        window_size: PhysicalSize<f32>,
         settings: &Settings,
     ) {
         let new_uniform = ScreenUniform {
@@ -335,8 +344,8 @@ impl UiRenderer {
             0,
             bytemuck::bytes_of(&bg_uniform),
         );
-
-        for (menu_name, menu) in ui_loader.menus.iter_mut().filter(|(_, menu)| menu.active) {
+        let mut layer_actions_to_update = vec![];
+        for (menu_name, menu) in ui.menus.iter_mut().filter(|(_, menu)| menu.active) {
             let dirty_indices: Vec<usize> = menu
                 .layers
                 .iter()
@@ -350,25 +359,58 @@ impl UiRenderer {
             for idx in dirty_indices {
                 ap_layers.append(&mut menu.rebuild_layer_cache_index(
                     settings,
-                    &ui_loader.variables,
+                    &ui.variables,
                     &mut self.font_system,
                     idx,
-                    &ui_loader.touch_manager.runtimes,
-                    &ui_loader.aps,
+                    &ui.touch_manager.runtimes,
+                    &ui.aps,
                     window_size,
                 ));
 
                 let layer = &mut menu.layers[idx];
-                self.upload_layer(queue, layer, &ui_loader.touch_manager, time, menu_name);
+                self.upload_layer(queue, layer, &ui.touch_manager, time, menu_name);
             }
 
             for ap_layer in ap_layers {
                 menu.layers.push(ap_layer);
+                layer_actions_to_update.push((menu_name.clone(), menu.layers.len() - 1));
                 let Some(layer) = menu.layers.last_mut() else {
                     continue;
                 };
-                self.upload_layer(queue, layer, &ui_loader.touch_manager, time, menu_name);
+                self.upload_layer(queue, layer, &ui.touch_manager, time, menu_name);
                 layer.dirty.mark_all();
+            }
+        }
+        for (menu_name, layer_idx) in layer_actions_to_update {
+            // Layer actions
+            let layer_string_actions = ui.menus[&menu_name].layers[layer_idx]
+                .string_actions
+                .clone();
+
+            let layer_compiled_actions = compile_actions(&ui.menus, None, layer_string_actions);
+
+            ui.menus.get_mut(&menu_name).unwrap().layers[layer_idx].compiled_actions =
+                layer_compiled_actions;
+
+            // Element actions
+            let element_count = ui.menus[&menu_name].layers[layer_idx].elements.len();
+
+            for element_idx in 0..element_count {
+                let element = &ui.menus[&menu_name].layers[layer_idx].elements[element_idx];
+                let element_ref = ElementRef {
+                    menu: menu_name.clone(),
+                    layer: ui.menus[&menu_name].layers[layer_idx].name.clone(),
+                    id: element.id().to_string(),
+                    kind: element.kind(),
+                };
+                let element_string_actions =
+                    ui.menus[&menu_name].layers[layer_idx].elements[element_idx].string_actions();
+
+                let element_compiled_actions =
+                    compile_actions(&ui.menus, Some(element_ref), element_string_actions); // Suuper important ElementRef!!
+
+                ui.menus.get_mut(&menu_name).unwrap().layers[layer_idx].elements[element_idx]
+                    .set_compiled_actions(element_compiled_actions);
             }
         }
     }
@@ -537,7 +579,7 @@ impl UiRenderer {
     pub fn write_storage_buffer(
         &self,
         queue: &Queue,
-        target: &mut Option<Buffer>,
+        target: &mut Option<wgpu::Buffer>,
         label: &str,
         usage: BufferUsages,
         bytes: &[u8],
@@ -587,8 +629,8 @@ impl UiRenderer {
         (v.clamp(0.0, 1.0) * 255.0).round() as u8
     }
 
-    fn color_from_rgba(color: [f32; 4]) -> glyphon::Color {
-        glyphon::Color::rgba(
+    fn color_from_rgba(color: [f32; 4]) -> Color {
+        Color::rgba(
             Self::f32_to_u8(color[0]),
             Self::f32_to_u8(color[1]),
             Self::f32_to_u8(color[2]),
@@ -1046,7 +1088,7 @@ impl UiRenderer {
 
         let depth = depth_for(layer_order, element_idx);
 
-        let border_size = 1.0; // TODO.:Fo ork... uhh... FORK Glyphon and add text border support in the shader and Rust neatly in the text buffer or whatever.    SHIT! I forked Glyphon and I must now fork cosmic-text too!!
+        let border_size = 1.0; // TODO.:Fo ork... uhh... FORK Glyphon and add text border support in the shader and Rust neatly in the text buffer or whatever.   Update: SHIT! I forked Glyphon and I must now fork cosmic-text too!!
         let bounds = TextBounds {
             left: (left - border_size - 2.0).floor() as i32,
             top: (top - border_size - 2.0).floor() as i32,
@@ -1054,33 +1096,33 @@ impl UiRenderer {
             bottom: (top + height + border_size + 2.0).ceil() as i32,
         };
 
-        let offsets = [
-            (-border_size, -border_size),
-            (0.0, -border_size),
-            (border_size, -border_size),
-            (-border_size, 0.0),
-            (border_size, 0.0),
-            (-border_size, border_size),
-            (0.0, border_size),
-            (border_size, border_size),
-        ];
-
+        // let offsets = [
+        //     (-border_size, -border_size),
+        //     (0.0, -border_size),
+        //     (border_size, -border_size),
+        //     (-border_size, 0.0),
+        //     (border_size, 0.0),
+        //     (-border_size, border_size),
+        //     (0.0, border_size),
+        //     (border_size, border_size),
+        // ];
+        //
         let mut result = Vec::with_capacity(9);
-
-        for (dx, dy) in offsets {
-            result.push((
-                TextArea {
-                    buffer: &text.buffer,
-                    left: left + dx,
-                    top: top + dy,
-                    scale: 1.0,
-                    bounds,
-                    default_color: glyphon::Color::rgba(0, 0, 0, 255),
-                    custom_glyphs: &[],
-                },
-                depth,
-            ));
-        }
+        //
+        // for (dx, dy) in offsets {
+        //     result.push((
+        //         TextArea {
+        //             buffer: &text.buffer,
+        //             left: left + dx,
+        //             top: top + dy,
+        //             scale: 1.0,
+        //             bounds,
+        //             default_color: glyphon::Color::rgba(0, 0, 0, 255),
+        //             custom_glyphs: &[],
+        //         },
+        //         depth,
+        //     ));
+        // }
 
         result.push((
             TextArea {
@@ -1090,7 +1132,8 @@ impl UiRenderer {
                 scale: 1.0,
                 bounds,
                 default_color: Self::color_from_rgba(cache.color),
-                custom_glyphs: &[],
+                border_color: Self::color_from_rgba(cache.border_color),
+                border_width: cache.border_width,
             },
             depth,
         ));
@@ -1112,16 +1155,14 @@ impl UiRenderer {
 
         let areas = batch.drain(..).map(|(area, _)| area);
 
-        if let Err(e) = self.text_renderer.prepare_with_depth_and_custom(
+        if let Err(e) = self.text_renderer.prepare_with_depth(
             &self.device,
             queue,
             &mut self.font_system,
             &mut self.text_atlas,
             &self.viewport,
             areas,
-            &mut self.swash_cache,
             |index| depths[index],
-            |_| None,
         ) {
             println!("{}", e);
             return;

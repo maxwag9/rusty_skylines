@@ -807,9 +807,6 @@ impl Settings {
                 default
             }
         };
-        if let InternalMenu::MainMenu = settings.starting_menu {
-            //settings.show_world = false;
-        }
         settings
     }
 

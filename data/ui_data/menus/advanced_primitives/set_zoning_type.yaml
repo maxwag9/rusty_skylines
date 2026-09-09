@@ -5,11 +5,14 @@ elements:
     actions:
       - on:r set(str:new_zone_type, {ap.0})
       - on:r set(str:cursor_mode, Zoning)
-      - show_interaction({ap.1}, true)
+      - call(show_interaction, [{ap.1}, true]))
     x: 0
     y: 0
-    w: 20
-    h: 20
+    w: 40
+    h: 40
+    resize_behaviour:
+      width: uniform
+      height: uniform
     rotation: 0.0
     color:
       - 0.005
@@ -23,7 +26,7 @@ elements:
       - 1.0
     texture: null
     roundness: 0.2
-    border_thickness: 3
+    border_thickness: 2
     fade: 0.0
     blur: 0.0
     glow_color:

@@ -134,6 +134,31 @@ impl ChunkCoord {
 
         out
     }
+    #[inline]
+    pub fn polyline_touches_chunk(&self, points: &[WorldPos]) -> bool {
+        points
+            .windows(2)
+            .any(|w| self.line_touches_chunk_precise(w[0], w[1]))
+    }
+    pub fn line_touches_chunk_precise(&self, start: WorldPos, end: WorldPos) -> bool {
+        let cs = chunk_size() as f32;
+
+        // Chunk bounds as WorldPos
+        let chunk_min = WorldPos::new(*self, LocalPos::new(0.0, 0.0, 0.0));
+        let chunk_max = WorldPos::new(*self, LocalPos::new(cs, 0.0, cs));
+
+        // Convert segment to chunk-local coordinates
+        let a = start.to_relative_pos(chunk_min);
+        let b = end.to_relative_pos(chunk_min);
+
+        // 2D line-box intersection in XZ plane
+        line_intersects_box_2d(
+            Vec2::new(a.x, a.z),
+            Vec2::new(b.x, b.z),
+            Vec2::ZERO,
+            Vec2::new(cs, cs),
+        )
+    }
 }
 impl LocalPos {
     #[inline]
@@ -1026,3 +1051,36 @@ impl Hash for LocalPos {
     }
 }
 impl Eq for LocalPos {}
+
+/// 2D line-box intersection test.
+fn line_intersects_box_2d(a: Vec2, b: Vec2, box_min: Vec2, box_max: Vec2) -> bool {
+    let d = b - a;
+    let mut t_min = 0.0f32;
+    let mut t_max = 1.0f32;
+
+    for i in 0..2 {
+        let (a_i, d_i, min_i, max_i) = match i {
+            0 => (a.x, d.x, box_min.x, box_max.x),
+            _ => (a.y, d.y, box_min.y, box_max.y),
+        };
+
+        if d_i.abs() < 1e-10 {
+            if a_i < min_i || a_i > max_i {
+                return false;
+            }
+        } else {
+            let inv_d = 1.0 / d_i;
+            let mut t1 = (min_i - a_i) * inv_d;
+            let mut t2 = (max_i - a_i) * inv_d;
+            if t1 > t2 {
+                std::mem::swap(&mut t1, &mut t2);
+            }
+            t_min = t_min.max(t1);
+            t_max = t_max.min(t2);
+            if t_min > t_max {
+                return false;
+            }
+        }
+    }
+    true
+}

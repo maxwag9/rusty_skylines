@@ -1,6 +1,8 @@
 use crate::data::{DebugViewState, Settings, ShadowType};
 use crate::gpu_timestamp;
-use crate::helpers::paths::{compute_shader_dir, next_screenshot_path, shader_dir, texture_dir};
+use crate::helpers::paths::{
+    compute_shader_dir, next_screenshot_path, shader_dir, texture_shaders_dir,
+};
 use crate::helpers::positions::WorldPos;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
@@ -23,7 +25,8 @@ use crate::ui::input::Input;
 use crate::ui::ui_editor::Ui;
 use crate::ui::variables::Variables;
 use crate::world::astronomy::*;
-use crate::world::buildings::buildings::{BuildingRenderer, Buildings};
+use crate::world::buildings::building_renderer::BuildingRenderer;
+use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::Zoning;
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::CarStorage;
@@ -33,12 +36,14 @@ use crate::world::terrain::terrain_gen::TerrainGenerator;
 use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
 use crate::world::world::World;
 use glam::UVec2;
-use glyphon::Resolution;
+use sluggrs::Resolution;
+//use glyphon::Resolution;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
+use tracing::error;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
 use wgpu::wgt::PollType;
@@ -59,7 +64,7 @@ pub struct Renderer {
     pub queue: Queue,
     pub config: SurfaceConfiguration,
     pub msaa_samples: u32,
-    pub old_window_size: PhysicalSize<u32>,
+    pub old_window_size: PhysicalSize<f32>,
 
     pub render_manager: RenderManager,
     pub shader_watcher: Option<ShaderWatcher>,
@@ -81,7 +86,7 @@ impl Renderer {
         device: &Device,
         queue: &Queue,
         config: &SurfaceConfiguration,
-        size: PhysicalSize<u32>,
+        size: PhysicalSize<f32>,
         adapter: Adapter,
         settings: &Settings,
         camera: &Camera,
@@ -96,7 +101,7 @@ impl Renderer {
         let road_renderer = RoadRenderSubsystem::new(device);
         let car_renderer = CarRenderSubsystem::new(device, queue, &mut rt_subsystem);
         let building_renderer = BuildingRenderer::new(device);
-        let mut render_manager = RenderManager::new(device, queue, texture_dir());
+        let mut render_manager = RenderManager::new(device, queue, texture_shaders_dir());
         let gizmo = Gizmo::new(device, config, &ui_renderer.font_arc, settings.msaa_samples);
         let profiler = GpuProfiler::new(&device, 3);
         let pipelines = Pipelines::new(
@@ -115,7 +120,7 @@ impl Renderer {
             config: config.clone(),
             pipelines,
             msaa_samples: settings.msaa_samples,
-            old_window_size: PhysicalSize::new(config.width, config.height),
+            old_window_size: PhysicalSize::new(config.width as f32, config.height as f32),
             ui_renderer,
             terrain_renderer,
             road_renderer,
@@ -139,9 +144,10 @@ impl Renderer {
 
         // Check if size actually changed BEFORE modifying anything
         if new_size.width == self.config.width && new_size.height == self.config.height {
-            return; // No change needed
+            return; // No change needed, fake function call, asshole!
         }
-        self.old_window_size = PhysicalSize::new(self.config.width, self.config.height);
+        self.old_window_size =
+            PhysicalSize::new(self.config.width, self.config.height).cast::<f32>();
         self.config.width = new_size.width;
         self.config.height = new_size.height;
 
@@ -150,7 +156,7 @@ impl Renderer {
             timeout: Some(Duration::from_secs(5)),
         });
         if result.is_err() {
-            panic!(
+            error!(
                 "Too long device polling time in resize()  Error: {:?}",
                 result
             )
@@ -159,13 +165,14 @@ impl Renderer {
         self.pipelines.resize(&self.config, self.msaa_samples);
         self.ui_renderer.pipelines.resize(&self.config);
         self.render_manager.invalidate_bind_groups();
-        ui.resize(self.old_window_size, new_size);
+        ui.resize(self.old_window_size, new_size.cast::<f32>());
         let res = Resolution {
             width: new_size.width,
             height: new_size.height,
         };
 
         self.ui_renderer.viewport.update(&self.queue, res); // Update Glypon screen size to NEW size! NOT THE OLD SIZE FOR FUCKS SAKE
+        self.ui_renderer.text_atlas.trim()
     }
 
     pub fn render(
@@ -188,9 +195,11 @@ impl Renderer {
         let time = &mut world.time;
 
         time.frame_checkpoint(FrameTimeCheckpointType::BeforeAcquireFrame);
+        time.timer.checkpoint("Render", false);
         let Some(frame) = acquire_frame(&surface, &self.device, &self.config) else {
             return;
         };
+        time.timer.checkpoint("Render", true);
         time.frame_checkpoint(FrameTimeCheckpointType::AfterAcquireFrame);
         if settings.render_debug_print {
             print!("[render] acquired frame");
@@ -238,6 +247,7 @@ impl Renderer {
 
         //println!("World CPU Time: {:?}", t.elapsed());
         self.profiler.resolve(&mut encoder);
+        time.timer.checkpoint("Render", true);
         if settings.render_debug_print {
             print!(" [render] before submit");
         }
@@ -246,6 +256,7 @@ impl Renderer {
             print!(" [render] after submit, before present");
         }
         self.queue.present(frame);
+        time.timer.checkpoint("Render", false);
         if settings.render_debug_print {
             print!(" [render] after present");
         }
@@ -389,16 +400,16 @@ impl Renderer {
             &ui.variables,
         );
         self.props.place_props(terrain, input, &self.device);
-        time.timer.checkpoint("ui_render_update", false);
+        time.timer.checkpoint("UI Render Update", false);
         self.ui_renderer.update(
             ui,
             time,
             input,
             &self.queue,
-            PhysicalSize::new(self.config.width, self.config.height),
+            PhysicalSize::new(self.config.width, self.config.height).cast::<f32>(),
             settings,
         );
-        time.timer.checkpoint("ui_render_update", true);
+        time.timer.checkpoint("UI Render Update", true);
         self.road_renderer.update(
             terrain,
             roads,
@@ -438,9 +449,10 @@ impl Renderer {
             time.astronomy.moon_dir,
             false,
         );
-
+        //time.timer.checkpoint("Props Upload", false);
         self.props
             .upload_instances(&self.device, &self.queue, camera, terrain);
+        //time.timer.checkpoint("Props Upload", true);
     }
 
     fn execute_shadow_pass(
@@ -587,11 +599,11 @@ impl Renderer {
         });
         self.execute_fog_pass(encoder, settings);
 
-        time.timer.checkpoint("ui_render", false);
+        time.timer.checkpoint("UI Render", false);
         gpu_timestamp!(encoder, &mut self.profiler, "UI", {
             self.execute_ui_pass(encoder, ui, time, input, settings);
         });
-        time.timer.checkpoint("ui_render", true);
+        time.timer.checkpoint("UI Render", true);
 
         self.execute_debug_preview_pass(encoder, settings, &terrain.terrain_gen);
 

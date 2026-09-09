@@ -13,7 +13,7 @@
 
 use crate::data::Settings;
 use crate::helpers::implementations::SerializableVec3;
-use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
+use crate::helpers::positions::{ChunkCoord, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::systems::systems::RoadDestroyType;
 use crate::world::buildings::buildings::Buildings;
@@ -26,16 +26,16 @@ use crate::world::roads::intersections::{
     IntersectionBuildParams, build_intersection_at_node, gather_arms,
 };
 use crate::world::roads::road_editor::offset_polyline;
-use crate::world::roads::road_helpers::tangent_and_lateral_right;
 use crate::world::roads::road_mesh_manager::{
     ChunkId, RoadMeshManager, chunk_coord_to_id, world_pos_chunk_to_id,
 };
 use crate::world::roads::road_structs::*;
 use crate::world::roads::road_subsystem::Roads;
+use crate::world::sound::sound::Sounds;
 use crate::world::terrain::chunk_builder::ChunkMeshLod;
 use crate::world::terrain::terrain_gen::TerrainGenerator;
 use crate::world::terrain::terrain_subsystem::Terrain;
-use glam::{Vec2, Vec3};
+use glam::{Vec3, Vec3Swizzles};
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -135,11 +135,8 @@ impl Arm {
     }
     #[inline]
     pub fn travel_time_for_destination(&self, destination: Destination) -> Option<EMA> {
-        let Some((district, partition, segment)) = self.emas_for_destination(destination) else {
-            return None;
-        };
-
-        segment.or(partition).or(district)
+        let times = self.emas_for_destination(destination)?;
+        times.segment.or(times.partition).or(times.district)
     }
 
     pub fn travel_time_for_destination_f32(&self, destination: Destination) -> f32 {
@@ -151,13 +148,11 @@ impl Arm {
     pub fn emas_for_destination(
         &self,
         destination_type: Destination,
-    ) -> Option<(Option<EMA>, Option<EMA>, Option<EMA>)> {
+    ) -> Option<DestinationTravelTimes> {
         let Some((distr_id, part_id, seg_id, _)) = destination_type.as_building() else {
             return None;
         };
-        let mut district: Option<EMA> = None;
-        let mut partition: Option<EMA> = None;
-        let mut segment: Option<EMA> = None;
+        let mut result = DestinationTravelTimes::default();
 
         for crumb in self.bread_crumbs.iter() {
             match crumb.bread_crumb_destination {
@@ -165,27 +160,26 @@ impl Arm {
                     district_id,
                     partition_id,
                 } => {
-                    if partition.is_none() {
-                        // TODO: Check logic
+                    if result.partition.is_none() {
                         if district_id == distr_id {
-                            district = Some(crumb.ema.clone()); // Cloning is cheap, just 6 Bytes
+                            result.district = Some(crumb.ema.clone());
 
                             if partition_id == part_id {
-                                district = None;
-                                partition = Some(crumb.ema.clone());
+                                result.district = None;
+                                result.partition = Some(crumb.ema.clone());
                             }
                         }
                     }
                 }
 
-                BreadCrumbDestination::Fine { segment_id } if segment_id == seg_id => {
-                    segment = Some(crumb.ema.clone());
+                BreadCrumbDestination::Fine { segment_id } if Some(segment_id) == seg_id => {
+                    result.segment = Some(crumb.ema.clone());
                 }
 
                 _ => {}
             }
         }
-        Some((district, partition, segment))
+        Some(result)
     }
 
     // === Getters ===
@@ -512,6 +506,7 @@ pub struct Segment {
     pub start: NodeId,
     pub end: NodeId,
     pub lanes: Vec<LaneId>,
+    pub centerline: LaneGeometry,
     pub structure: StructureType,
     pub version: u32,
     pub road_type_id: RoadTypeId, // The ONLY place this is stored btw, intersections ask segments!
@@ -524,6 +519,7 @@ impl Segment {
             start,
             end,
             lanes: Vec::new(),
+            centerline: LaneGeometry::default(),
             structure,
             version: 0,
             road_type_id,
@@ -571,18 +567,17 @@ impl Segment {
     }
 
     /// Returns lane count in each direction (forward, backward).
-    pub fn lane_counts(&self, storage: &RoadStorage) -> (usize, usize) {
-        let mut forward = 0;
-        let mut backward = 0;
+    pub fn lane_counts(&self, storage: &RoadStorage) -> LaneDirectionCounts {
+        let mut counts = LaneDirectionCounts::default();
         for lane_id in &self.lanes {
             let lane = storage.lane(*lane_id);
             if lane.from_node() == self.start {
-                forward += 1;
+                counts.forward += 1;
             } else {
-                backward += 1;
+                counts.backward += 1;
             }
         }
-        (forward, backward)
+        counts
     }
 }
 
@@ -802,24 +797,143 @@ impl LaneGeometry {
         }
     }
 
-    pub fn closest_point_to(&self, pos: WorldPos) -> (WorldPos, f64, Vec3, PolyIdx) {
+    pub fn closest_point_to_xz(&self, pos: WorldPos) -> LaneProjection {
         debug_assert!(self.points.len() >= 2);
 
-        let mut best_point = self.points[0];
-        let mut best_dist = f64::MAX;
-        let mut best_idx: PolyIdx = 0;
+        let mut best_pos = self.points[0];
+        let mut best_dist_sq = f64::INFINITY;
+        let mut best_t = 0.0;
+        let mut best_tangent = Vec3::ZERO;
+        let mut best_poly_idx = 0 as PolyIdx;
 
-        for (i, point) in self.points.iter().enumerate() {
-            let dist = point.distance_to(pos);
-            if dist <= best_dist {
-                best_dist = dist;
-                best_point = *point;
-                best_idx = i as PolyIdx; // u32
+        if self.total_len <= 1e-9 {
+            return LaneProjection {
+                position: best_pos,
+                distance: best_pos.delta_to(pos).xz().length() as f64,
+                tangent: Vec3::ZERO,
+                t: 0.0,
+                poly_idx: best_poly_idx,
+            };
+        }
+
+        for i in 0..self.points.len() - 1 {
+            let a = self.points[i];
+            let b = self.points[i + 1];
+
+            let ab = a.delta_to(b);
+            let ap = a.delta_to(pos);
+
+            let dx = ab.x as f64;
+            let dz = ab.z as f64;
+            let len_sq = dx * dx + dz * dz;
+
+            if len_sq <= 1e-12 {
+                continue;
+            }
+
+            let t = ((ap.x as f64 * dx) + (ap.z as f64 * dz)) / len_sq;
+            let t = t.clamp(0.0, 1.0);
+
+            let candidate = a.add_vec3(ab * t as f32);
+            let diff = candidate.delta_to(pos);
+
+            let dist_sq = diff.x as f64 * diff.x as f64 + diff.z as f64 * diff.z as f64;
+
+            if dist_sq < best_dist_sq {
+                let segment_len = self.lengths[i + 1] - self.lengths[i];
+                let distance_along = self.lengths[i] + segment_len * t;
+
+                best_pos = candidate;
+                best_dist_sq = dist_sq;
+                best_t = distance_along / self.total_len;
+                best_tangent = Vec3::new(ab.x, 0.0, ab.z).normalize_or_zero();
+                best_poly_idx = i as PolyIdx;
             }
         }
-        let (tangent, lateral) = tangent_and_lateral_right(&self.points, best_idx as usize);
-        (best_point, best_dist, tangent, best_idx)
+
+        LaneProjection {
+            position: best_pos,
+            distance: best_dist_sq.sqrt(),
+            tangent: best_tangent,
+            t: best_t,
+            poly_idx: best_poly_idx,
+        }
     }
+
+    pub fn sample_at_t(&self, t: f64) -> Option<WorldPos> {
+        if self.points.len() < 2 {
+            return None;
+        }
+
+        let t = t.clamp(0.0, 1.0);
+
+        if t <= 0.0 {
+            return Some(self.points[0]);
+        }
+
+        if t >= 1.0 {
+            return Some(*self.points.last().unwrap());
+        }
+
+        if self.total_len <= 1e-9 {
+            return Some(self.points[0]);
+        }
+
+        let target = t * self.total_len;
+
+        let mut i = 1;
+        while i < self.lengths.len() && self.lengths[i] < target {
+            i += 1;
+        }
+
+        let i1 = i.min(self.points.len() - 1);
+        let i0 = i1 - 1;
+
+        let a_len = self.lengths[i0];
+        let b_len = self.lengths[i1];
+
+        let local_t = if b_len > a_len {
+            (target - a_len) / (b_len - a_len)
+        } else {
+            0.0
+        };
+
+        Some(self.points[i0].lerp(self.points[i1], local_t))
+    }
+
+    pub fn tangent_at_t(&self, t: f64) -> Vec3 {
+        if self.points.len() < 2 || self.total_len <= 0.0 {
+            return Vec3::ZERO;
+        }
+
+        let t = t.clamp(0.0, 1.0);
+
+        if t <= 0.0 {
+            return self.points[0].delta_to(self.points[1]).normalize_or_zero();
+        }
+
+        if t >= 1.0 {
+            let n = self.points.len();
+            return self.points[n - 2]
+                .delta_to(self.points[n - 1])
+                .normalize_or_zero();
+        }
+
+        let target = t * self.total_len;
+
+        let mut i = 1;
+        while i < self.lengths.len() && self.lengths[i] < target {
+            i += 1;
+        }
+
+        let i0 = i - 1;
+        let i1 = i.min(self.points.len() - 1);
+
+        self.points[i0]
+            .delta_to(self.points[i1])
+            .normalize_or_zero()
+    }
+
     pub fn update_heights(
         &mut self,
         chunks: &mut HashMap<ChunkCoord, ChunkMeshLod>,
@@ -998,20 +1112,20 @@ impl RoadStorage {
     }
 
     fn merge_regions(&mut self, a: RoadRegionId, b: RoadRegionId) {
-        let len_a = self.regions[a as usize].nodes.len();
-        let len_b = self.regions[b as usize].nodes.len();
-
-        let (smaller, larger) = if len_a <= len_b { (a, b) } else { (b, a) };
-
-        let nodes_to_move = std::mem::take(&mut self.regions[smaller as usize].nodes);
-
-        for &node_idx in &nodes_to_move {
-            self.node_to_region[node_idx.index()] = larger;
-        }
-
-        self.regions[larger as usize].nodes.extend(nodes_to_move);
-        self.free_regions.push(smaller);
-        self.active_region_count -= 1;
+        // let len_a = self.regions[a as usize].nodes.len();
+        // let len_b = self.regions[b as usize].nodes.len();
+        //
+        // let (smaller, larger) = if len_a <= len_b { (a, b) } else { (b, a) };
+        //
+        // let nodes_to_move = std::mem::take(&mut self.regions[smaller as usize].nodes);
+        //
+        // for &node_idx in &nodes_to_move {
+        //     self.node_to_region[node_idx.index()] = larger;
+        // }
+        //
+        // self.regions[larger as usize].nodes.extend(nodes_to_move);
+        // self.free_regions.push(smaller);
+        // self.active_region_count -= 1;
     }
 
     /// Returns the current region ID for a node.
@@ -1076,7 +1190,12 @@ impl RoadStorage {
 
     #[inline]
     pub fn node(&self, id: NodeId) -> &Node {
-        self.nodes[id.index()].as_ref().expect(format!("Report to maxwag9 on Github pls: NodeId {} couldn't be unpacked", id.raw()).as_str())
+        self.nodes[id.index()].as_ref().unwrap_or_else(|| {
+            panic!(
+                "Report to maxwag9 on Github pls: NodeId {} couldn't be unpacked",
+                id.raw()
+            )
+        })
     }
     #[inline]
     pub fn node_safe(&self, id: NodeId) -> Option<&Node> {
@@ -1088,7 +1207,12 @@ impl RoadStorage {
     }
     #[inline]
     pub fn node_mut(&mut self, id: NodeId) -> &mut Node {
-        self.nodes[id.0 as usize].as_mut().expect(format!("Report to maxwag9 on Github pls: NodeId {} couldn't be unpacked mutably", id.raw()).as_str())
+        self.nodes[id.0 as usize].as_mut().unwrap_or_else(|| {
+            panic!(
+                "Report to maxwag9 on Github pls: NodeId {} couldn't be unpacked mutably",
+                id.raw()
+            )
+        })
     }
     // #[inline]
     // pub fn node_mut_safe(&mut self, id: NodeId) -> Option<&mut Node> {
@@ -1099,13 +1223,11 @@ impl RoadStorage {
         let impact = self.impact_of_deleting_node(id);
         self.apply_impact(&impact);
 
-        // deleting the arms is info lost
-        // for node_id in impact.nodes_needing_regen {
-        //     let arms = gather_arms(self, road_types, node_id, gizmo);
-        //     if let Some(node) = self.node_mut_safe(node_id) {
-        //         node.arms = arms;
-        //     }
-        // }
+        for node_id in impact.nodes_needing_regen {
+            let arms = gather_arms(self, road_types, node_id, gizmo);
+            let node = self.node_mut(node_id);
+            node.arms = arms;
+        }
     }
 
     #[inline]
@@ -1122,20 +1244,8 @@ impl RoadStorage {
     }
 
     #[inline]
-    pub fn lane_counts_for_segment(&self, segment: &Segment) -> (usize, usize) {
-        let mut left_lanes = 0;
-        let mut right_lanes = 0;
-        let seg_node_a_id = segment.start();
-        let seg_node_b_id = segment.end();
-        for lane_id in segment.lanes.iter() {
-            let lane = self.lane(*lane_id);
-            if lane.from == seg_node_a_id && lane.to == seg_node_b_id {
-                right_lanes += 1;
-            } else {
-                left_lanes += 1;
-            }
-        }
-        (left_lanes, right_lanes)
+    pub fn lane_counts_for_segment(&self, segment: &Segment) -> LaneDirectionCounts {
+        segment.lane_counts(self)
     }
 
     pub fn segments_connected_to_node(&self, node_id: NodeId) -> Vec<SegmentId> {
@@ -1192,7 +1302,9 @@ impl RoadStorage {
 
     #[inline]
     pub fn segment(&self, id: SegmentId) -> &Segment {
-        self.segments[id.0 as usize].as_ref().expect(format!("Report to maxwag9 on Github pls and explain how this happened: SegmentId {} couldn't be unpacked mutably", id.raw()).as_str())
+        self.segments[id.0 as usize]
+            .as_ref()
+            .unwrap_or_else(|| panic!("Report to maxwag9 on Github pls and explain how this happened: SegmentId {} couldn't be unpacked mutably", id.raw()))
     }
     #[inline]
     pub fn segment_mut(&mut self, id: SegmentId) -> &mut Segment {
@@ -1208,7 +1320,13 @@ impl RoadStorage {
     // }
 
     /// deletes the segment and all its lanes
-    pub fn delete_segment(&mut self, id: SegmentId, road_types: &RoadTypes, gizmo: &mut Gizmo, remove_orphan_nodes: bool) {
+    pub fn delete_segment(
+        &mut self,
+        id: SegmentId,
+        road_types: &RoadTypes,
+        gizmo: &mut Gizmo,
+        remove_orphan_nodes: bool,
+    ) {
         let impact = self.impact_of_deleting_segment(id, remove_orphan_nodes);
         self.apply_impact(&impact);
         for node_id in impact.nodes_needing_regen {
@@ -1234,19 +1352,16 @@ impl RoadStorage {
     pub fn segment_ids_touching_chunk(&self, chunk_coord: ChunkCoord) -> Vec<SegmentId> {
         self.iter_segments()
             .filter_map(|(idx, seg)| {
-                let start = self.node(seg.start());
-
-                let end = self.node(seg.end());
-
-                let start_pos = start.pos();
-                let end_pos = end.pos();
-
-                if segment_touches_chunk_precise(start_pos, end_pos, chunk_coord) {
-                    // TODO! Not precise enough! It should use the outermost lanes instead of just a straight center line!!! Like, of course! Curved roads are cursed1
-                    Some(idx)
+                let touches = if seg.lanes.is_empty() {
+                    let start = self.node(seg.start()).pos();
+                    let end = self.node(seg.end()).pos();
+                    chunk_coord.line_touches_chunk_precise(start, end)
                 } else {
-                    None
-                }
+                    seg.lanes.iter().any(|&lane_id| {
+                        chunk_coord.polyline_touches_chunk(&self.lane(lane_id).geometry().points)
+                    })
+                };
+                touches.then_some(idx)
             })
             .collect()
     }
@@ -1311,7 +1426,9 @@ impl RoadStorage {
     }
     #[inline]
     pub fn lane(&self, id: LaneId) -> &Lane {
-        self.lanes[id.index()].as_ref().expect(format!("Report to maxwag9 on Github pls and explain how this happened: LaneId {} couldn't be unpacked", id.raw()).as_str())
+        self.lanes[id.index()]
+            .as_ref()
+            .unwrap_or_else(|| panic!("Report to maxwag9 on Github pls and explain how this happened: LaneId {} couldn't be unpacked", id.raw()))
     }
     #[inline]
     pub fn lane_safe(&self, id: LaneId) -> Option<&Lane> {
@@ -1327,22 +1444,38 @@ impl RoadStorage {
     }
 
     /// deletes a single lane, then cascades
-    pub fn delete_lane(&mut self, id: LaneId, road_types: &RoadTypes, gizmo: &mut Gizmo, delete_orphans: bool) {
+    pub fn delete_lane(
+        &mut self,
+        id: LaneId,
+        road_types: &RoadTypes,
+        gizmo: &mut Gizmo,
+        delete_orphans: bool,
+    ) {
         let impact = self.impact_of_deleting_lane(id, delete_orphans);
+        let (from, to) = {
+            let lane = self.lane(id);
+            (lane.from_node(), lane.to_node())
+        };
+
         self.apply_impact(&impact);
+
+        if !impact.nodes.contains(&from) {
+            if let Some(node) = self.nodes[from.index()].as_mut() {
+                node.outgoing_lanes.retain(|lane_id| *lane_id != id);
+            }
+        }
+
+        if !impact.nodes.contains(&to) {
+            if let Some(node) = self.nodes[to.index()].as_mut() {
+                node.incoming_lanes.retain(|lane_id| *lane_id != id);
+            }
+        }
+
         for node_id in impact.nodes_needing_regen {
             let arms = gather_arms(self, road_types, node_id, gizmo);
             let node = self.node_mut(node_id);
             node.arms = arms;
         }
-        let lane = self.lane(id);
-        let (from, to) = (lane.from_node(), lane.to_node());
-        let node = self.node_mut(from);
-            node.incoming_lanes.retain(|lane_id| *lane_id != id);
-
-        let node = self.node_mut(to);
-        node.incoming_lanes.retain(|lane_id| *lane_id != id);
-
     }
 
     #[inline]
@@ -1466,21 +1599,19 @@ impl RoadStorage {
                 }
             })
     }
-    /// Expensive!
-    pub fn closest_lane_point_to(&self, pos: WorldPos) -> Option<(WorldPos, f64, Vec3, PolyIdx)> {
-        let mut best: Option<(WorldPos, f64, Vec3, PolyIdx)> = None;
+    /// TODO: Expensive! →øþø→↓
+    pub fn closest_lane_point_to(&self, pos: WorldPos) -> Option<LaneProjection> {
+        let mut best: Option<LaneProjection> = None;
         for segment_id in self.segment_ids_touching_chunk(pos.chunk) {
             let segment = self.segment(segment_id);
             for &lane_id in segment.lanes() {
                 let lane = self.lane(lane_id);
-
-                let (lane_pos, dist, tangent, poly_idx) = lane.geometry.closest_point_to(pos);
-                if let Some(best) = best.as_mut() {
-                    if dist < best.1 {
-                        *best = (lane_pos, dist, tangent, poly_idx);
-                    }
-                } else {
-                    best = Some((lane_pos, dist, tangent, poly_idx));
+                let projection = lane.geometry.closest_point_to_xz(pos);
+                if best
+                    .as_ref()
+                    .map_or(true, |b| projection.distance < b.distance)
+                {
+                    best = Some(projection);
                 }
             }
         }
@@ -1495,7 +1626,6 @@ impl RoadStorage {
         let mut deleted_lanes = Vec::new();
         let mut nodes_needing_regen = Vec::new();
 
-        // Collect unique segments touching this node.
         let mut seen_segs: Vec<SegmentId> = Vec::new();
         for &lane_id in node.incoming_lanes().iter().chain(node.outgoing_lanes()) {
             let seg_id = self.segment_of_lane(lane_id);
@@ -1504,10 +1634,11 @@ impl RoadStorage {
             }
         }
 
-        for seg_id in seen_segs {
+        let mut other_nodes: Vec<NodeId> = Vec::new();
+        for &seg_id in &seen_segs {
             deleted_segments.push(seg_id);
 
-            let Some(seg) = &self.segments[seg_id.0 as usize] else {
+            let Some(seg) = &self.segments[seg_id.index()] else {
                 continue;
             };
             for &lane_id in &seg.lanes {
@@ -1515,17 +1646,18 @@ impl RoadStorage {
             }
 
             let other = if seg.start == id { seg.end } else { seg.start };
+            if !other_nodes.contains(&other) {
+                other_nodes.push(other);
+            }
+        }
 
-            // Does `other` still have connections after removing the lanes we're deleting?
+        for other in other_nodes {
             let other_node = self.node(other);
             let other_still_connected = other_node
                 .incoming_lanes()
                 .iter()
                 .chain(other_node.outgoing_lanes())
-                .any(|&lid| {
-                    let lane = self.lane(lid);
-                    !deleted_lanes.contains(&lid)
-                });
+                .any(|&lid| !deleted_lanes.contains(&lid));
 
             if other_still_connected {
                 if !nodes_needing_regen.contains(&other) {
@@ -1544,17 +1676,27 @@ impl RoadStorage {
         }
     }
 
-    pub fn impact_of_deleting_segment(&self, id: SegmentId, remove_orphan_nodes: bool) -> DeleteImpact {
+    pub fn impact_of_deleting_segment(
+        &self,
+        id: SegmentId,
+        remove_orphan_nodes: bool,
+    ) -> DeleteImpact {
         let seg = self.segment(id);
 
         let lane_ids: Vec<LaneId> = seg.lanes.clone();
-        let endpoints = if remove_orphan_nodes { vec![seg.start, seg.end] } else { vec![] };
+        let endpoints = if remove_orphan_nodes {
+            vec![seg.start, seg.end]
+        } else {
+            vec![]
+        };
 
         let mut deleted_nodes = Vec::new();
         let mut nodes_needing_regen = Vec::new();
 
         for &node_id in &endpoints {
-            let Some(node) = self.node_safe(node_id) else { continue };
+            let Some(node) = self.node_safe(node_id) else {
+                continue;
+            };
             let still_connected = node
                 .incoming_lanes()
                 .iter()
@@ -1590,7 +1732,8 @@ impl RoadStorage {
         let segment_also_dies = segment
             .lanes
             .iter()
-            .all(|&lid| lid == id || !self.lane_exists(lid)) && delete_orphans;
+            .all(|&lid| lid == id || !self.lane_exists(lid))
+            && delete_orphans;
 
         let mut deleted_nodes = Vec::new();
         let mut nodes_needing_regen = Vec::new();
@@ -1668,25 +1811,31 @@ impl RoadStorage {
 
             for &lane_id in segment.lanes.iter() {
                 let lane = self.lane(lane_id);
+                let projection = lane.geometry().closest_point_to_xz(pos);
 
-                let (_, dist, _, poly_idx) = lane.geometry().closest_point_to(pos);
-
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_ref = Some(LaneRef::Lane(lane_id, poly_idx));
+                if projection.distance < best_dist {
+                    best_dist = projection.distance;
+                    best_ref = Some(LaneRef::Lane(lane_id, projection.poly_idx));
                 }
             }
         }
 
-        for node_id in segment_ids.iter().flat_map(|&seg_id| self.segment(seg_id).nodes()) {
+        for node_id in segment_ids
+            .iter()
+            .flat_map(|&seg_id| self.segment(seg_id).nodes())
+        {
             let node = self.node(node_id);
 
             for node_lane in node.node_lanes() {
-                let (_, dist, _, poly_idx) = node_lane.geometry().closest_point_to(pos);
+                let projection = node_lane.geometry().closest_point_to_xz(pos);
 
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_ref = Some(LaneRef::NodeLane(node_id, node_lane.id, poly_idx));
+                if projection.distance < best_dist {
+                    best_dist = projection.distance;
+                    best_ref = Some(LaneRef::NodeLane(
+                        node_id,
+                        node_lane.id,
+                        projection.poly_idx,
+                    ));
                 }
             }
         }
@@ -1705,9 +1854,13 @@ impl RoadStorage {
         let broader_chunks = chunk.get_chunks_3x3();
         self.search_segmentlane_ref_in_chunks(pos, broader_chunks)
     }
-    fn search_segmentlane_ref_in_chunks<I>(&self, pos: WorldPos, chunks: I) -> Option<(LaneId, PolyIdx)>
+    fn search_segmentlane_ref_in_chunks<I>(
+        &self,
+        pos: WorldPos,
+        chunks: I,
+    ) -> Option<(LaneId, PolyIdx)>
     where
-        I: IntoIterator<Item=ChunkCoord>,
+        I: IntoIterator<Item = ChunkCoord>,
     {
         let mut best_dist = f64::INFINITY;
         let mut best_ref = None;
@@ -1723,19 +1876,18 @@ impl RoadStorage {
 
             for &lane_id in segment.lanes.iter() {
                 let lane = self.lane(lane_id);
+                let projection = lane.geometry().closest_point_to_xz(pos);
 
-                let (_, dist, _, poly_idx) = lane.geometry().closest_point_to(pos);
-
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_ref = Some((lane_id, poly_idx));
+                if projection.distance < best_dist {
+                    best_dist = projection.distance;
+                    best_ref = Some((lane_id, projection.poly_idx));
                 }
             }
         }
 
         best_ref
     }
-    
+
     // ONLY in preview!!
     pub fn add_raw(
         &mut self,
@@ -1970,14 +2122,25 @@ impl Default for RoadManager {
 /// Sample position along a lane at parameter t in [0,1].
 /// Returns the WorldPos on the lane.
 #[inline]
-pub fn sample_lane_position(lane: &Lane, t: f64, storage: &RoadStorage) -> Option<WorldPos> {
-    let from = storage.node(lane.from_node());
-    let to = storage.node(lane.to_node());
+pub fn sample_lane_position(lane_geometry: &LaneGeometry, t: f64) -> Option<WorldPos> {
+    lane_geometry.sample_at_t(t)
+}
+pub fn nearest_lane_to_point(storage: &RoadStorage, point: WorldPos) -> Option<LaneId> {
+    let mut best_id = None;
+    let mut best_dist_sq = f64::INFINITY;
 
-    let from_pos = from.pos();
-    let to_pos = to.pos();
+    for (id, lane) in storage.iter_lanes() {
+        let Some((_, dist_sq)) = project_point_to_lane_xz(lane, point, storage) else {
+            continue;
+        };
 
-    Some(from_pos.lerp(to_pos, t))
+        if dist_sq < best_dist_sq {
+            best_dist_sq = dist_sq;
+            best_id = Some(id);
+        }
+    }
+
+    best_id
 }
 
 /// Project a WorldPos onto a lane and returns (t, distance_squared).
@@ -1986,15 +2149,10 @@ pub fn sample_lane_position(lane: &Lane, t: f64, storage: &RoadStorage) -> Optio
 pub fn project_point_to_lane_xz(
     lane: &Lane,
     point: WorldPos,
-    storage: &RoadStorage,
+    _storage: &RoadStorage,
 ) -> Option<(f64, f64)> {
-    let from = storage.node(lane.from_node());
-    let to = storage.node(lane.to_node());
-
-    let from_pos = from.pos();
-    let to_pos = to.pos();
-
-    Some(project_point_to_segment_xz(point, from_pos, to_pos))
+    let projection = lane.geometry().closest_point_to_xz(point);
+    Some((projection.t, projection.distance * projection.distance))
 }
 
 /// Project a point onto a line segment (XZ plane).
@@ -2030,30 +2188,6 @@ pub fn project_point_to_segment_xz(
 
     (t_clamped, dist_sq)
 }
-
-/// Finds the nearest enabled lane to a 3D point (brute force).
-/// Returns None if no enabled lanes exist.
-///
-/// Note: For production use, build chunk-local spatial indexes.
-/// This function is O(n) in the number of lanes.
-pub fn nearest_lane_to_point(storage: &RoadStorage, point: WorldPos) -> Option<LaneId> {
-    let mut best_id: Option<LaneId> = None;
-    let mut best_dist_sq = f64::MAX;
-
-    for (id, lane) in storage.iter_lanes() {
-        let (_, dist_sq) = project_point_to_lane_xz(lane, point, storage)?;
-        if dist_sq < best_dist_sq {
-            best_dist_sq = dist_sq;
-            best_id = Some(id);
-        }
-    }
-
-    best_id
-}
-
-// ============================================================================
-// Chunk State
-// ============================================================================
 
 /// Per-lane runtime state managed by chunk simulation.
 #[derive(Debug, Clone, Default)]
@@ -2280,13 +2414,13 @@ pub enum RoadCommand {
     DeleteSegment {
         chunk_id: ChunkId,
         segment_id: SegmentId,
-        remove_orphan_nodes: bool
+        remove_orphan_nodes: bool,
     },
     /// delete a lane.
     DeleteLane {
         chunk_id: ChunkId,
         lane_id: LaneId,
-        delete_orphans: bool
+        delete_orphans: bool,
     },
     /// Attach a traffic control to a node.
     AttachControl {
@@ -2350,7 +2484,7 @@ impl RoadCommand {
             RoadCommand::UpgradeSegmentBegin { chunk_id, .. } => *chunk_id,
             RoadCommand::UpgradeSegmentEnd { chunk_id, .. } => *chunk_id,
             RoadCommand::ReplaceNode { chunk_id, .. } => *chunk_id,
-            RoadCommand::AddNodeFull { node, .. } => node.chunk_id()
+            RoadCommand::AddNodeFull { node, .. } => node.chunk_id(),
         }
     }
 }
@@ -2406,6 +2540,7 @@ pub fn apply_road_commands_preview(
     car_subsystem: &mut Cars,
     settings: &Settings,
     gizmo: &mut Gizmo,
+    sounds: &mut Sounds,
 ) {
     roads.road_manager.preview_roads.clear();
 
@@ -2429,6 +2564,7 @@ pub fn apply_road_commands_preview(
     let mut crossing_previews: Vec<&CrossingPoint> = Vec::new();
     let mut segment_preview: Option<&SegmentPreview> = None;
     let mut destruction_preview: Option<&RoadDestroyType> = None;
+    let mut snap_preview: Option<&SnapPreview> = None;
 
     for cmd in &roads.road_commands {
         match cmd {
@@ -2437,6 +2573,7 @@ pub fn apply_road_commands_preview(
             RoadEditorCommand::PreviewCrossing(c) => crossing_previews.push(c),
             RoadEditorCommand::PreviewDestruction(d) => destruction_preview = Some(d),
             RoadEditorCommand::PreviewClear => return,
+            RoadEditorCommand::PreviewSnap(s) => snap_preview = Some(s),
             _ => {}
         }
     }
@@ -2446,8 +2583,7 @@ pub fn apply_road_commands_preview(
     if !crossing_previews.is_empty() {
         road_commands.extend(generate_intersection_preview(
             terrain,
-            &mut roads.road_manager.preview_roads,
-            &roads.road_manager.roads,
+            &mut roads.road_manager,
             &roads.road_editor.style,
             &crossing_previews,
         ));
@@ -2455,6 +2591,12 @@ pub fn apply_road_commands_preview(
 
     // 4) Segment preview
     if let Some(seg) = segment_preview {
+        if (roads.road_editor.last_road_length - seg.estimated_length).abs() > 4.0
+            && !roads.road_editor.style.is_idle()
+        {
+            roads.road_editor.last_road_length = seg.estimated_length;
+            sounds.queue_sfx("DragRoad");
+        }
         if seg.is_valid {
             road_commands.extend(generate_segment_preview(
                 terrain,
@@ -2487,6 +2629,28 @@ pub fn apply_road_commands_preview(
             &roads.road_manager,
             road_destroy_type,
         ));
+    }
+    if let Some(snap_preview) = snap_preview {
+        //gizmo.snap_preview(snap_preview);
+        match snap_preview.kind {
+            SnapKind::Free => {}
+            SnapKind::Node { id } => {}
+            SnapKind::Lane { lane_id, .. } => {
+                let lane_id = roads.road_manager.roads.lane(lane_id).segment();
+                // let segment = roads.road_manager.roads.segment(lane.segment());
+                // let segment_preview = SegmentPreview {
+                //     start: roads.road_manager.roads.node(lane.from).pos,
+                //     end: roads.road_manager.roads.node(lane.to).pos,
+                //     polyline: lane.polyline().clone(),
+                //     ..Default::default()
+                // };
+                road_commands.extend(generate_segment_preview_segment(
+                    terrain,
+                    &mut roads.road_manager,
+                    lane_id,
+                ));
+            }
+        }
     }
     // 6) Apply generated preview commands to preview storage (world-only)
     for cmd in road_commands {
@@ -2626,7 +2790,7 @@ pub fn apply_road_command(
         RoadCommand::DeleteSegment {
             segment_id,
             chunk_id,
-            remove_orphan_nodes
+            remove_orphan_nodes,
         } => {
             if segment_id.raw() as usize >= storage.segment_count() {
                 return CommandResult::InvalidReference;
@@ -2634,7 +2798,11 @@ pub fn apply_road_command(
             storage.delete_segment(*segment_id, road_types, gizmo, *remove_orphan_nodes);
             CommandResult::Ok
         }
-        RoadCommand::DeleteLane { lane_id, chunk_id, delete_orphans } => {
+        RoadCommand::DeleteLane {
+            lane_id,
+            chunk_id,
+            delete_orphans,
+        } => {
             if lane_id.raw() as usize >= storage.lane_count() {
                 return CommandResult::InvalidReference;
             }
@@ -2720,9 +2888,10 @@ pub fn apply_road_command(
             let _ = replace(node, new_node.clone());
             CommandResult::Ok
         }
-        RoadCommand::AddNodeFull { // TODO: Region tracking maybe
+        RoadCommand::AddNodeFull {
+            // TODO: Region tracking maybe
             id,
-            node
+            node,
         } => {
             storage.nodes[id.index()] = Some(node.clone());
             //storage.add_node()
@@ -2878,13 +3047,17 @@ pub fn apply_command(
                 RoadCommand::DeleteSegment {
                     segment_id,
                     chunk_id,
-                    remove_orphan_nodes
+                    remove_orphan_nodes,
                 } => {
                     storage.delete_segment(segment_id, road_types, gizmo, remove_orphan_nodes);
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok
                 }
-                RoadCommand::DeleteLane { lane_id, chunk_id, delete_orphans } => {
+                RoadCommand::DeleteLane {
+                    lane_id,
+                    chunk_id,
+                    delete_orphans,
+                } => {
                     storage.delete_lane(lane_id, road_types, gizmo, delete_orphans);
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok
@@ -2958,10 +3131,7 @@ pub fn apply_command(
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok
                 }
-                RoadCommand::AddNodeFull {
-                    id,
-                    node
-                } => {
+                RoadCommand::AddNodeFull { id, node } => {
                     affected_chunk = Some(node.chunk_id());
                     storage.nodes[id.index()] = Some(node);
                     CommandResult::Ok
@@ -2989,25 +3159,20 @@ pub fn apply_command(
 
 fn generate_intersection_preview(
     terrain_renderer: &Terrain,
-    preview_storage: &mut RoadStorage,
-    real_storage: &RoadStorage,
+    road_manager: &mut RoadManager,
     road_style_params: &RoadStyleParams,
     crossings: &[&CrossingPoint],
 ) -> Vec<RoadCommand> {
-    let commands = Vec::new();
+    let mut commands = Vec::new();
+
     for &crossing in crossings {
-        match crossing.kind {
-            CrossingKind::ExistingNode(n) => {
-                // copy_real_node_to_preview(n, preview_storage, real_storage);
-                // commands.push(RoadCommand::MakeIntersection {
-                //     node_id: n,
-                //     chunk_id: 0,
-                //     params: IntersectionBuildParams::from_style(road_style_params),
-                //     clear: true,
-                // });
-            }
-            CrossingKind::LaneCrossing { .. } => {}
-        }
+        generate_node_with_stub_preview(
+            terrain_renderer,
+            road_manager,
+            road_style_params,
+            crossing.pos,
+            &mut commands,
+        );
     }
 
     commands
@@ -3051,12 +3216,7 @@ fn generate_destruction_preview(
         nodes: impact
             .nodes
             .into_iter()
-            .map(|node_id| {
-                (
-                    node_id,
-                    road_manager.roads.node(node_id).clone(),
-                )
-            })
+            .map(|node_id| (node_id, road_manager.roads.node(node_id).clone()))
             .collect(),
         segments: impact
             .segments
@@ -3071,12 +3231,7 @@ fn generate_destruction_preview(
         nodes_needing_regen: impact
             .nodes_needing_regen
             .into_iter()
-            .map(|node_id| {
-                (
-                    node_id,
-                    storage.node(node_id).clone(),
-                )
-            })
+            .map(|node_id| (node_id, storage.node(node_id).clone()))
             .collect(),
     });
     commands
@@ -3181,7 +3336,71 @@ fn generate_segment_preview(
 
     commands
 }
+fn generate_segment_preview_segment(
+    terrain_renderer: &Terrain,
+    road_manager: &mut RoadManager,
+    segment_id: SegmentId,
+) -> Vec<RoadCommand> {
+    let mut commands = Vec::new();
+    // let Some(road_type) = road_style_params.road_type(&road_manager.road_types) else {
+    //     return Vec::new();
+    // };
+    let ref_segment = road_manager.roads.segment(segment_id);
+    let (start, end) = (
+        road_manager.roads.node(ref_segment.start).pos,
+        road_manager.roads.node(ref_segment.end).pos,
+    );
 
+    let storage = &mut road_manager.preview_roads;
+
+    let start_node_id = storage.alloc_node_id();
+    commands.push(RoadCommand::AddNode {
+        id: start_node_id,
+        world_pos: start,
+    });
+
+    let end_node_id = storage.alloc_node_id();
+    commands.push(RoadCommand::AddNode {
+        id: end_node_id,
+        world_pos: end,
+    });
+
+    let segment_id = storage.alloc_segment_id();
+    commands.push(RoadCommand::AddSegment {
+        id: segment_id,
+        start: start_node_id,
+        end: end_node_id,
+        structure: ref_segment.structure(),
+        chunk_id: 0,
+        road_type_id: ref_segment.road_type_id,
+    });
+
+    for lane_id in ref_segment.lanes.iter() {
+        let lane = road_manager.roads.lane(*lane_id);
+        let lane_id = storage.alloc_lane_id();
+
+        let (from, to) = if lane.from == ref_segment.start {
+            (start_node_id, end_node_id)
+        } else {
+            (end_node_id, start_node_id)
+        };
+
+        commands.push(RoadCommand::AddLane {
+            id: lane_id,
+            from,
+            to,
+            segment: segment_id,
+            lane_index: lane.lane_index,
+            geometry: lane.geometry.clone(),
+            speed_limit: lane.speed_limit(),
+            capacity: lane.capacity(),
+            vehicle_mask: lane.vehicle_mask(),
+            chunk_id: 0,
+        });
+    }
+
+    commands
+}
 /// Creates a node with a short stub segment and lanes so it renders properly
 fn generate_node_with_stub_preview(
     terrain_renderer: &Terrain,
@@ -3299,59 +3518,6 @@ fn compute_lane_geometries(
     lanes
 }
 
-/// More precise segment-chunk intersection test.
-fn segment_touches_chunk_precise(start: WorldPos, end: WorldPos, chunk: ChunkCoord) -> bool {
-    let cs = chunk_size() as f32;
-
-    // Chunk bounds as WorldPos
-    let chunk_min = WorldPos::new(chunk, LocalPos::new(0.0, 0.0, 0.0));
-    let chunk_max = WorldPos::new(chunk, LocalPos::new(cs, 0.0, cs));
-
-    // Convert segment to chunk-local coordinates
-    let a = start.to_relative_pos(chunk_min);
-    let b = end.to_relative_pos(chunk_min);
-
-    // 2D line-box intersection in XZ plane
-    line_intersects_box_2d(
-        Vec2::new(a.x, a.z),
-        Vec2::new(b.x, b.z),
-        Vec2::ZERO,
-        Vec2::new(cs, cs),
-    )
-}
-
-/// 2D line-box intersection test.
-fn line_intersects_box_2d(a: Vec2, b: Vec2, box_min: Vec2, box_max: Vec2) -> bool {
-    let d = b - a;
-    let mut t_min = 0.0f32;
-    let mut t_max = 1.0f32;
-
-    for i in 0..2 {
-        let (a_i, d_i, min_i, max_i) = match i {
-            0 => (a.x, d.x, box_min.x, box_max.x),
-            _ => (a.y, d.y, box_min.y, box_max.y),
-        };
-
-        if d_i.abs() < 1e-10 {
-            if a_i < min_i || a_i > max_i {
-                return false;
-            }
-        } else {
-            let inv_d = 1.0 / d_i;
-            let mut t1 = (min_i - a_i) * inv_d;
-            let mut t2 = (max_i - a_i) * inv_d;
-            if t1 > t2 {
-                std::mem::swap(&mut t1, &mut t2);
-            }
-            t_min = t_min.max(t1);
-            t_max = t_max.min(t2);
-            if t_min > t_max {
-                return false;
-            }
-        }
-    }
-    true
-}
 #[derive(Debug, Clone)]
 pub enum TurnType {
     Straight,

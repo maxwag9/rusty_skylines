@@ -1,0 +1,19 @@
+name: PlaceRoad
+
+layers:
+  - waveform: Noise
+    start_freq: 110.0
+    end_freq: 55.0
+    fm_ratio: 0.5
+    fm_amount: 0.05
+    gain: 0.8
+
+duration: 0.30
+attack: 0.015
+decay: 0.10
+sustain: 0.0
+release: 0.20
+glide_curve: 1.0
+gain: 0.40
+pan: 0.0
+deduplication_time: 0.1

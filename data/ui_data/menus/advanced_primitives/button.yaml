@@ -4,19 +4,24 @@ elements:
   - !Rect
     id: Button_Background
     actions:
-      - "in:any, as:[str:button_text], set(str:as.pt, {ap.1}); set(str:self.size, expr:{as.size}+10.0); call(str:{ap.2});"
+      - "in:any, as:[str:button_text], set(str:self.size, expr:{as.rect}+10.0); call(str:{ap.2});"
       - "on:hovering, set(str:self.color.border, [1.0, 1.0, 1.0, 1.0])"
-      - "on:hover_exit on:activated, set(str:self.color.border, [0.1, 0.1, 0.1, 1.0])"
+      - "on:hover_exit on:activated, set(str:self.color.border, [0.05, 0.05, 0.05, 1.0])"
+      - "on:hover_enter, call(rust:play_sound, str:ButtonHover)"
+      - "on:press, call(rust:play_sound, str:ButtonPress)"
       #- "in:any, set(str:x, expr:{self.center.x}/{screen.x}); set(str:y, expr:{self.center.y}/{screen.y}); set(str:corner, expr:exp(-8.0*({x}*{x} + {y}*{y}))); set(str:self.color.border, [corner, expr:1-{corner}, expr:1-{corner}, 1])"
     x: 0
     y: 0
     w: 150
     h: 40
+    resize_behaviour:
+      width: x
+      height: y
     color:
       - 0.8
       - 0.8
       - 0.8
-      - 0.05
+      - 0.15
     border_color:
       - 0.1
       - 0.1
@@ -43,9 +48,15 @@ elements:
   #    roundness: 0.5
   - !Text
     id: button_text
+    actions:
+      - on:activated, set(str:self.pt, {ap.1});
     x: 0
     y: 0
     pt: 25.0
+    border_width: 5.0
+    resize_behaviour:
+      width: uniform
+      height: y
     color:
       - 1.0
       - 1.0

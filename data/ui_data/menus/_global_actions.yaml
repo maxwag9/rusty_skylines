@@ -1,6 +1,7 @@
-element_actions:
-  - button:r, on:r, in:editor_mode, open_layer(str:Editor_Menu, str:Color Picker)
-  - on:desel, in:editor_mode, close_layer(str:Editor_Menu, str:Color Picker)
+#RSUIDSL?!
+element_actions: [ ]
+#  - button:r, on:r, in:editor_mode, open_layer(str:Editor_Menu, str:Color Picker)
+#  - on:desel, in:editor_mode, close_layer(str:Editor_Menu, str:Color Picker)
 
 global_actions:
   - on:startup in:any, call(rust:str:get_saves);
@@ -12,29 +13,31 @@ global_actions:
   - on:startup in:any, set(str:play_menus, [GUI]);
   - on:startup in:any, set(str:editor_menus, [Editor_Menu, EditorGUI]);
   - on:startup in:any, set(str:save_menus, [SavesScreen]);
-  #  - if(!{bool(before_editor_mode)} && {editor_mode}, print(AMOGUSZ); close_all_menus(); call(open_editor_menus))
-  #  - if({bool(before_editor_mode)} && !{editor_mode}, close_all_menus(); open_menu(prev_menus))
-  #  - set(str:before_editor_mode, editor_mode)
-  #- if(!editor_mode, set(str:prev_menus, active_menus))
+
   - on:startup in:any, set(str:open_prev, "in:any, close_all_menus(); open_menu(prev_menus);")
-  - on:startup in:any, set(str:open_main_menus, "in:any, set(str:editor_mode, false); set(str:show_gui, true); set(str:show_world, false); set(str:prev_menus, active_menus); close_all_menus(); open_menu(main_menus);")
-  - on:startup in:any, set(str:open_pause_menus, "in:any, set(str:editor_mode, false); set(str:show_gui, true); set(str:show_world, true); set(str:prev_menus, active_menus); close_all_menus(); open_menu(pause_menus);" )
-  - on:startup in:any, set(str:open_settings_menus, "set(str:prev_menus, active_menus); close_all_menus(); open_menu(settings_menus)")
-  - on:startup in:any, set(str:open_play_menus, "set(str:prev_menus, active_menus); close_all_menus(); open_menu(play_menus); if(debug_mode == true, open_menu(Debug_Menu); );" )
-  - on:startup in:any, set(str:open_editor_menus, "in:any, set(str:prev_menus, active_menus); open_menu(editor_menus); set(str:editor_mode, true); set(str:show_gui, true); set(str:show_world, false); close_all_layers(Editor_Menu);")
-  - on:startup in:any, set(str:open_save_menus, "set(str:prev_menus, active_menus); close_all_menus(); open_menu(save_menus)")
-  - on:startup in:any, set(str:back_to_the_game, "set(str:show_world, true); set(str:editor_mode, false); set(str:override_mode, false); call(open_play_menus);")
-  - on:startup in:any, set(str:editor_mode, false); call(open_main_menus);
-  #
-  #  - on:startup, set(str:func_name, ["button:l on:release, print(hi)", "button:r on:down, print(you have chosen the dark side!! {args.0})"])
-  #  - on:always, call(func_name, ["HURENSOHN HAHA!!"])
-  - on:startup, set(str:to_the_menu, [
-    "button:"Resume" trigger:r, menu_active(PauseMenu); if(_result, call(back_to_the_game) ); set(str:just_resumed_from_pause_menu, _result);", 
-    "button:"Leave Game" trigger:r, menu_active(MainMenu); if(_result, exit_game());", 
-    "button:"Exit to Main Menu" trigger:r in:any, if(expr:is_some({current_save}), if(expr:!{just_resumed_from_pause_menu}, call(open_pause_menus)), call(open_main_menus) ); set(str:just_resumed_from_pause_menu, false)"
+  - on:startup in:any, set(str:open_main_menus, "scope:a in:any, set(str:editor_mode, false); set(str:show_gui, true); set(str:show_world, false); set(str:prev_menus, active_menus); close_all_menus(); open_menu(main_menus);")
+  - on:startup in:any, set(str:open_pause_menus, "scope:a in:any, set(str:editor_mode, false); set(str:show_gui, true); set(str:show_world, true); set(str:prev_menus, active_menus); close_all_menus(); open_menu(pause_menus);" )
+  - on:startup in:any, set(str:open_settings_menus, "scope:a set(str:prev_menus, active_menus); close_all_menus(); open_menu(settings_menus)")
+  - on:startup in:any, set(str:open_play_menus, "scope:a set(str:prev_menus, active_menus); close_all_menus(); open_menu(play_menus); if(debug_mode == true, open_menu(Debug_Menu); );" )
+  - on:startup in:any, set(str:open_editor_menus, "scope:a in:any, set(str:prev_menus, active_menus); open_menu(editor_menus); set(str:editor_mode, true); set(str:show_gui, true); set(str:show_world, false); close_all_layers(Editor_Menu);")
+  - on:startup in:any, set(str:open_save_menus, "scope:a set(str:prev_menus, active_menus); close_all_menus(); open_menu(save_menus)")
+  - on:startup in:any, set(str:back_to_the_game, "scope:a set(str:show_world, true); set(str:editor_mode, false); set(str:override_mode, false); call(open_play_menus);")
+  - on:startup in:any, set(str:editor_mode, false); ifvareq(starting_menu, str:MainMenu, call(open_main_menus));
+
+  - scope:a button:"Resume" trigger:r, menu_active(PauseMenu); if(_result, call(back_to_the_game) ); set(str:just_resumed_from_pause_menu, _result);
+  - scope:a button:"Leave Game" trigger:r, menu_active(MainMenu); if(_result, exit_game());
+  - scope:a button:"Exit to Main Menu" trigger:r in:any, if(expr:is_some({current_save}), if(expr:!{just_resumed_from_pause_menu}, call(open_pause_menus)), call(open_main_menus) ); set(str:just_resumed_from_pause_menu, false);
+
+  - on:startup, set(str:show_interaction, [
+    "set(str:col, args.0);",
+    "on:h, set(str:self.color.fill, [expr:saturate({col.r}*1.8+0.05), expr:saturate({col.g}*1.8+0.05), expr:saturate({col.b}*1.8+0.05), expr:saturate({col.a}+0.1)])",
+    "on:d, set(str:self.color.fill, [expr:saturate({col.r}*0.5), expr:saturate({col.g}*0.5), expr:saturate({col.b}*0.5), expr:saturate({col.a}*0.95)])",
+    "on:h_exit on:r on:activated, set(str:self.color.fill, col)"
     ])
-  - in:any, call(to_the_menu)
-  #
-  #- button:"KeyQ" trigger:r in:any, debug_menus();  # _Ok I get it, so 'x.exists' didn't work because {ap.5}.exists was replaced with '.exists' and that returns it as a full string. because the ap.5 value is
+  #    "asdyn:[expr:{self.id}+"_shadow"] ifvareq(args.1, true, set(str:shadow_color, [expr:{self.color.fill.r}*0.01, expr:{self.color.fill.g}*0.01, expr:{self.color.fill.b}*0.01, expr:{self.color.fill.a}*0.7]);
+  #    set(str:as.center, [expr:{self.center.x}+5, expr:{self.center.y}+3]); set(str:as.color.fill, shadow_color); set(str:as.color.border, shadow_color); set(str:as.idx, self.idx);
+  #    ifvareq(self.active, bool:false, delete(as.menu, as.layer, as.id, false)); if(expr:!{as.exists}, clone(self.menu, self.layer, self.id, self.menu, self.layer, expr:{self.id}+"_shadow", [expr:{self.center.x}+10, {self.center.y}], [], false););
+  #    if(expr:({as.idx??0}+1) != {self.idx}, set(str:as.offset_order, expr:{self.idx} - ({as.idx??0} + 1) ) ) )"
   - button:"Toggle editor mode" trigger:repeat in:any, toggle(str:editor_mode); if({editor_mode}, call(open_editor_menus));
   - button:"Toggle Fullscreen" trigger:repeat in:any, toggle(str:fullscreen_mode);
+  - on:startup in:any, set(str:reload_saves, str:scope:a forin( saves, delete_layer(self.menu, expr:{val.0} + "_option", false) ); call(rust:str:get_saves); forin( saves, add_ap(self.menu, expr:{val.0} + "_option", save_option, val, [900.0, expr:100.0+{idx}*120.0], 2.0, true) ))

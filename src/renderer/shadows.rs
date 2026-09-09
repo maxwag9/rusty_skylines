@@ -3,8 +3,11 @@ use crate::helpers::paths::shader_dir;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::render_passes::{draw_visible_buildings, draw_visible_roads};
+use crate::renderer::ui_pipelines::multisample_state;
 use crate::ui::vertex::Vertex;
-use crate::world::buildings::buildings::{BuildingRenderer, BuildingVertex, Buildings};
+use crate::world::buildings::building_mesher::BuildingVertex;
+use crate::world::buildings::building_renderer::BuildingRenderer;
+use crate::world::buildings::buildings::Buildings;
 use crate::world::camera::Camera;
 use crate::world::cars::car_mesh::CarVertex;
 use crate::world::cars::car_render::CarInstance;
@@ -24,7 +27,6 @@ use wgpu::{
 };
 use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions};
 use wgpu_render_manager::renderer::RenderManager;
-use crate::renderer::ui_pipelines::multisample_state;
 
 pub const CSM_CASCADES: usize = 4;
 #[repr(C)]

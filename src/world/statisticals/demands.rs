@@ -135,7 +135,6 @@ impl ZoningDemand {
                 building_occupancy.jobs_capacity = building_capacity;
                 building_occupancy.groups.clear();
             }
-            ZoningType::None => {}
         }
         building_occupancy
     }
@@ -157,7 +156,6 @@ impl ZoningDemand {
             ZoningType::Commercial => self.commercial_attractiveness.max(0.0),
             ZoningType::Industrial => self.industrial_attractiveness.max(0.0),
             ZoningType::Office => self.office_attractiveness.max(0.0),
-            ZoningType::None => 0.0,
         };
         (0.04 * level_mult * fill_mult * prestige_mult * (1.0 + attractiveness_bonus * 0.4))
             .max(0.0)
@@ -305,7 +303,6 @@ impl ZoningDemand {
 
     pub fn demand_from_zoning_type(&self, zoning_type: ZoningType) -> f32 {
         match zoning_type {
-            ZoningType::None => 0.0,
             ZoningType::Residential => self.residential,
             ZoningType::Commercial => self.commercial,
             ZoningType::Industrial => self.industrial,

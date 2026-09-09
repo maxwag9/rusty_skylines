@@ -10,38 +10,13 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use wgpu::util::DeviceExt;
 use wgpu::{Device, Queue};
 
-// ============================================================================
-// Road Appearance Uniform (for tinting)
-// ============================================================================
-#[repr(C)]
-#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct RoadAppearanceUniform {
-    pub tint: [f32; 4],
-}
-impl RoadAppearanceUniform {
-    pub fn normal() -> Self {
-        Self {
-            tint: [1.0, 1.0, 1.0, 1.0],
-        }
-    }
-    pub fn preview() -> Self {
-        Self {
-            tint: [0.8, 0.8, 2.1, 0.9],
-        }
-    }
-    pub fn preview_error() -> Self {
-        Self {
-            tint: [1.3, 0.6, 0.6, 1.0],
-        }
-    }
-}
-
-// ============================================================================
-// Preview State
-// ============================================================================
 #[derive(Default, Debug, Clone)]
 pub struct RoadPreviewState {
     pub snap: Option<SnapPreview>,
+    pub node: Option<NodePreview>,
+    pub lane: Option<LanePreview>,
+    pub segment: Option<SegmentPreview>,
+    pub crossings: Vec<CrossingPoint>,
     pub error: Option<PreviewError>,
     pub destruction: bool,
     prev_hash: u64,
@@ -57,24 +32,46 @@ impl RoadPreviewState {
         self.has_changed = new_hash != self.prev_hash;
 
         if !self.has_changed {
-            return; // Stable — nothing to rebuild
+            return;
         }
 
         self.prev_hash = new_hash;
         self.snap = None;
+        self.node = None;
+        self.lane = None;
+        self.segment = None;
+        self.crossings.clear();
         self.error = None;
+        self.destruction = false;
+
         for cmd in cmds {
             match cmd {
                 RoadEditorCommand::PreviewClear => {
                     self.snap = None;
+                    self.node = None;
+                    self.lane = None;
+                    self.segment = None;
+                    self.crossings.clear();
                     self.error = None;
                     self.destruction = false;
                 }
                 RoadEditorCommand::PreviewSnap(snap) => {
                     self.snap = Some(snap.clone());
                 }
+                RoadEditorCommand::PreviewNode(node) => {
+                    self.node = Some(node.clone());
+                }
+                RoadEditorCommand::PreviewLane(lane) => {
+                    self.lane = Some(lane.clone());
+                }
+                RoadEditorCommand::PreviewSegment(segment) => {
+                    self.segment = Some(segment.clone());
+                }
                 RoadEditorCommand::PreviewError(err) => {
                     self.error = Some(err.clone());
+                }
+                RoadEditorCommand::PreviewCrossing(crossing) => {
+                    self.crossings.push(crossing.clone());
                 }
                 RoadEditorCommand::PreviewDestruction(_) => {
                     self.destruction = true;
@@ -87,8 +84,6 @@ impl RoadPreviewState {
         let mut hasher = DefaultHasher::new();
         for cmd in cmds {
             match cmd {
-                // Assign a unique discriminant per variant so
-                // e.g. hash(PreviewClear) != hash(PreviewSnap(default))
                 RoadEditorCommand::PreviewClear => {
                     0u8.hash(&mut hasher);
                 }
@@ -120,11 +115,34 @@ impl RoadPreviewState {
                     7u8.hash(&mut hasher);
                     d.hash(&mut hasher);
                 }
-                // Road(_) deliberately skipped — only preview commands matter
                 _ => {}
             }
         }
         hasher.finish()
+    }
+}
+
+// Road Appearance Uniform (for tinting)
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct RoadAppearanceUniform {
+    pub tint: [f32; 4],
+}
+impl RoadAppearanceUniform {
+    pub fn normal() -> Self {
+        Self {
+            tint: [1.0, 1.0, 1.0, 1.0],
+        }
+    }
+    pub fn preview() -> Self {
+        Self {
+            tint: [0.8, 0.8, 2.1, 0.9],
+        }
+    }
+    pub fn preview_error() -> Self {
+        Self {
+            tint: [1.3, 0.6, 0.6, 1.0],
+        }
     }
 }
 

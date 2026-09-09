@@ -7,8 +7,11 @@ use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
 use crate::renderer::props::{GpuPropInstance, PropVertex, Props};
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::textures::material_keys::*;
+use crate::renderer::ui_pipelines::multisample_state;
 use crate::ui::vertex::{TextVtxRender, ThickLineVtxRender, ThinLineVtxRender, Vertex};
-use crate::world::buildings::buildings::{BuildingRenderer, BuildingVertex, Buildings};
+use crate::world::buildings::building_mesher::BuildingVertex;
+use crate::world::buildings::building_renderer::BuildingRenderer;
+use crate::world::buildings::buildings::Buildings;
 use crate::world::camera::Camera;
 use crate::world::cars::car_mesh::CarVertex;
 use crate::world::cars::car_render::CarInstance;
@@ -24,7 +27,6 @@ use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
 use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions, ShadowOptions};
 use wgpu_render_manager::renderer::RenderManager;
-use crate::renderer::ui_pipelines::multisample_state;
 
 pub struct RenderPassConfig {
     pub background_color: Color,
@@ -590,7 +592,7 @@ pub fn render_gizmo<'a>(
         gizmo.update_buffers(device, queue, &batches);
     let Some(gb) = gizmo.gizmo_buffers.as_mut() else {
         gizmo.clear();
-        return
+        return;
     };
     // Render thin lines with LineList
     if thin_count > 0 {
@@ -816,7 +818,7 @@ pub fn render_instance_ids<'a>(
         camera,
         terrain,
         pipelines,
-        settings
+        settings,
     );
 }
 
@@ -863,7 +865,7 @@ pub fn render_props<'a>(
         camera,
         terrain,
         pipelines,
-        settings
+        settings,
     );
 }
 

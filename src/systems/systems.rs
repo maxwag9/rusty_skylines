@@ -5,7 +5,7 @@ use crate::ui::input::Input;
 use crate::ui::variables::Variables;
 use crate::world::buildings::buildings::{BuildingStorage, Buildings};
 use crate::world::buildings::zoning::{
-    LotId, Zoning, ZoningType, collect_road_points, draw_area, point_in_polygon_xz,
+    LotId, Zoning, collect_road_points, draw_area, point_in_polygon_xz,
 };
 use crate::world::cars::car_render::interpolate_cars;
 use crate::world::roads::road_mesh_manager::RoadMeshManager;
@@ -22,7 +22,7 @@ pub fn run_ticked(resources: &mut Resources) {
     let renderer = &mut resources.render_core;
     let camera = &world.world_state.camera;
     let variables = &mut resources.ui.variables;
-    let (time, terrain, roads, zoning, buildings, cars, input, city_state) = (
+    let (time, terrain, roads, zoning, buildings, cars, input, city_state, sounds) = (
         &mut world.time,
         &mut world.terrain,
         &mut world.roads,
@@ -31,6 +31,7 @@ pub fn run_ticked(resources: &mut Resources) {
         &mut world.cars,
         &mut world.input,
         &mut world.city_state,
+        &mut world.sounds,
     );
     let (settings, gizmo, road_mesh_manager, props) = (
         &mut resources.settings,
@@ -61,7 +62,9 @@ pub fn run_ticked(resources: &mut Resources) {
         road_mesh_manager,
         city_state,
     );
-    roads.update(terrain, cars, city_state, input, time, settings, gizmo);
+    roads.update(
+        terrain, cars, city_state, input, time, settings, gizmo, sounds,
+    );
 }
 
 fn handle_destruction(
@@ -114,7 +117,7 @@ fn handle_destruction(
                     variables,
                     gizmo,
                     Some([3.0, 0.2, 0.2, 1.0]),
-                    Some(ZoningType::None),
+                    None,
                 );
                 BuildingStorage::despawn(
                     buildings,
@@ -304,7 +307,7 @@ pub fn run_ui(resources: &mut Resources, event_loop: &dyn ActiveEventLoop) {
         dt,
         &mut resources.render_core.props,
         &mut resources.world,
-        resources.window.surface_size(),
+        resources.window.surface_size().cast::<f32>(),
         &mut resources.command_queues,
         &mut resources.settings,
         event_loop,

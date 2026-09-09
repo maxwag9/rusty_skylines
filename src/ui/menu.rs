@@ -3,8 +3,9 @@ use crate::ui::cache::*;
 use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
+use sluggrs::FontSystem;
 use std::collections::HashMap;
-use glyphon::FontSystem;
+//use glyphon::FontSystem;
 use winit::dpi::PhysicalSize;
 
 #[derive(Debug)]
@@ -62,7 +63,7 @@ impl Menu {
         layer_index: usize,
         runtime: &UiRuntimes,
         aps: &HashMap<String, UiLayerYaml>,
-        window_size: PhysicalSize<u32>,
+        window_size: PhysicalSize<f32>,
     ) -> Vec<RuntimeLayer> {
         let mut ap_layers = vec![];
         let (before, rest) = self.layers.split_at_mut(layer_index);
@@ -88,8 +89,13 @@ impl Menu {
                             .chain(after.iter())
                             .any(|l| l.name == ap.id)
                         {
-                            let layer =
-                                ap.clone().to_layer(settings, variables, aps, layer.order + 1, window_size);
+                            let layer = ap.clone().to_layer(
+                                settings,
+                                variables,
+                                aps,
+                                layer.order + 1,
+                                window_size,
+                            );
                             ap_layers.push(layer);
                         }
 
@@ -139,7 +145,6 @@ impl Menu {
         layer.dirty.clear(rebuilt);
         ap_layers
     }
-
 
     pub fn bump_layer_order(&mut self, layer_name: &str, delta: i32, variables: &mut Variables) {
         for layer in &mut self.layers {

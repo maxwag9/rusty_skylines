@@ -1,0 +1,18 @@
+name: ButtonPress
+
+layers:
+  - waveform: Saw
+    start_freq: 700.0
+    end_freq: 500.0
+    fm_ratio: 1.0
+    fm_amount: 0.3
+    gain: 0.5
+
+duration: 0.08
+attack: 0.001
+decay: 0.002
+sustain: 0.0
+release: 0.035
+glide_curve: 1.0
+gain: 0.3
+pan: 0.0

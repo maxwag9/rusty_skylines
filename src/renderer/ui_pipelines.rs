@@ -39,7 +39,7 @@ pub struct UiPipelines {
     pub good_blend: Option<BlendState>,
     pub additive_blend: BlendState,
 
-    pub depth_view: TextureView
+    pub depth_view: TextureView,
 }
 
 impl UiPipelines {
@@ -47,7 +47,7 @@ impl UiPipelines {
         device: &Device,
         config: &SurfaceConfiguration,
         msaa_samples: u32,
-        size: PhysicalSize<u32>
+        size: PhysicalSize<f32>,
     ) -> anyhow::Result<Self> {
         let format = config.format;
         let handle_quad_vertices = [
@@ -57,7 +57,7 @@ impl UiPipelines {
                 color: [1.0; 4],
                 misc: [1.0; 4],
                 depth: 0.0,
-                _pad0: Default::default()
+                _pad0: Default::default(),
             },
             UiVertexPoly {
                 pos: [3.0, -3.0],
@@ -65,7 +65,7 @@ impl UiPipelines {
                 color: [1.0; 4],
                 misc: [1.0; 4],
                 depth: 0.0,
-                _pad0: Default::default()
+                _pad0: Default::default(),
             },
             UiVertexPoly {
                 pos: [-3.0, 3.0],
@@ -73,7 +73,7 @@ impl UiPipelines {
                 color: [1.0; 4],
                 misc: [1.0; 4],
                 depth: 0.0,
-                _pad0: Default::default()
+                _pad0: Default::default(),
             },
             UiVertexPoly {
                 pos: [3.0, 3.0],
@@ -81,7 +81,7 @@ impl UiPipelines {
                 color: [1.0; 4],
                 misc: [1.0; 4],
                 depth: 0.0,
-                _pad0: Default::default()
+                _pad0: Default::default(),
             },
         ];
         let handle_quad_buffer = device.create_buffer_init(&BufferInitDescriptor {
@@ -97,7 +97,7 @@ impl UiPipelines {
                 color: [1.0; 4],
                 misc: [1.0, 0.0, 0.0, 0.0],
                 depth: 0.0,
-                _pad0: Default::default()
+                _pad0: Default::default(),
             },
             UiVertexPoly {
                 pos: [1.0, -1.0],
@@ -105,7 +105,7 @@ impl UiPipelines {
                 color: [1.0; 4],
                 misc: [1.0, 0.0, 0.0, 0.0],
                 depth: 0.0,
-                _pad0: Default::default()
+                _pad0: Default::default(),
             },
             UiVertexPoly {
                 pos: [-1.0, 1.0],
@@ -113,7 +113,7 @@ impl UiPipelines {
                 color: [1.0; 4],
                 misc: [1.0, 0.0, 0.0, 0.0],
                 depth: 0.0,
-                _pad0: Default::default()
+                _pad0: Default::default(),
             },
             UiVertexPoly {
                 pos: [1.0, 1.0],
@@ -121,7 +121,7 @@ impl UiPipelines {
                 color: [1.0; 4],
                 misc: [1.0, 0.0, 0.0, 0.0],
                 depth: 0.0,
-                _pad0: Default::default()
+                _pad0: Default::default(),
             },
         ];
         let quad_buffer = device.create_buffer_init(&BufferInitDescriptor {
@@ -302,7 +302,7 @@ impl UiPipelines {
             additive_blend,
             good_blend,
             rect_layout,
-            depth_view: ui_depth_view
+            depth_view: ui_depth_view,
         })
     }
     pub fn resize(&mut self, config: &SurfaceConfiguration) {
@@ -318,11 +318,7 @@ pub fn multisample_state(samples: u32) -> MultisampleState {
     }
 }
 pub const UI_DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float; // TODO: Overkill!
-fn create_ui_depth_texture(
-    device: &Device,
-    width: u32,
-    height: u32,
-) -> TextureView {
+fn create_ui_depth_texture(device: &Device, width: u32, height: u32) -> TextureView {
     let texture = device.create_texture(&TextureDescriptor {
         label: Some("UI Depth Texture, yes 3D!"),
         size: Extent3d {

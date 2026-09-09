@@ -4,11 +4,11 @@ use crate::ui::menu::Menu;
 use crate::ui::ui_edit_manager::{TextEditCommand, UiEditManager};
 use crate::ui::ui_touch_manager::{EditorTouchExtension, ElementRef};
 use crate::ui::vertex::{ElementKind, LayerDirty, UiButtonText, UiElement};
+use crate::world::sound::sound::Sounds;
 use std::collections::HashMap;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 use winit::keyboard::NamedKey;
-
 // TEXT EDITING
 
 /// Handle text editing with undo support
@@ -18,6 +18,7 @@ pub fn handle_text_editing(
     menus: &mut HashMap<String, Menu>,
     edit_manager: &mut UiEditManager,
     input: &mut Input,
+    sounds: &mut Sounds,
 ) {
     let Some(sel) = editing_text else {
         return;
@@ -53,7 +54,7 @@ pub fn handle_text_editing(
     let before_template = text.template.clone();
     let before_caret = text.caret;
 
-    process_text_editing_input(editor, input, text, &mut layer.dirty);
+    process_text_editing_input(editor, input, text, &mut layer.dirty, sounds);
 
     if text.text != before_text || text.template != before_template {
         edit_manager.push_command(TextEditCommand {
@@ -78,20 +79,28 @@ pub fn process_text_editing_input(
     input: &mut Input,
     text: &mut UiButtonText,
     dirty: &mut LayerDirty,
+    sounds: &mut Sounds,
 ) {
     if handle_mouse_caret_selection(editor, input, text) {
+        if input.mouse.buttons.just_pressed() {
+            sounds.queue_sfx("ButtonHover");
+        }
+
         return;
     }
 
     if handle_clipboard_commands(input, text, dirty) {
+        sounds.queue_sfx("ButtonPress");
         return;
     }
 
     if handle_backspace(input, text, dirty) {
+        sounds.queue_sfx("Backspace");
         return;
     }
 
     if handle_character_input(input, text, dirty) {
+        sounds.queue_sfx("Write");
         return;
     }
 

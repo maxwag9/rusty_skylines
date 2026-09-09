@@ -175,6 +175,19 @@ impl SizeProperty {
         }
         scaled
     }
+    pub fn to_value(&self) -> Value {
+        match *self {
+            SizeProperty::Radius(v) => Value::F64(v as f64),
+            SizeProperty::Pt(v) => Value::F64(v as f64),
+            SizeProperty::Rect(v) => {
+                Value::Array(vec![Value::F64(v[0] as f64), Value::F64(v[1] as f64)])
+            }
+            SizeProperty::PolygonScale(v) => Value::F64(v as f64),
+            SizeProperty::AdvancedPrimitiveScale(v) => Value::F64(v as f64),
+            SizeProperty::Border(v) => Value::F64(v as f64),
+            SizeProperty::InsideBorder(v) => Value::F64(v as f64),
+        }
+    }
 }
 
 impl Display for SizeProperty {

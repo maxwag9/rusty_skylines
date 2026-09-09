@@ -424,13 +424,10 @@ pub fn make_path_to_parking_spot(
                 let Some(car_lane) = road_storage.lane_safe(car_lane_id) else {
                     return Err(ParkingPathError::LaneIdDoesntExistInStorage);
                 };
-                let (
-                    closest_driveway_point,
-                    closest_distance_driveway_to_lane,
-                    tangent,
-                    driveway_poly_idx,
-                ) = car_lane.geometry().closest_point_to(driveway_entrance.pos);
-                if driveway_poly_idx + 4 < car_poly_idx {
+                let projection = car_lane
+                    .geometry()
+                    .closest_point_to_xz(driveway_entrance.pos);
+                if projection.poly_idx + 4 < car_poly_idx {
                     // If car is past the drive way point...
                     let Some(partition_id) =
                         buildings.storage.get_partition_of_building(building.id)
@@ -451,7 +448,7 @@ pub fn make_path_to_parking_spot(
                 };
                 let Some(points_car_to_closest_driveway_point) = car_lane
                     .polyline()
-                    .get((car_poly_idx as usize)..(driveway_poly_idx as usize))
+                    .get((car_poly_idx as usize)..(projection.poly_idx as usize))
                     .clone()
                 else {
                     return Err(ParkingPathError::InvalidCarToDriveWayPoints);
@@ -680,9 +677,14 @@ pub fn make_new_signfinding_traj(
             }
         } else {
             return Err(BuildingDoesntExist(
-                "Building defined in the destination address doesn't exist".to_string(),
+                "Building defined in the destination doesn't exist".to_string(),
             ));
         };
+    let Some(building_segment_id) = building_segment_id else {
+        return Err(BuildingNotAtRoad(
+            "Building defined in the destination isn't connected to a Road".to_string(),
+        ));
+    };
     let mut safety_count = 0;
     while turns.len() < MAX_TURNS {
         safety_count += 1;
@@ -938,6 +940,7 @@ pub enum SignfindingError {
     NoAvailableArms(String),
     InvalidArmWeights(String),
     BuildingDoesntExist(String),
+    BuildingNotAtRoad(String),
     LotDoesntExist(String),
     LotLayoutDoesntExist(String),
     SegmentEndPointsDontMatchLastTurn(String),
@@ -1179,20 +1182,26 @@ fn build_road_path(
     let Some(destination) = car.mode.destination() else {
         return Err(RoadPathBuildError::NoDestination);
     };
-    let (driveway_entrances, building_pos, building_segment_id) =
-        if let Some(building) = buildings.storage.get(destination.as_building_id()) {
-            if let Some(lot) = zoning_storage.get_lot(building.lot_id) {
-                if let Some(layout) = lot.layout.as_ref() {
-                    (&layout.driveway_entrances, building.pos, lot.segment_id)
-                } else {
-                    return Err(RoadPathBuildError::LotLayoutDoesntExist);
-                }
-            } else {
-                return Err(RoadPathBuildError::LotDoesntExist);
-            }
-        } else {
-            return Err(RoadPathBuildError::BuildingDoesntExist);
-        };
+    let Some(building) = buildings.storage.get(destination.as_building_id()) else {
+        return Err(RoadPathBuildError::BuildingDoesntExist);
+    };
+
+    let Some(lot) = zoning_storage.get_lot(building.lot_id) else {
+        return Err(RoadPathBuildError::LotDoesntExist);
+    };
+
+    let Some(layout) = lot.layout.as_ref() else {
+        return Err(RoadPathBuildError::LotLayoutDoesntExist);
+    };
+
+    let Some(segment_id) = lot.segment_id else {
+        return Err(RoadPathBuildError::BuildingNotAtRoad);
+    };
+
+    let driveway_entrances = &layout.driveway_entrances;
+    let building_pos = building.pos;
+    let building_segment_id = segment_id;
+
     let mut current_turn = match get_last_turn(
         &sf_traj.turns,
         car,
@@ -2120,6 +2129,7 @@ pub enum RoadPathBuildError {
     LotDoesntExist,
     LotLayoutDoesntExist,
     BuildingDoesntExist,
+    BuildingNotAtRoad,
     RoadNetworkDoesntExist,
     TurnsAreEmpty,
     NoPossibleLanes(String),

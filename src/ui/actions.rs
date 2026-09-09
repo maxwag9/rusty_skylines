@@ -2,10 +2,11 @@
 pub mod drag_hue_point;
 
 use crate::data::{SettingKey, SettingOp, Settings};
+use crate::helpers::implementations::SerializableVec3;
 use crate::helpers::paths::rusty_skylines_dir;
 use crate::renderer::props::Props;
 use crate::simulation::Simulation;
-use crate::ui::action_parser::{ActionEvent, parse_action};
+use crate::ui::action_parser::{compile_actions, run_action};
 use crate::ui::menu::Menu;
 use crate::ui::parser::Value;
 use crate::ui::ui_edit_manager::{
@@ -16,95 +17,81 @@ use crate::ui::ui_editor::{
     Ui, get_element, get_element_main_size, get_element_mut, get_element_position,
 };
 use crate::ui::ui_edits::{SizeProperty, create_element, delete_element};
-use crate::ui::ui_touch_manager::{ElementRef, MouseButtons};
+use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::variables::{Variables, initialize_value, save_colors};
 use crate::ui::vertex::{
     AdvancedPrimitive, ElementKind, UiButtonCircle, UiButtonHandle, UiButtonOutline,
     UiButtonPolygon, UiButtonRect, UiButtonText, UiElement,
 };
-use crate::world::buildings::zoning::ZoningType;
+use crate::world::buildings::buildings::{Building, BuildingDesignSource, BuildingStorage};
+use crate::world::buildings::zoning::{Lot, LotEntrance, ZoningType};
 use crate::world::game_state::{
     GameState, LoadResult, NewSavePackage, SaveInfo, SaveResult, get_available_saves,
     make_safe_save_name,
 };
-use crate::world::roads::road_structs::{LeftLaneCount, RightLaneCount};
+use crate::world::roads::road_structs::{BuildMode, LeftLaneCount, RightLaneCount};
 use crate::world::world::World;
-use glam::Vec2;
+use glam::{Vec2, Vec3};
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{HashMap, VecDeque};
-use std::hash::{DefaultHasher, Hash, Hasher};
-use strum::IntoEnumIterator;
+use std::str::FromStr;
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum UiCommand {
     OpenMenu {
-        element_ctx: ElementContext,
         menu_name: String,
     },
     CloseMenu {
-        element_ctx: ElementContext,
         menu_name: String,
     },
     CloseAllMenus,
     CloseAllLayers {
-        element_ctx: ElementContext,
         menu_name: String,
     },
     ToggleMenu {
-        element_ctx: ElementContext,
         menu_name: String,
     },
     MenuActive {
-        element_ctx: ElementContext,
         menu_name: String,
     },
 
     // ===== LAYER COMMANDS =====
     OpenLayer {
-        element_ctx: ElementContext,
         menu_name: String,
         layer_name: String,
     },
     CloseLayer {
-        element_ctx: ElementContext,
         menu_name: String,
         layer_name: String,
     },
     ToggleLayer {
-        element_ctx: ElementContext,
         menu_name: String,
         layer_name: String,
     },
 
     // ===== VARIABLE COMMANDS =====
     SetVar {
-        element_ctx: ElementContext,
         name: String,
         value: String,
     },
     IncVar {
-        element_ctx: ElementContext,
         name: String,
         amount: String,
     },
     DecVar {
-        element_ctx: ElementContext,
         name: String,
         amount: String,
     },
     MulVar {
-        element_ctx: ElementContext,
         name: String,
         factor: String,
     },
     ToggleVar {
-        element_ctx: ElementContext,
         name: String,
     },
     Clamp {
-        element_ctx: ElementContext,
         name: String,
         min: String,
         max: String,
@@ -112,7 +99,6 @@ pub enum UiCommand {
 
     // ===== FLOW CONTROL =====
     Delay {
-        element_ctx: ElementContext,
         seconds: String,
     },
     Halt,
@@ -120,26 +106,22 @@ pub enum UiCommand {
         count: usize,
     },
     If {
-        element_ctx: ElementContext,
         condition: String,
         then: Vec<UiCommand>,
         else_branch: Vec<UiCommand>,
     },
     IfVarEq {
-        element_ctx: ElementContext,
         var_name: String,
         value: String,
         then: Vec<UiCommand>,
         else_branch: Vec<UiCommand>,
     },
     For {
-        element_ctx: ElementContext,
         value: String,
         commands: Vec<UiCommand>,
     },
     // Element Commands
     AddElement {
-        element_ctx: ElementContext,
         menu: String,
         layer: String,
         id: String,
@@ -149,7 +131,6 @@ pub enum UiCommand {
         undoable: bool,
     },
     AddAP {
-        element_ctx: ElementContext,
         menu: String,
         name: String,
         ap_name: String,
@@ -159,13 +140,11 @@ pub enum UiCommand {
         is_temporary: bool,
     },
     DeleteAP {
-        element_ctx: ElementContext,
         menu: String,
         layer: String,
         reference_id: String,
     },
     CloneElement {
-        element_ctx: ElementContext,
         from_menu: String,
         from_layer: String,
         from_id: String,
@@ -177,7 +156,6 @@ pub enum UiCommand {
         undoable: bool,
     },
     CloneLayer {
-        element_ctx: ElementContext,
         from_menu: String,
         from_layer: String,
         to_menu: String,
@@ -185,46 +163,31 @@ pub enum UiCommand {
         undoable: bool,
     },
     DeleteLayer {
-        element_ctx: ElementContext,
         menu: String,
         layer: String,
         undoable: bool,
     },
     DeleteElement {
-        element_ctx: ElementContext,
         menu: String,
         layer: String,
         id: String,
         undoable: bool,
     },
     SaveGame {
-        element_ctx: ElementContext,
         and_exit: String,
     },
     LoadSave {
-        element_ctx: ElementContext,
         save_name: String,
         without_saving: bool,
     },
     ExitGame,
-    ShowInteraction {
-        element_ctx: ElementContext,
-        events: Vec<ActionEvent>,
-        buttons: MouseButtons,
-        color: String,
-        shadow: bool,
-    },
     Print {
-        element_ctx: ElementContext,
         statement: String,
     },
     DebugVars,
     DebugMenus,
 
     Call {
-        element_ctx: ElementContext,
-        events: Vec<ActionEvent>,
-        buttons: MouseButtons,
         function_name: String,
         args: Option<String>,
     },
@@ -305,11 +268,12 @@ pub struct CommandContext<'a> {
     pub world: &'a mut World,
     pub props: &'a mut Props,
     pub ui: &'a mut Ui,
-    pub window_size: PhysicalSize<u32>,
+    pub window_size: PhysicalSize<f32>,
     pub settings: &'a mut Settings,
     pub event_loop: &'a dyn ActiveEventLoop,
     pub game_state: &'a mut GameState,
     pub simulation: &'a mut Simulation,
+    pub element_ctx: ElementContext,
 }
 
 // ==================== COMMAND QUEUE ====================
@@ -450,31 +414,27 @@ impl CommandQueue {
             }
         }
     }
-    fn execute_multiple(&mut self, commands: Vec<UiCommand>, ctx: &mut CommandContext) {
-        for cmd in commands.iter() {
-            match self.execute_one(cmd.clone(), ctx) {
+    pub fn execute_multiple(&mut self, commands: Vec<UiCommand>, ctx: &mut CommandContext) {
+        for cmd in commands {
+            match self.execute_one(cmd, ctx) {
                 CommandResult::Ok => {}
                 CommandResult::Stop => {}
                 CommandResult::Skip(n) => {}
                 CommandResult::Delay { seconds, remaining } => {}
                 CommandResult::Error(msg) => {
-                    eprintln!("[CommandQueue] Error inside if() command: {}", msg);
+                    eprintln!("[CommandQueue] Error inside command: {}", msg);
                 }
                 CommandResult::AnnoyingError(msg) => {
-                    //eprintln!("[CommandQueue] Annoying Error inside if() command: {}", msg);
+                    //eprintln!("[CommandQueue] Annoying Error inside command: {}", msg);
                 }
             }
         }
     }
-    fn execute_one(&mut self, cmd: UiCommand, ctx: &mut CommandContext) -> CommandResult {
+    pub fn execute_one(&mut self, cmd: UiCommand, ctx: &mut CommandContext) -> CommandResult {
         //println!("{:?}", cmd);
         match cmd {
-            UiCommand::OpenMenu {
-                element_ctx,
-                menu_name,
-            } => {
-                let element_ctx = &element_ctx;
-                let menu_name = string_to_value(ctx, element_ctx, menu_name);
+            UiCommand::OpenMenu { menu_name } => {
+                let menu_name = string_to_value(ctx, menu_name);
 
                 let menu_names: Vec<String> = if let Some(name) = menu_name.as_string() {
                     vec![name.to_string()]
@@ -500,13 +460,13 @@ impl CommandQueue {
                 };
 
                 let mut errors = Vec::new();
-
+                //println!("Opening: {:?}", menu_names);
                 for menu_name in &menu_names {
                     if let Some(menu) = ctx.ui.menus.get_mut(menu_name) {
                         menu.active = true;
                         // for layer in menu.layers.iter_mut() {
-                        //     // layer.active = true;
-                        //     // layer.activate_all_elements();
+                        //     layer.active = true;
+                        //     layer.activate_all_elements();
                         //     layer.dirty.mark_all();
                         // }
                     } else {
@@ -521,12 +481,9 @@ impl CommandQueue {
                 }
             }
 
-            UiCommand::CloseMenu {
-                element_ctx,
-                menu_name,
-            } => {
-                let element_ctx = &element_ctx;
-                let menu_name = string_to_value(ctx, element_ctx, menu_name);
+            UiCommand::CloseMenu { menu_name } => {
+                let element_ctx = &ctx.element_ctx.clone();
+                let menu_name = string_to_value(ctx, menu_name);
 
                 let menu_names: Vec<String> = if let Some(name) = menu_name.as_string() {
                     vec![name.to_string()]
@@ -568,18 +525,16 @@ impl CommandQueue {
                 }
             }
             UiCommand::CloseAllMenus => {
+                //println!("Closing all menus");
                 for (_, menu) in ctx.ui.menus.iter_mut() {
                     menu.active = false;
                 }
                 CommandResult::Ok
             }
-            UiCommand::CloseAllLayers {
-                element_ctx,
-                menu_name,
-            } => {
+            UiCommand::CloseAllLayers { menu_name } => {
                 //println!("Hi, te menu name is: {}", menu_name);
-                let element_ctx = &element_ctx;
-                let menu_name = string_to_value(ctx, element_ctx, menu_name);
+                let element_ctx = &ctx.element_ctx.clone();
+                let menu_name = string_to_value(ctx, menu_name);
                 let Some(menu_name) = menu_name.as_string() else {
                     return CommandResult::Error(
                         "Menu name in close_all_layers() wasn't resolved to string".to_string(),
@@ -598,12 +553,9 @@ impl CommandQueue {
                 }
             }
 
-            UiCommand::ToggleMenu {
-                element_ctx,
-                menu_name,
-            } => {
-                let element_ctx = &element_ctx;
-                let menu_name = string_to_value(ctx, element_ctx, menu_name);
+            UiCommand::ToggleMenu { menu_name } => {
+                let element_ctx = &ctx.element_ctx.clone();
+                let menu_name = string_to_value(ctx, menu_name);
                 let Some(menu_name) = menu_name.as_string() else {
                     return CommandResult::Error(
                         "Menu name in toggle_menu() wasn't resolved to string".to_string(),
@@ -617,12 +569,9 @@ impl CommandQueue {
                 }
             }
 
-            UiCommand::MenuActive {
-                element_ctx,
-                menu_name,
-            } => {
-                let element_ctx = &element_ctx;
-                let menu_name = string_to_value(ctx, element_ctx, menu_name);
+            UiCommand::MenuActive { menu_name } => {
+                let element_ctx = &ctx.element_ctx.clone();
+                let menu_name = string_to_value(ctx, menu_name);
                 let Some(menu_name) = menu_name.as_string() else {
                     return CommandResult::Error(
                         "Menu name in menu_active() wasn't resolved to string".to_string(),
@@ -640,18 +589,17 @@ impl CommandQueue {
 
             // ===== LAYER COMMANDS =====
             UiCommand::OpenLayer {
-                element_ctx,
                 menu_name,
                 layer_name,
             } => {
-                let element_ctx = &element_ctx;
-                let menu_name = string_to_value(ctx, element_ctx, menu_name);
+                let element_ctx = &ctx.element_ctx.clone();
+                let menu_name = string_to_value(ctx, menu_name);
                 let Some(menu_name) = menu_name.as_string() else {
                     return CommandResult::Error(
                         "Menu name in open_layer() wasn't resolved to string".to_string(),
                     );
                 };
-                let layer_name = string_to_value(ctx, element_ctx, layer_name);
+                let layer_name = string_to_value(ctx, layer_name);
                 let Some(layer_name) = layer_name.as_string() else {
                     return CommandResult::Error(
                         "Layer name in open_layer() wasn't resolved to string".to_string(),
@@ -681,18 +629,17 @@ impl CommandQueue {
             }
 
             UiCommand::CloseLayer {
-                element_ctx,
                 menu_name,
                 layer_name,
             } => {
-                let element_ctx = &element_ctx;
-                let menu_name = string_to_value(ctx, element_ctx, menu_name);
+                let element_ctx = &ctx.element_ctx.clone();
+                let menu_name = string_to_value(ctx, menu_name);
                 let Some(menu_name) = menu_name.as_string() else {
                     return CommandResult::Error(
                         "Menu name in close_layer() wasn't resolved to string".to_string(),
                     );
                 };
-                let layer_name = string_to_value(ctx, element_ctx, layer_name);
+                let layer_name = string_to_value(ctx, layer_name);
                 let Some(layer_name) = layer_name.as_string() else {
                     return CommandResult::Error(
                         "Layer name in close_layer() wasn't resolved to string".to_string(),
@@ -709,18 +656,17 @@ impl CommandQueue {
             }
 
             UiCommand::ToggleLayer {
-                element_ctx,
                 menu_name,
                 layer_name,
             } => {
-                let element_ctx = &element_ctx;
-                let menu_name = string_to_value(ctx, element_ctx, menu_name);
+                let element_ctx = &ctx.element_ctx.clone();
+                let menu_name = string_to_value(ctx, menu_name);
                 let Some(menu_name) = menu_name.as_string() else {
                     return CommandResult::Error(
                         "Menu name in toggle_layer() wasn't resolved to string".to_string(),
                     );
                 };
-                let layer_name = string_to_value(ctx, element_ctx, layer_name);
+                let layer_name = string_to_value(ctx, layer_name);
                 let Some(layer_name) = layer_name.as_string() else {
                     return CommandResult::Error(
                         "Layer name in toggle_layer() wasn't resolved to string".to_string(),
@@ -736,14 +682,10 @@ impl CommandQueue {
                 CommandResult::Error(format!("Menu '{}' not found", menu_name))
             }
 
-            UiCommand::SetVar {
-                element_ctx,
-                name,
-                value,
-            } => {
-                let element_ctx = &element_ctx;
+            UiCommand::SetVar { name, value } => {
+                let element_ctx = &ctx.element_ctx.clone();
                 let initial_name = name.clone();
-                let name = string_to_value(ctx, element_ctx, name);
+                let name = string_to_value(ctx, name);
                 //println!("After string to value: {}", name);
                 let Some(name) = name.as_string() else {
                     return CommandResult::Error(format!(
@@ -751,7 +693,7 @@ impl CommandQueue {
                     ));
                 };
                 //println!("Pre to-value: {}", value);
-                let value = string_to_value(ctx, element_ctx, value);
+                let value = string_to_value(ctx, value);
                 //println!("Post to-value: {}", value);
 
                 let (field_type, name) = match name.split_once(':') {
@@ -776,20 +718,16 @@ impl CommandQueue {
                     ));
                 }
 
-                set_variable_or_property(ctx, element_ctx, &name, value)
+                set_variable_or_property(ctx, &name, value)
             }
 
-            UiCommand::IncVar {
-                element_ctx,
-                name,
-                amount,
-            } => {
-                let element_ctx = &element_ctx;
-                let name = string_to_value(ctx, element_ctx, name);
+            UiCommand::IncVar { name, amount } => {
+                let element_ctx = &ctx.element_ctx.clone();
+                let name = string_to_value(ctx, name);
                 let Some(name) = name.as_string() else {
                     return CommandResult::Error("Name in inc_var() wasn't resolved to string, use 'str' or 'strexpr:' or do something else".to_string());
                 };
-                let Some(amount) = string_to_value(ctx, element_ctx, amount).as_f64() else {
+                let Some(amount) = string_to_value(ctx, amount).as_f64() else {
                     return CommandResult::Error(
                         "Value in inc_var() wasn't resolved to f64".to_string(),
                     );
@@ -820,28 +758,26 @@ impl CommandQueue {
                     return CommandResult::Ok;
                 }
 
-                let new_val = match ctx.ui.variables.get(&name).as_deref() {
-                    Some(Value::F64(f)) => Value::F64(f + amount),
-                    Some(Value::I64(i)) => Value::F64(*i as f64 + amount),
-                    _ => Value::F64(amount),
-                };
+                let new_val =
+                    match Value::load_variable(&ctx.ui.variables, &ctx.ui.menus, element_ctx, name)
+                    {
+                        Some(Value::F64(f)) => Value::F64(f + amount),
+                        Some(Value::I64(i)) => Value::F64(i as f64 + amount),
+                        _ => Value::F64(amount),
+                    };
 
-                set_variable_or_property(ctx, element_ctx, &name, new_val)
+                set_variable_or_property(ctx, &name, new_val)
             }
 
-            UiCommand::DecVar {
-                element_ctx,
-                name,
-                amount,
-            } => {
-                let element_ctx = &element_ctx;
-                let name = string_to_value(ctx, element_ctx, name);
+            UiCommand::DecVar { name, amount } => {
+                let element_ctx = &ctx.element_ctx.clone();
+                let name = string_to_value(ctx, name);
                 let Some(name) = name.as_string() else {
                     return CommandResult::Error(
                         "Name in dec_var() wasn't resolved to string".to_string(),
                     );
                 };
-                let Some(amount) = string_to_value(ctx, element_ctx, amount).as_f64() else {
+                let Some(amount) = string_to_value(ctx, amount).as_f64() else {
                     return CommandResult::Error(
                         "Value in dec_var() wasn't resolved to f64".to_string(),
                     );
@@ -872,28 +808,26 @@ impl CommandQueue {
                     return CommandResult::Ok;
                 }
 
-                let new_val = match ctx.ui.variables.get(&name).as_deref() {
-                    Some(Value::F64(f)) => Value::F64(f - amount),
-                    Some(Value::I64(i)) => Value::F64(*i as f64 - amount),
-                    _ => Value::F64(-amount),
-                };
+                let new_val =
+                    match Value::load_variable(&ctx.ui.variables, &ctx.ui.menus, element_ctx, name)
+                    {
+                        Some(Value::F64(f)) => Value::F64(f - amount),
+                        Some(Value::I64(i)) => Value::F64(i as f64 - amount),
+                        _ => Value::F64(-amount),
+                    };
 
-                set_variable_or_property(ctx, element_ctx, &name, new_val)
+                set_variable_or_property(ctx, &name, new_val)
             }
 
-            UiCommand::MulVar {
-                element_ctx,
-                name,
-                factor,
-            } => {
-                let element_ctx = &element_ctx;
-                let name = string_to_value(ctx, element_ctx, name);
+            UiCommand::MulVar { name, factor } => {
+                let element_ctx = &ctx.element_ctx.clone();
+                let name = string_to_value(ctx, name);
                 let Some(name) = name.as_string() else {
                     return CommandResult::Error(
                         "Name in mul_var() wasn't resolved to string".to_string(),
                     );
                 };
-                let Some(factor) = string_to_value(ctx, element_ctx, factor).as_f64() else {
+                let Some(factor) = string_to_value(ctx, factor).as_f64() else {
                     return CommandResult::Error(
                         "Factor in mul_var() wasn't resolved to f64".to_string(),
                     );
@@ -908,18 +842,20 @@ impl CommandQueue {
                     return CommandResult::Ok;
                 }
 
-                let new_val = match ctx.ui.variables.get(&name).as_deref() {
-                    Some(Value::F64(f)) => Value::F64(f * factor),
-                    Some(Value::I64(i)) => Value::F64(*i as f64 * factor),
-                    _ => Value::F64(factor),
-                };
+                let new_val =
+                    match Value::load_variable(&ctx.ui.variables, &ctx.ui.menus, element_ctx, name)
+                    {
+                        Some(Value::F64(f)) => Value::F64(f * factor),
+                        Some(Value::I64(i)) => Value::F64(i as f64 * factor),
+                        _ => Value::F64(factor),
+                    };
 
-                set_variable_or_property(ctx, element_ctx, &name, new_val)
+                set_variable_or_property(ctx, &name, new_val)
             }
 
-            UiCommand::ToggleVar { element_ctx, name } => {
-                let element_ctx = &element_ctx;
-                let name = string_to_value(ctx, element_ctx, name);
+            UiCommand::ToggleVar { name } => {
+                let element_ctx = &ctx.element_ctx.clone();
+                let name = string_to_value(ctx, name);
                 let Some(name) = name.as_string() else {
                     return CommandResult::Error(
                         "Name in toggle_var() wasn't resolved to string".to_string(),
@@ -933,53 +869,50 @@ impl CommandQueue {
                     return CommandResult::Ok;
                 }
                 //println!("{} {:?}", name, ctx.ui.variables.get(&name));
-                let new_val = match ctx.ui.variables.get(&name).as_deref() {
-                    Some(Value::Bool(b)) => Value::Bool(!b),
-                    Some(Value::None) => Value::Bool(true),
-                    Some(Value::I64(i)) => {
-                        if *i == 0 {
-                            Value::I64(1)
-                        } else if *i == 1 {
-                            Value::I64(0)
-                        } else {
-                            return CommandResult::Ok;
+                let new_val =
+                    match Value::load_variable(&ctx.ui.variables, &ctx.ui.menus, element_ctx, name)
+                    {
+                        Some(Value::Bool(b)) => Value::Bool(!b),
+                        Some(Value::None) => Value::Bool(true),
+                        Some(Value::I64(i)) => {
+                            if i == 0 {
+                                Value::I64(1)
+                            } else if i == 1 {
+                                Value::I64(0)
+                            } else {
+                                return CommandResult::Ok;
+                            }
                         }
-                    }
-                    Some(Value::String(str)) => {
-                        if str == "false" {
-                            Value::Bool(true)
-                        } else if str == "true" {
-                            Value::Bool(false)
-                        } else {
-                            return CommandResult::Ok;
+                        Some(Value::String(str)) => {
+                            if str == "false" {
+                                Value::Bool(true)
+                            } else if str == "true" {
+                                Value::Bool(false)
+                            } else {
+                                return CommandResult::Ok;
+                            }
                         }
-                    }
-                    None => Value::Bool(true),
-                    _ => return CommandResult::Ok,
-                };
+                        None => Value::Bool(true),
+                        _ => return CommandResult::Ok,
+                    };
 
-                set_variable_or_property(ctx, element_ctx, &name, new_val)
+                set_variable_or_property(ctx, &name, new_val)
             }
 
-            UiCommand::Clamp {
-                element_ctx,
-                name,
-                min,
-                max,
-            } => {
-                let element_ctx = &element_ctx;
-                let name = string_to_value(ctx, element_ctx, name);
+            UiCommand::Clamp { name, min, max } => {
+                let element_ctx = &ctx.element_ctx.clone();
+                let name = string_to_value(ctx, name);
                 let Some(name) = name.as_string() else {
                     return CommandResult::Error(
                         "Name in clamp() wasn't resolved to string".to_string(),
                     );
                 };
-                let Some(min) = string_to_value(ctx, element_ctx, min).as_f64() else {
+                let Some(min) = string_to_value(ctx, min).as_f64() else {
                     return CommandResult::Error(
                         "Min in clamp() wasn't resolved to f64".to_string(),
                     );
                 };
-                let Some(max) = string_to_value(ctx, element_ctx, max).as_f64() else {
+                let Some(max) = string_to_value(ctx, max).as_f64() else {
                     return CommandResult::Error(
                         "Max in clamp() wasn't resolved to f64".to_string(),
                     );
@@ -994,21 +927,20 @@ impl CommandQueue {
                     return CommandResult::Ok;
                 }
 
-                let new_val = match ctx.ui.variables.get(&name).as_deref() {
-                    Some(Value::F64(f)) => Value::F64(f.clamp(min, max)),
-                    Some(Value::I64(i)) => Value::F64((*i as f64).clamp(min, max)),
-                    _ => Value::F64(min),
-                };
+                let new_val =
+                    match Value::load_variable(&ctx.ui.variables, &ctx.ui.menus, element_ctx, name)
+                    {
+                        Some(Value::F64(f)) => Value::F64(f.clamp(min, max)),
+                        Some(Value::I64(i)) => Value::F64((i as f64).clamp(min, max)),
+                        _ => Value::F64(min),
+                    };
 
-                set_variable_or_property(ctx, element_ctx, &name, new_val)
+                set_variable_or_property(ctx, &name, new_val)
             }
 
-            UiCommand::Delay {
-                element_ctx,
-                seconds,
-            } => {
-                let element_ctx = &element_ctx;
-                let Some(seconds) = string_to_value(ctx, element_ctx, seconds).as_f64() else {
+            UiCommand::Delay { seconds } => {
+                let element_ctx = &ctx.element_ctx.clone();
+                let Some(seconds) = string_to_value(ctx, seconds).as_f64() else {
                     return CommandResult::Error(
                         "Seconds in delay() wasn't resolved to f64".to_string(),
                     );
@@ -1022,15 +954,14 @@ impl CommandQueue {
             UiCommand::Skip { count } => CommandResult::Skip(count),
 
             UiCommand::If {
-                element_ctx,
                 condition,
                 then,
                 else_branch,
             } => {
-                let element_ctx = &element_ctx;
+                let element_ctx = &ctx.element_ctx.clone();
                 //println!("{} {:?} {:?}", condition, then, else_branch);
                 //println!("Before: {}", condition);
-                let condition = string_to_value(ctx, element_ctx, condition);
+                let condition = string_to_value(ctx, condition);
                 //println!("After: {}", condition);
                 if condition.is_truthy() {
                     self.execute_multiple(then, ctx);
@@ -1041,15 +972,14 @@ impl CommandQueue {
             }
 
             UiCommand::IfVarEq {
-                element_ctx,
                 var_name,
                 value,
                 then,
                 else_branch,
             } => {
-                let element_ctx = &element_ctx;
+                let element_ctx = &ctx.element_ctx.clone();
                 //println!("{:?} {:?}", then, else_branch);
-                let var_value = string_to_value(ctx, element_ctx, var_name);
+                let var_value = string_to_value(ctx, var_name);
                 //let Some(var_value) = var_name.as_string() else { return CommandResult::Error(format!("Var Name in ifvareq() wasn't resolved to string, instead to: {}", var_name)) };
                 //println!("{} {}", var_name, value);
                 // let var_value = if let Some(key) = get_setting_key(&var_name) {
@@ -1058,7 +988,7 @@ impl CommandQueue {
                 //     ctx.ui.variables.get(&var_name).map(|v| v.into_owned())
                 // };
 
-                let compare_value = string_to_value(ctx, element_ctx, value);
+                let compare_value = string_to_value(ctx, value);
                 //println!("{} {}", var_value, compare_value);
                 if var_value == compare_value {
                     self.execute_multiple(then, ctx);
@@ -1068,13 +998,9 @@ impl CommandQueue {
                 CommandResult::Ok
             }
 
-            UiCommand::For {
-                element_ctx,
-                value,
-                commands,
-            } => {
-                let element_ctx = &element_ctx;
-                let val = string_to_value(ctx, element_ctx, value);
+            UiCommand::For { value, commands } => {
+                let element_ctx = &ctx.element_ctx.clone();
+                let val = string_to_value(ctx, value);
                 match val {
                     Value::None => {}
                     Value::F64(n) => {
@@ -1104,7 +1030,6 @@ impl CommandQueue {
                 CommandResult::Ok
             }
             UiCommand::AddElement {
-                element_ctx,
                 menu,
                 layer,
                 id,
@@ -1113,23 +1038,23 @@ impl CommandQueue {
                 actions,
                 undoable,
             } => {
-                let element_ctx = &element_ctx;
-                let kind = string_to_value(ctx, element_ctx, kind).into_string();
+                let element_ctx = &ctx.element_ctx.clone();
+                let kind = string_to_value(ctx, kind).into_string();
                 let kind = ElementKind::from_string(kind.to_string().as_str());
                 if kind == ElementKind::None {
                     return CommandResult::Error(
                         "Element Kind is None in AddElement kind argument".to_string(),
                     );
                 }
-                let center = string_to_value(ctx, element_ctx, center);
+                let center = string_to_value(ctx, center);
                 let Some(center) = center.as_pos() else {
                     return CommandResult::Error(
                         "Couldn't unpack center pos from AddElement center argument".to_string(),
                     );
                 };
-                let menu = string_to_value(ctx, element_ctx, menu).into_string();
-                let layer = string_to_value(ctx, element_ctx, layer).into_string();
-                let id = string_to_value(ctx, element_ctx, id).into_string();
+                let menu = string_to_value(ctx, menu).into_string();
+                let layer = string_to_value(ctx, layer).into_string();
+                let id = string_to_value(ctx, id).into_string();
                 let Some(element) = make_element(id.to_string(), kind, center) else {
                     return CommandResult::Error("Couldn't make element in AddElement".to_string());
                 };
@@ -1151,7 +1076,6 @@ impl CommandQueue {
                 CommandResult::Ok
             }
             UiCommand::AddAP {
-                element_ctx,
                 menu,
                 name,
                 ap_name,
@@ -1160,24 +1084,24 @@ impl CommandQueue {
                 scale,
                 is_temporary,
             } => {
-                let element_ctx = &element_ctx;
-                let center = string_to_value(ctx, element_ctx, center);
+                let element_ctx = &ctx.element_ctx.clone();
+                let center = string_to_value(ctx, center);
                 let Some(center) = center.as_pos() else {
                     return CommandResult::Error(format!(
                         "Couldn't unpack center pos from AddAP center argument, parsed to: {}",
                         center
                     ));
                 };
-                let scale = string_to_value(ctx, element_ctx, scale);
+                let scale = string_to_value(ctx, scale);
                 let Some(scale) = scale.as_f64() else {
                     return CommandResult::Error(
                         "Couldn't unpack scale from AddAP scale argument".to_string(),
                     );
                 };
-                let menu = string_to_value(ctx, element_ctx, menu).into_string();
-                let name = string_to_value(ctx, element_ctx, name).into_string();
-                let ap_name = string_to_value(ctx, element_ctx, ap_name).into_string();
-                let ap_vars = string_to_value(ctx, element_ctx, ap_var);
+                let menu = string_to_value(ctx, menu).into_string();
+                let name = string_to_value(ctx, name).into_string();
+                let ap_name = string_to_value(ctx, ap_name).into_string();
+                let ap_vars = string_to_value(ctx, ap_var);
                 let Some(ap_vars) = ap_vars
                     .as_array()
                     .map(|arr| arr.iter().map(|v| v.to_string()).collect())
@@ -1221,15 +1145,14 @@ impl CommandQueue {
                 CommandResult::Ok
             }
             UiCommand::DeleteAP {
-                element_ctx,
                 menu,
                 layer,
                 reference_id,
             } => {
-                let element_ctx = &element_ctx;
-                let menu = string_to_value(ctx, element_ctx, menu).into_string();
-                let layer = string_to_value(ctx, element_ctx, layer).into_string();
-                let reference_id = string_to_value(ctx, element_ctx, reference_id).into_string();
+                let element_ctx = &ctx.element_ctx.clone();
+                let menu = string_to_value(ctx, menu).into_string();
+                let layer = string_to_value(ctx, layer).into_string();
+                let reference_id = string_to_value(ctx, reference_id).into_string();
                 ctx.ui.ui_edit_manager.execute_command(
                     DeleteAPCommand {
                         menu,
@@ -1244,7 +1167,6 @@ impl CommandQueue {
                 CommandResult::Ok
             }
             UiCommand::CloneElement {
-                element_ctx,
                 from_menu,
                 from_layer,
                 from_id,
@@ -1255,19 +1177,19 @@ impl CommandQueue {
                 actions,
                 undoable,
             } => {
-                let element_ctx = &element_ctx;
-                let from_menu = string_to_value(ctx, element_ctx, from_menu).into_string();
-                let from_layer = string_to_value(ctx, element_ctx, from_layer).into_string();
-                let from_id = string_to_value(ctx, element_ctx, from_id).into_string();
+                let element_ctx = &ctx.element_ctx.clone();
+                let from_menu = string_to_value(ctx, from_menu).into_string();
+                let from_layer = string_to_value(ctx, from_layer).into_string();
+                let from_id = string_to_value(ctx, from_id).into_string();
                 let from_element = ElementRef::new(
                     from_menu.as_str(),
                     from_layer.as_str(),
                     from_id.as_str(),
                     ElementKind::None,
                 );
-                let to_menu = string_to_value(ctx, element_ctx, to_menu).into_string();
-                let to_layer = string_to_value(ctx, element_ctx, to_layer).into_string();
-                let to_id = string_to_value(ctx, element_ctx, to_id).into_string();
+                let to_menu = string_to_value(ctx, to_menu).into_string();
+                let to_layer = string_to_value(ctx, to_layer).into_string();
+                let to_id = string_to_value(ctx, to_id).into_string();
                 if undoable {
                     let to_element = ElementRef::new(
                         to_menu.as_str(),
@@ -1275,8 +1197,8 @@ impl CommandQueue {
                         to_id.as_str(),
                         ElementKind::None,
                     );
-                    let center = string_to_value(ctx, element_ctx, center);
-                    let actions = string_to_value(ctx, element_ctx, actions);
+                    let center = string_to_value(ctx, center);
+                    let actions = string_to_value(ctx, actions);
                     ctx.ui.ui_edit_manager.execute_command(
                         DuplicateElementCommand {
                             from_element,
@@ -1310,8 +1232,8 @@ impl CommandQueue {
                     );
 
                     element.set_id(&to_id.to_string());
-                    let center = string_to_value(ctx, element_ctx, center);
-                    let actions = string_to_value(ctx, element_ctx, actions);
+                    let center = string_to_value(ctx, center);
+                    let actions = string_to_value(ctx, actions);
                     if let Some(center) = center.as_pos() {
                         element.set_pos(center[0], center[1])
                     };
@@ -1338,18 +1260,17 @@ impl CommandQueue {
             }
 
             UiCommand::CloneLayer {
-                element_ctx,
                 from_menu,
                 from_layer,
                 to_menu,
                 to_layer,
                 undoable,
             } => {
-                let element_ctx = &element_ctx;
-                let from_menu = string_to_value(ctx, element_ctx, from_menu).into_string();
-                let from_layer = string_to_value(ctx, element_ctx, from_layer).into_string();
-                let to_menu = string_to_value(ctx, element_ctx, to_menu).into_string();
-                let to_layer = string_to_value(ctx, element_ctx, to_layer).into_string();
+                let element_ctx = &ctx.element_ctx.clone();
+                let from_menu = string_to_value(ctx, from_menu).into_string();
+                let from_layer = string_to_value(ctx, from_layer).into_string();
+                let to_menu = string_to_value(ctx, to_menu).into_string();
+                let to_layer = string_to_value(ctx, to_layer).into_string();
                 let Some(mut layer) = (if let Some(menu) = ctx.ui.menus.get(&from_menu) {
                     if let Some(layer) = menu.layers.iter().find(|l| l.name == from_layer) {
                         Some(layer.clone())
@@ -1375,14 +1296,13 @@ impl CommandQueue {
                 }
             }
             UiCommand::DeleteLayer {
-                element_ctx,
                 menu,
                 layer,
                 undoable,
             } => {
-                let element_ctx = &element_ctx;
-                let menu = string_to_value(ctx, element_ctx, menu).into_string();
-                let layer = string_to_value(ctx, element_ctx, layer).into_string();
+                let element_ctx = &ctx.element_ctx.clone();
+                let menu = string_to_value(ctx, menu).into_string();
+                let layer = string_to_value(ctx, layer).into_string();
                 if let Some(menu) = ctx.ui.menus.get_mut(&menu) {
                     if let Some(idx) = menu.layers.iter().position(|l| l.name == layer) {
                         menu.layers.remove(idx);
@@ -1398,16 +1318,15 @@ impl CommandQueue {
                 }
             }
             UiCommand::DeleteElement {
-                element_ctx,
                 menu,
                 layer,
                 id,
                 undoable,
             } => {
-                let element_ctx = &element_ctx;
-                let menu = string_to_value(ctx, element_ctx, menu).into_string();
-                let layer = string_to_value(ctx, element_ctx, layer).into_string();
-                let id = string_to_value(ctx, element_ctx, id).into_string();
+                let element_ctx = &ctx.element_ctx.clone();
+                let menu = string_to_value(ctx, menu).into_string();
+                let layer = string_to_value(ctx, layer).into_string();
+                let id = string_to_value(ctx, id).into_string();
                 let element = ElementRef::new(
                     menu.as_str(),
                     layer.as_str(),
@@ -1437,11 +1356,8 @@ impl CommandQueue {
                 }
             }
 
-            UiCommand::SaveGame {
-                element_ctx,
-                and_exit,
-            } => {
-                let and_exit = string_to_value(ctx, &element_ctx, and_exit).is_truthy();
+            UiCommand::SaveGame { and_exit } => {
+                let and_exit = string_to_value(ctx, and_exit).is_truthy();
                 save_game(
                     ctx.game_state,
                     ctx.world,
@@ -1453,12 +1369,11 @@ impl CommandQueue {
                 CommandResult::Ok
             }
             UiCommand::LoadSave {
-                element_ctx,
                 save_name,
                 without_saving,
             } => {
-                let element_ctx = &element_ctx;
-                let save_name = string_to_value(ctx, element_ctx, save_name);
+                let element_ctx = &ctx.element_ctx.clone();
+                let save_name = string_to_value(ctx, save_name);
                 let Some(save_name) = save_name.as_string() else {
                     return CommandResult::Error(format!(
                         "Save name '{}' in load_save() wasn't resolved to string",
@@ -1496,134 +1411,10 @@ impl CommandQueue {
                 );
                 CommandResult::Ok
             }
-            UiCommand::ShowInteraction {
-                element_ctx,
-                events,
-                buttons,
-                color,
-                shadow,
-            } => {
-                let element_ctx = &element_ctx;
-                let Some(element) = element_ctx
-                    .self_element
-                    .as_ref()
-                    .or(element_ctx.as_element.as_ref())
-                else {
-                    return CommandResult::Error("Don't use element things like show_interaction() in global actions, only in global element actions or inside elements' actions".to_string());
-                };
-
-                let shadow_name = format!("{}_shadow", element.id);
-                let shadow_master_command = format!(r#"as:"[{}]" set(str:shadow_color, [expr:{{self.color.fill.r}}*0.01, expr:{{self.color.fill.g}}*0.01, expr:{{self.color.fill.b}}*0.01, expr:{{self.color.fill.a}}*0.7]); set(str:as.center, [expr:{{self.center.x}}+5, expr:{{self.center.y}}+3]); set(str:as.color.fill, shadow_color); set(str:as.color.border, shadow_color); set(str:as.idx, self.idx); ifvareq(self.active, bool:false, delete(as.menu, as.layer, as.id, false)); if(expr:!{{as.exists}}, clone(self.menu, self.layer, self.id, self.menu, self.layer, str:{}, [expr:{{self.center.x}}+10, {{self.center.y}}], [], false);); if(expr:({{as.idx}}+1) != {{self.idx}}, set(str:as.offset_order, expr:{{self.idx}} - ({{as.idx}} + 1) ) )"#, shadow_name, shadow_name).to_string();
-
-                let color =
-                    if let Some(color) = string_to_value(ctx, element_ctx, color).as_color4() {
-                        color
-                    } else {
-                        let mut hasher = DefaultHasher::new();
-                        element.hash(&mut hasher);
-                        let element_hash = hasher.finish();
-
-                        let key = format!("original_color_fill_{}", element_hash);
-
-                        // Only store if it doesn't exist yet
-                        if ctx.ui.variables.get(&key).is_none() {
-                            let current_color =
-                                string_to_value(ctx, element_ctx, "self.color.fill".to_string());
-                            ctx.ui.variables.set_var(&key, current_color);
-                        }
-
-                        let Some(color_value) = ctx.ui.variables.get(&key) else {
-                            return CommandResult::Error(
-                                format!("Couldn't get value from variables, variable key: {}", key)
-                                    .to_string(),
-                            );
-                        };
-                        if let Some(color) = color_value.as_color4() {
-                            color
-                        } else {
-                            return CommandResult::Error(
-                            format!(
-                                "Couldn't unpack value as color, tried to unpack: {} as vec4 color",
-                                color_value
-                            ).to_string(),
-                        );
-                        }
-                    };
-
-                fn clamp(v: f32) -> f32 {
-                    v.max(0.0).min(1.0)
-                }
-                let normal_color = format!(
-                    "set(str:self.color.fill, [{}, {}, {}, {}])",
-                    color[0], color[1], color[2], color[3]
-                );
-                let return_color = format!("on:h_exit on:r {}", normal_color);
-                let activated_color = format!("on:activated {}", normal_color);
-                // noticeable hover: brighter + more visible
-                let hover_color = format!(
-                    "on:h set(str:self.color.fill, [{}, {}, {}, {}])",
-                    clamp(color[0] * 1.8 + 0.05),
-                    clamp(color[1] * 1.8 + 0.05),
-                    clamp(color[2] * 1.8 + 0.05),
-                    clamp(color[3] + 0.1)
-                );
-
-                // strong press: darker + slight shrink in alpha
-                let press_color = format!(
-                    "on:d button:a set(str:self.color.fill, [{}, {}, {}, {}])",
-                    clamp(color[0] * 0.5),
-                    clamp(color[1] * 0.5),
-                    clamp(color[2] * 0.5),
-                    clamp(color[3] * 0.95)
-                );
-                let mut commands: Vec<UiCommand> = vec![];
-                commands.extend(parse_action(
-                    &activated_color,
-                    ctx,
-                    &events,
-                    element_ctx.clone(),
-                ));
-                commands.extend(parse_action(
-                    &return_color,
-                    ctx,
-                    &events,
-                    element_ctx.clone(),
-                ));
-                commands.extend(parse_action(
-                    &hover_color,
-                    ctx,
-                    &events,
-                    element_ctx.clone(),
-                ));
-                commands.extend(parse_action(
-                    &press_color,
-                    ctx,
-                    &events,
-                    element_ctx.clone(),
-                ));
-                if shadow {
-                    commands.extend(parse_action(
-                        &shadow_master_command,
-                        ctx,
-                        &events,
-                        element_ctx.clone(),
-                    ))
-                };
-
-                for command in commands {
-                    self.execute_one(command, ctx);
-                }
-
-                CommandResult::Ok
-            }
-
-            UiCommand::Print {
-                element_ctx,
-                statement,
-            } => {
-                let element_ctx = &element_ctx;
+            UiCommand::Print { statement } => {
+                let element_ctx = &ctx.element_ctx.clone();
                 //println!("printing: {}", statement);
-                let msg: String = string_to_value(ctx, element_ctx, statement).to_string();
+                let msg: String = string_to_value(ctx, statement).to_string();
                 println!("[UI] {}", msg);
                 CommandResult::Ok
             }
@@ -1647,22 +1438,13 @@ impl CommandQueue {
             }
 
             UiCommand::Call {
-                element_ctx,
-                events,
-                buttons,
                 function_name,
                 args,
             } => {
-                let element_ctx = &element_ctx;
-
-                fn parse_args_call(
-                    ctx: &mut CommandContext,
-                    element_ctx: &ElementContext,
-                    args: Option<String>,
-                ) -> Vec<Value> {
+                fn parse_args_call(ctx: &mut CommandContext, args: Option<String>) -> Vec<Value> {
                     if let Some(args) = args {
-                        let args = string_to_value(ctx, element_ctx, args);
-                        args.as_array().unwrap_or(vec![])
+                        let args = string_to_value(ctx, args);
+                        args.as_array().unwrap_or_else(|| vec![args])
                     } else {
                         vec![]
                     }
@@ -1670,13 +1452,11 @@ impl CommandQueue {
                 fn parse_action_call(
                     cq: &mut CommandQueue,
                     ctx: &mut CommandContext,
-                    element_ctx: &ElementContext,
-                    events: &[ActionEvent],
-                    buttons: &MouseButtons,
                     function_name: String,
                     args: Option<String>,
                 ) -> CommandResult {
-                    let actions = string_to_value(ctx, element_ctx, function_name);
+                    let element_ctx = &ctx.element_ctx.clone();
+                    let actions = string_to_value(ctx, function_name);
                     //println!("[Action Call] {}", actions);
                     let actions: Vec<String> = if let Some(action) = actions.as_string() {
                         vec![action.to_string()]
@@ -1704,33 +1484,34 @@ impl CommandQueue {
                         return CommandResult::Ok;
                     }
 
-                    let args = parse_args_call(ctx, element_ctx, args);
+                    let args = parse_args_call(ctx, args);
 
                     ctx.ui.variables.set_array("args", args); // So I can use args.4 for example.
-                    //println!("{:?}", actions);
-                    for action in actions.iter() {
-                        let commands = parse_action(action, ctx, &events, element_ctx.clone());
-                        for command in commands {
-                            cq.execute_one(command, ctx);
-                        }
+                    let compiled_actions = compile_actions(
+                        &ctx.ui.menus,
+                        ctx.element_ctx.self_element.clone(),
+                        actions,
+                    );
+                    //println!("{:?} {:?}", compiled_actions, ctx.ui.action_events);
+                    for compiled_action in compiled_actions.into_iter() {
+                        run_action(cq, compiled_action, ctx);
                     }
                     CommandResult::Ok
                 }
 
                 fn parse_rust_call(
                     ctx: &mut CommandContext,
-                    element_ctx: &ElementContext,
                     function_name: String,
                     args: Option<String>,
                 ) -> CommandResult {
-                    let function_name = string_to_value(ctx, element_ctx, function_name);
+                    let function_name = string_to_value(ctx, function_name);
                     let Some(function_name) = function_name.as_string() else {
                         return CommandResult::Error(
                             "Rust function in call() wasn't resolved to string, use 'str:' as in 'call(rust:str:function_name, [args])'".to_string(),
                         );
                     };
 
-                    let args = parse_args_call(ctx, element_ctx, args);
+                    let args = parse_args_call(ctx, args);
                     //println!("{:?} {:?}", function_name, args);
                     //ctx.ui.variables.set_array("args", args); // So I can use args.4 for example. not needed in rust... most likely...
 
@@ -1743,28 +1524,12 @@ impl CommandQueue {
                     match left {
                         "rust" | "RUST" => {
                             //println!("{}", right);
-                            parse_rust_call(ctx, element_ctx, right.to_string(), args)
+                            parse_rust_call(ctx, right.to_string(), args)
                         }
-                        _ => parse_action_call(
-                            self,
-                            ctx,
-                            element_ctx,
-                            &events,
-                            &buttons,
-                            function_name,
-                            args,
-                        ),
+                        _ => parse_action_call(self, ctx, function_name, args),
                     }
                 } else {
-                    parse_action_call(
-                        self,
-                        ctx,
-                        element_ctx,
-                        &events,
-                        &buttons,
-                        function_name,
-                        args,
-                    )
+                    parse_action_call(self, ctx, function_name, args)
                 }
             }
 
@@ -1821,13 +1586,90 @@ fn call_rust(ctx: &mut CommandContext, function_name: &str, args: Vec<Value>) {
             );
             println!("Created Save '{}': {:?}", save_name, create_result);
         }
+        "play_sound" => {
+            let sound_name = args.get(0).and_then(|s| s.as_string());
+            let Some(sound_name) = sound_name else {
+                println!(
+                    "[Sounds] Argument 0 of {function_name} must be a sound_name: String, but it was: '{:?}'.",
+                    args.get(0)
+                );
+                return;
+            };
+
+            let succeeded = ctx.world.sounds.queue_sfx(sound_name.to_string());
+            if !succeeded {
+                println!(
+                    "[Sounds] In the RUST:play_sound function in UI actions: Sound name '{sound_name}' couldn't be found in the sound folder. In element: {:?}",
+                    ctx.element_ctx.self_element
+                );
+            }
+        }
+        "place_building" => {
+            let building_name = args.get(0).and_then(|s| s.as_string());
+            let Some(building_name) = building_name else {
+                println!(
+                    "[Buildings] Argument 0 of {function_name} must be a building_name: String, but it was: '{:?}'.",
+                    args.get(0)
+                );
+                return;
+            };
+            let Some(last_picked) = ctx.world.terrain.last_picked.as_ref() else {
+                return;
+            };
+            let center = last_picked.pos;
+            let half_size = 30.0;
+            let corners = [
+                center.add_vec3(Vec3::new(-half_size, 0.0, -half_size)),
+                center.add_vec3(Vec3::new(half_size, 0.0, -half_size)),
+                center.add_vec3(Vec3::new(half_size, 0.0, half_size)),
+                center.add_vec3(Vec3::new(-half_size, 0.0, half_size)),
+            ];
+            let entrance = LotEntrance {
+                pos: center.add_vec3(Vec3::new(0.0, 0.0, -half_size)),
+                dir: SerializableVec3::from_vec3(Vec3::new(1.0, 0.0, 0.0)),
+            };
+            let lot = Lot {
+                id: 696,
+                bounds: corners.to_vec(),
+                center,
+                entrance,
+                layout: None,
+                zoning_type: Some(ZoningType::Commercial),
+                segment_id: Default::default(),
+                district_id: 0,
+                building_id: None,
+                land_value: 0.0,
+            };
+            let lot_id = ctx.world.zoning.zoning_storage.spawn_lot(lot);
+            let building = Building {
+                id: 0,
+                pos: center,
+                segment_id: Default::default(),
+                lot_id,
+                level: Default::default(),
+                design_source: BuildingDesignSource::Design(building_name.to_string()),
+                edit_id: None,
+                prop_instance_ids: vec![],
+                occupancy: Default::default(),
+            };
+            //println!("{:?}", building);
+            let building_id =
+                BuildingStorage::spawn(&mut ctx.world.buildings, &mut ctx.world.zoning, building);
+            let lot = ctx.world.zoning.zoning_storage.get_mut_lot(lot_id).unwrap();
+            lot.building_id = Some(building_id);
+        }
         _ => {}
     }
 }
 
-pub fn string_to_value(ctx: &mut CommandContext, element_ctx: &ElementContext, s: String) -> Value {
-    send_element_properties_to_variables(&ctx.ui.menus, &mut ctx.ui.variables, element_ctx);
-    let val = Value::from_str(ctx.settings, &ctx.ui.variables, s.as_str(), true, true);
+pub fn string_to_value(ctx: &mut CommandContext, s: String) -> Value {
+    let val = Value::from_str(
+        ctx.settings,
+        &ctx.ui.variables,
+        &ctx.ui.menus,
+        &ctx.element_ctx,
+        s.as_str(),
+    );
     //println!("String to value; Input: '{}' Output: '{}'", s, val);
     val
 }
@@ -1836,7 +1678,14 @@ pub struct ElementContext {
     pub self_element: Option<ElementRef>,
     pub as_element: Option<ElementRef>,
 }
-
+impl ElementContext {
+    pub fn from_self(self_element: ElementRef) -> ElementContext {
+        ElementContext {
+            self_element: Some(self_element),
+            as_element: None,
+        }
+    }
+}
 /// Canonicalize action names for legacy string conversion.
 fn canonicalize_action_name(name: &str) -> String {
     let mut s = name.trim().replace(['-', ' '], "_");
@@ -1878,7 +1727,7 @@ pub fn process_commands(
     ui: &mut Ui,
     world: &mut World,
     props: &mut Props,
-    window_size: PhysicalSize<u32>,
+    window_size: PhysicalSize<f32>,
     settings: &mut Settings,
     event_loop: &dyn ActiveEventLoop,
     game_state: &mut GameState,
@@ -1893,6 +1742,7 @@ pub fn process_commands(
         event_loop,
         game_state,
         simulation,
+        element_ctx: Default::default(),
     };
 
     command_queue.drain(&mut ctx);
@@ -1924,25 +1774,15 @@ pub fn save_game(
     variables: &mut Variables,
     and_exit: bool,
 ) {
+    let name = game_state
+        .current_save_info
+        .as_ref()
+        .map(|s| s.name.clone())
+        .unwrap_or("No save!!! Report to maxwag9!!".to_string());
     match game_state.save(world, props, settings, variables, and_exit) {
-        SaveResult::Success => println!(
-            "World '{}' saved",
-            game_state
-                .current_save_info
-                .as_ref()
-                .map(|s| s.name.as_str())
-                .unwrap_or("No save!!! Report to maxwag9!!")
-        ),
+        SaveResult::Success => println!("World '{}' saved", name),
         SaveResult::TriedToSaveEmptySave => {}
-        e => eprintln!(
-            "Failed to save World '{}': {:?}",
-            game_state
-                .current_save_info
-                .as_ref()
-                .map(|s| s.name.as_str())
-                .unwrap_or("No save!"),
-            e
-        ),
+        e => eprintln!("Failed to save World '{}': {:?}", name, e),
     }
 }
 pub fn load_save(
@@ -1984,15 +1824,20 @@ pub fn load_save(
 /// ONLY USE EXECUTE_COMMAND SO IT EXECUTES IMMEDIATELY!!
 pub fn set_element_property(
     ctx: &mut CommandContext,
-    element_ctx: &ElementContext,
     name: &str,
     new_val: &Value,
 ) -> CommandResult {
+    //return CommandResult::Ok;
     match name {
         "new_zone_type" => {
             let zoning_type = ZoningType::from_value(new_val);
             ctx.world.terrain.cursor.zoning_type = zoning_type;
-            ctx.ui.variables.set_var(name, zoning_type.to_string());
+            ctx.ui.variables.set_var(
+                name,
+                zoning_type
+                    .map(|z| z.to_string())
+                    .unwrap_or("None".to_string()),
+            );
         }
         "target_pos.x" => {
             if let Some(x) = new_val.as_f64() {
@@ -2017,28 +1862,40 @@ pub fn set_element_property(
             ctx.world.terrain.cursor.mode = mode.clone().into();
             ctx.ui.variables.set_string(name, mode);
         }
+        "road_mode" => {
+            let road_mode = new_val.to_string();
+            //println!("Road Mode: {}", road_mode);
+            if let Ok(road_mode) = BuildMode::from_str(road_mode.as_str()) {
+                ctx.world.roads.road_editor.style.set_mode(road_mode);
+            }
+            ctx.ui.variables.set_string(name, road_mode);
+        }
+        // "road_type" => {
+        //     let road_type = new_val.to_string();
+        //     ctx.world.terrain.cursor.road_type = road_type;
+        //     ctx.ui.variables.set_string(name, road_type);
+        // }
         "lanes" => {
             if let Some(lanes) = new_val.as_i64() {
-                if let Some(road_type) = &mut ctx.world.terrain.cursor.road_type {
-                    road_type.lanes_each_direction =
-                        (lanes as LeftLaneCount, lanes as RightLaneCount);
-                }
+                let road_type = &mut ctx.world.terrain.cursor.road_type;
+                road_type.lanes_each_direction = (lanes as LeftLaneCount, lanes as RightLaneCount);
+
                 ctx.ui.variables.set_i64(name, lanes);
             }
         }
         "left_lanes" => {
             if let Some(lanes) = new_val.as_i64() {
-                if let Some(road_type) = &mut ctx.world.terrain.cursor.road_type {
-                    road_type.lanes_each_direction.0 = lanes as LeftLaneCount;
-                }
+                let road_type = &mut ctx.world.terrain.cursor.road_type;
+                road_type.lanes_each_direction.0 = lanes as LeftLaneCount;
+
                 ctx.ui.variables.set_i64(name, lanes);
             }
         }
         "right_lanes" => {
             if let Some(lanes) = new_val.as_i64() {
-                if let Some(road_type) = &mut ctx.world.terrain.cursor.road_type {
-                    road_type.lanes_each_direction.1 = lanes as RightLaneCount;
-                }
+                let road_type = &mut ctx.world.terrain.cursor.road_type;
+                road_type.lanes_each_direction.1 = lanes as RightLaneCount;
+
                 ctx.ui.variables.set_i64(name, lanes);
             }
         }
@@ -2068,6 +1925,7 @@ pub fn set_element_property(
     };
 
     let selections: Vec<ElementRef>;
+    let element_ctx = &ctx.element_ctx;
     match base {
         "self" => {
             selections = if let Some(self_element_ref) = element_ctx.self_element.clone() {
@@ -2174,7 +2032,7 @@ pub fn set_element_property(
                 Value::from_vec(after)
             }
 
-            "size" => {
+            "size" | "rect" => {
                 let Some(before) = get_element_main_size(&ctx.ui.menus, &element_ref) else {
                     return CommandResult::Error(
                         format!(
@@ -2529,142 +2387,134 @@ pub fn make_element(id: String, kind: ElementKind, center: [f32; 2]) -> Option<U
     }
 }
 
-pub fn send_element_properties_to_variables(
-    menus: &HashMap<String, Menu>,
-    variables: &mut Variables,
-    element_ctx: &ElementContext,
-) {
-    fn clear_properties(prefix: &str, variables: &mut Variables) {
-        for property in [
-            "menu",
-            "layer",
-            "idx",
-            "active",
-            "id",
-            "kind",
-            "center",
-            "radius",
-            "pt",
-            "size",
-            "color_components",
-        ] {
-            variables.set_var(&format!("{prefix}.{property}"), Value::None);
-        }
-
-        for component in ColorComponent::iter() {
-            variables.set_var(&format!("{prefix}.color.{component}"), Value::None);
-        }
-    }
-    fn send_properties(
-        prefix: &str,
-        menus: &HashMap<String, Menu>,
-        variables: &mut Variables,
-        element_ref: &ElementRef,
-    ) {
-        if let Some(menu) = menus.get(&element_ref.menu) {
-            variables.set_string(&format!("{prefix}.menu"), element_ref.menu.clone());
-
-            if let Some(layer) = menu.layers.iter().find(|l| l.name == element_ref.layer) {
-                variables.set_string(&format!("{prefix}.layer"), element_ref.layer.clone());
-
-                if let Some(element_idx) = layer
-                    .elements
-                    .iter()
-                    .position(|e| e.id() == element_ref.id.as_str())
-                {
-                    let element = &layer.elements[element_idx];
-
-                    variables.set_i64(&format!("{prefix}.idx"), element_idx as i64);
-                    variables.set_bool(
-                        &format!("{prefix}.active"),
-                        menu.active && layer.active && element.is_active(),
-                    );
-                    variables.set_string(&format!("{prefix}.id"), element_ref.id.clone());
-                    variables.set_string(&format!("{prefix}.kind"), element_ref.kind.to_string());
-                    if let Some(text) = element.text() {
-                        //println!("{}", text);
-                        variables.set_string(&format!("{prefix}.text"), text);
-                    } else {
-                        variables.set_var(&format!("{prefix}.text"), Value::None);
-                    }
-                    if let Some(text) = element.template() {
-                        variables.set_string(&format!("{prefix}.template"), text);
-                    } else {
-                        variables.set_var(&format!("{prefix}.template"), Value::None);
-                    }
-
-                    variables.set_array(&format!("{prefix}.center"), element.center());
-                    // if let Some(text) = element.as_text() {
-                    //     variables.set_array(&format!("{prefix}.anchor_center"), anchor_to(text.anchor, text.center(), text.width, text.height));
-                    // }
-
-                    for prop in element.sizes() {
-                        match prop {
-                            SizeProperty::Radius(radius) => {
-                                variables.set_f64(&format!("{prefix}.radius"), radius);
-                            }
-                            SizeProperty::Pt(pt) => {
-                                variables.set_f64(&format!("{prefix}.pt"), pt);
-                            }
-                            SizeProperty::Rect(rect) => {
-                                variables.set_array(&format!("{prefix}.size"), rect);
-                            }
-                            SizeProperty::PolygonScale(_) => {}
-                            SizeProperty::AdvancedPrimitiveScale(_) => {}
-                            SizeProperty::Border(border) => {
-                                variables.set_f64(&format!("{prefix}.border"), border);
-                            }
-                            SizeProperty::InsideBorder(inside_border) => {
-                                variables
-                                    .set_f64(&format!("{prefix}.inside_border"), inside_border);
-                            }
-                        }
-                    }
-
-                    let color_components = element.color_components();
-
-                    variables.set_array(
-                        &format!("{prefix}.color_components"),
-                        color_components
-                            .iter()
-                            .map(|c| Value::String(c.to_string()))
-                            .collect::<Vec<Value>>(),
-                    );
-
-                    for component in color_components {
-                        let name = format!("{prefix}.color.{}", component.to_string());
-                        if let Some(color) = element.color(&component) {
-                            variables.set_array(name.as_str(), color);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if let Some(self_element_ref) = element_ctx.self_element.as_ref() {
-        send_properties("self", menus, variables, self_element_ref);
-    }
-    if let Some(as_element_ref) = element_ctx.as_element.as_ref() {
-        send_properties("as", menus, variables, as_element_ref);
-        variables.set_bool("as.exists", true);
-    } else {
-        clear_properties("as", variables);
-        variables.set_bool("as.exists", false);
-    }
-}
+// pub fn send_element_properties_to_variables(
+//     menus: &HashMap<String, Menu>,
+//     variables: &mut Variables,
+//     element_ctx: &ElementContext,
+// ) {
+//     return;
+//     fn clear_properties(prefix: &str, variables: &mut Variables) {
+//         for property in [
+//             "menu",
+//             "layer",
+//             "idx",
+//             "active",
+//             "id",
+//             "kind",
+//             "center",
+//             "radius",
+//             "pt",
+//             "size",
+//             "color_components",
+//         ] {
+//             variables.set_var(&format!("{prefix}.{property}"), Value::None);
+//         }
+//
+//         for component in ColorComponent::iter() {
+//             variables.set_var(&format!("{prefix}.color.{component}"), Value::None);
+//         }
+//     }
+//     fn send_properties(
+//         prefix: &str,
+//         menus: &HashMap<String, Menu>,
+//         variables: &mut Variables,
+//         element_ref: &ElementRef,
+//     ) {
+//         if let Some(menu) = menus.get(&element_ref.menu) {
+//             variables.set_string(&format!("{prefix}.menu"), element_ref.menu.clone());
+//
+//             if let Some(layer) = menu.layers.iter().find(|l| l.name == element_ref.layer) {
+//                 variables.set_string(&format!("{prefix}.layer"), element_ref.layer.clone());
+//
+//                 if let Some(element_idx) = layer.elements.iter().position(|e| e.id() == element_ref.id.as_str()) {
+//                     let element = &layer.elements[element_idx];
+//
+//                     variables.set_i64(&format!("{prefix}.idx"), element_idx as i64);
+//                     variables.set_bool(
+//                         &format!("{prefix}.active"),
+//                         menu.active && layer.active && element.is_active(),
+//                     );
+//                     variables.set_string(&format!("{prefix}.id"), element_ref.id.clone());
+//                     variables.set_string(&format!("{prefix}.kind"), element_ref.kind.to_string());
+//                     if let Some(text) = element.text() {
+//                         //println!("{}", text);
+//                         variables.set_string(&format!("{prefix}.text"), text);
+//                     } else {
+//                         variables.set_var(&format!("{prefix}.text"), Value::None);
+//                     }
+//                     if let Some(text) = element.template() {
+//                         variables.set_string(&format!("{prefix}.template"), text);
+//                     } else {
+//                         variables.set_var(&format!("{prefix}.template"), Value::None);
+//                     }
+//
+//                     variables.set_array(&format!("{prefix}.center"), element.center());
+//                     // if let Some(text) = element.as_text() {
+//                     //     variables.set_array(&format!("{prefix}.anchor_center"), anchor_to(text.anchor, text.center(), text.width, text.height));
+//                     // }
+//
+//                     for prop in element.sizes() {
+//                         match prop {
+//                             SizeProperty::Radius(radius) => {
+//                                 variables.set_f64(&format!("{prefix}.radius"), radius);
+//                             }
+//                             SizeProperty::Pt(pt) => {
+//                                 variables.set_f64(&format!("{prefix}.pt"), pt);
+//                             }
+//                             SizeProperty::Rect(rect) => {
+//                                 variables.set_array(&format!("{prefix}.size"), rect);
+//                             }
+//                             SizeProperty::PolygonScale(_) => {}
+//                             SizeProperty::AdvancedPrimitiveScale(_) => {}
+//                             SizeProperty::Border(border) => {
+//                                 variables.set_f64(&format!("{prefix}.border"), border);
+//                             }
+//                             SizeProperty::InsideBorder(inside_border) => {
+//                                 variables
+//                                     .set_f64(&format!("{prefix}.inside_border"), inside_border);
+//                             }
+//                         }
+//                     }
+//
+//                     let color_components = element.color_components();
+//
+//                     variables.set_array(
+//                         &format!("{prefix}.color_components"),
+//                         color_components
+//                             .iter()
+//                             .map(|c| Value::String(c.to_string()))
+//                             .collect::<Vec<Value>>(),
+//                     );
+//
+//                     for component in color_components {
+//                         let name = format!("{prefix}.color.{}", component.to_string());
+//                         if let Some(color) = element.color(&component) {
+//                             variables.set_array(name.as_str(), color);
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//     }
+//
+//     if let Some(self_element_ref) = element_ctx.self_element.as_ref() {
+//         send_properties("self", menus, variables, self_element_ref);
+//     }
+//     if let Some(as_element_ref) = element_ctx.as_element.as_ref() {
+//         send_properties("as", menus, variables, as_element_ref);
+//         variables.set_bool("as.exists", true);
+//     } else {
+//         clear_properties("as", variables);
+//         variables.set_bool("as.exists", false);
+//     }
+// }
 
 fn get_setting_key(name: &str) -> Option<SettingKey> {
     SettingKey::from_str(name)
 }
 
-fn set_variable_or_property(
-    ctx: &mut CommandContext,
-    element_ctx: &ElementContext,
-    name: &str,
-    value: Value,
-) -> CommandResult {
-    match set_element_property(ctx, element_ctx, name, &value) {
+fn set_variable_or_property(ctx: &mut CommandContext, name: &str, value: Value) -> CommandResult {
+    match set_element_property(ctx, name, &value) {
         CommandResult::Error(e) => return CommandResult::Ok,
         _ => {}
     }
@@ -2695,7 +2545,8 @@ fn test_send_properties_to_variables() {
                 name: "test_layer".to_string(),
                 ap_name: None,
                 order: 0,
-                actions: vec![],
+                string_actions: vec![],
+                compiled_actions: vec![],
                 elements: vec![UiElement::Rect(rect)],
                 active: true,
                 ap_vars: vec![],
@@ -2721,7 +2572,7 @@ fn test_send_properties_to_variables() {
                 None
             },
         };
-        send_element_properties_to_variables(&menus, &mut variables, &element_ctx);
+        // send_element_properties_to_variables(&menus, &mut variables, &element_ctx);
     }
 
     println!("{:?}", start.elapsed());

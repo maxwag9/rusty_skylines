@@ -85,14 +85,43 @@ pub fn shader_dir() -> PathBuf {
     dir
 }
 
-pub fn texture_dir() -> PathBuf {
+pub fn texture_shaders_dir() -> PathBuf {
     let dir = shader_dir().join("textures");
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("[data_path] Failed to create texture shaders dir: {}", e);
+    }
+    dir
+}
+pub fn textures_dir() -> PathBuf {
+    let dir = data_dir("textures");
     if let Err(e) = fs::create_dir_all(&dir) {
         eprintln!("[data_path] Failed to create texture dir: {}", e);
     }
     dir
 }
+pub fn simulation_dir() -> PathBuf {
+    let dir = data_dir("simulation");
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("[data_path] Failed to create simulation dir: {}", e);
+    }
+    dir
+}
 
+pub fn buildings_dir() -> PathBuf {
+    let dir = simulation_dir().join("buildings");
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("[data_path] Failed to create buildings dir: {}", e);
+    }
+    dir
+}
+
+pub fn sounds_dir() -> PathBuf {
+    let dir = data_dir("sounds");
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("[data_path] Failed to create sounds dir: {}", e);
+    }
+    dir
+}
 pub fn compute_shader_dir() -> PathBuf {
     let dir = shader_dir().join("compute");
     if let Err(e) = fs::create_dir_all(&dir) {

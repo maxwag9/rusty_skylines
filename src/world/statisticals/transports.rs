@@ -58,7 +58,7 @@ pub enum CarTripType {
 }
 impl CarTripType {
     pub fn pick_car_trip_type(
-        zoning_type: ZoningType,
+        zoning_type: Option<ZoningType>,
         phase: SchedulePhase,
         rng: &mut impl Rng,
     ) -> CarTripType {
@@ -66,42 +66,44 @@ impl CarTripType {
             SchedulePhase::CommuteToWork | SchedulePhase::CommuteHome => CarTripType::Commute,
 
             SchedulePhase::Work => match zoning_type {
-                ZoningType::Industrial => CarTripType::Delivery,
-                ZoningType::Commercial | ZoningType::Office => CarTripType::Service,
-                ZoningType::Residential => CarTripType::Shopping,
-                ZoningType::None => CarTripType::Service,
+                None => CarTripType::Service,
+                Some(ZoningType::Industrial) => CarTripType::Delivery,
+                Some(ZoningType::Commercial) | Some(ZoningType::Office) => CarTripType::Service,
+                Some(ZoningType::Residential) => CarTripType::Shopping,
             },
 
             SchedulePhase::Lunch => match zoning_type {
-                ZoningType::Industrial => CarTripType::Delivery,
-                ZoningType::Commercial | ZoningType::Office => {
+                Some(ZoningType::Industrial) => CarTripType::Delivery,
+                Some(ZoningType::Commercial) | Some(ZoningType::Office) => {
                     if rng.random_bool(0.7) {
                         CarTripType::Shopping
                     } else {
                         CarTripType::Service
                     }
                 }
-                ZoningType::Residential => CarTripType::Shopping,
-                ZoningType::None => CarTripType::Leisure,
+                Some(ZoningType::Residential) => CarTripType::Shopping,
+                None => CarTripType::Leisure,
             },
 
             SchedulePhase::Evening => match zoning_type {
-                ZoningType::Industrial => CarTripType::Delivery,
-                ZoningType::Commercial | ZoningType::Office => CarTripType::Service,
-                ZoningType::Residential => {
+                Some(ZoningType::Industrial) => CarTripType::Delivery,
+                Some(ZoningType::Commercial) | Some(ZoningType::Office) => CarTripType::Service,
+                Some(ZoningType::Residential) => {
                     if rng.random_bool(0.65) {
                         CarTripType::Shopping
                     } else {
                         CarTripType::Leisure
                     }
                 }
-                ZoningType::None => CarTripType::Leisure,
+                None => CarTripType::Leisure,
             },
 
             SchedulePhase::Night => match zoning_type {
-                ZoningType::Industrial | ZoningType::Commercial => CarTripType::Delivery,
-                ZoningType::Office => CarTripType::Service,
-                ZoningType::Residential | ZoningType::None => CarTripType::Leisure,
+                Some(ZoningType::Industrial) | Some(ZoningType::Commercial) => {
+                    CarTripType::Delivery
+                }
+                Some(ZoningType::Office) => CarTripType::Service,
+                Some(ZoningType::Residential) | None => CarTripType::Leisure,
             },
         }
     }

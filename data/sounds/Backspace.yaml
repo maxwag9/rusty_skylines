@@ -1,0 +1,19 @@
+name: Backspace
+
+layers:
+  - waveform: Noise
+    start_freq: 700.0
+    end_freq: 450.0
+    fm_ratio: 1.0
+    fm_amount: 0.3
+    gain: 0.45
+
+duration: 0.055
+attack: 0.003
+decay: 0.009
+sustain: 0.0
+release: 0.045
+glide_curve: 1.0
+gain: 0.14
+pan: 0.0
+deduplication_time: 0.04

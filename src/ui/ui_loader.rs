@@ -1,6 +1,6 @@
 use crate::data::BendMode;
 use crate::renderer::ui_text_rendering::Anchor;
-use crate::ui::ui_editor::GlobalActions;
+use crate::ui::ui_editor::GlobalActionsYaml;
 use crate::ui::vertex::*;
 use std::error::Error;
 use std::fs;
@@ -178,7 +178,7 @@ pub fn load_advanced_primitives_from_directory(
 pub fn load_global_actions(
     ga_dir: &PathBuf,
     mode: &BendMode,
-) -> Result<GlobalActions, Box<dyn Error>> {
+) -> Result<GlobalActionsYaml, Box<dyn Error>> {
     if !ga_dir.is_dir() {
         println!("Global Actions directory not found: {}", ga_dir.display());
         return Err("Global actions directory not found".into());
@@ -217,13 +217,13 @@ pub fn load_menu_from_file(path: &PathBuf, mode: &BendMode) -> Result<MenuYaml, 
 pub fn load_global_actions_from_file(
     path: &PathBuf,
     mode: &BendMode,
-) -> Result<GlobalActions, Box<dyn Error>> {
+) -> Result<GlobalActionsYaml, Box<dyn Error>> {
     let bytes = fs::read(path)?;
 
     match mode {
         BendMode::Strict | BendMode::Unknown => {
             let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("yaml");
-            let parsed: GlobalActions = match extension {
+            let parsed: GlobalActionsYaml = match extension {
                 "Yaml" => serde_yaml::from_slice(&bytes)?,
                 _ => serde_yaml::from_slice(&bytes)?,
             };
@@ -381,12 +381,20 @@ fn synth_layer(rng: &mut SimpleRng, menu_idx: usize, layer_idx: usize) -> UiLaye
 fn synth_text(rng: &mut SimpleRng) -> UiButtonTextYaml {
     UiButtonTextYaml {
         id: format!("t_{}", rng.next_u64()),
-        actions: vec![],
+        actions: vec![], // TODO: Actions plslplsplspslpsl pls!!
         style: "None".to_string(),
         x: rng.next_i32_range(0, 1920) as i16,
         y: rng.next_i32_range(0, 1080) as i16,
-        pt: rng.next_f32_range(4.0, 50.1),
+        pt: rng.next_f32_range(0.1, 50.1),
+        border_width: rng.next_f32_range(0.0, 30.8),
+        resize_behaviour: Default::default(), // TODO: Random resize behaviour is fun!!
         color: [
+            rng.next_f32_range(0.0, 2.0),
+            rng.next_f32_range(0.0, 2.0),
+            rng.next_f32_range(0.0, 2.0),
+            rng.next_f32_range(0.0, 0.9),
+        ],
+        border_color: [
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
@@ -411,6 +419,7 @@ fn synth_circle(rng: &mut SimpleRng) -> UiButtonCircleYaml {
         x: rng.next_i32_range(0, 1920) as i16,
         y: rng.next_i32_range(0, 1080) as i16,
         radius: rng.next_f32_range(0.0, 0.3),
+        resize_behaviour: Default::default(),
         inside_border_thickness: rng.next_f32_range(0.0, 0.3),
         border_thickness: rng.next_f32_range(0.0, 0.3),
         fade: rng.next_f32_range(0.0, 1.0),
@@ -457,6 +466,7 @@ fn synth_handle(rng: &mut SimpleRng) -> UiButtonHandleYaml {
         x: rng.next_i32_range(0, 1920) as i16,
         y: rng.next_i32_range(0, 1080) as i16,
         radius: rng.next_f32_range(0.0, 0.3),
+        resize_behaviour: Default::default(),
         handle_color: [
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
@@ -559,6 +569,7 @@ fn synth_polygon(rng: &mut SimpleRng) -> UiButtonPolygonYaml {
         x: rng.next_i32_range(0, 1920) as i16,
         y: rng.next_i32_range(0, 1080) as i16,
         scale: 1.0,
+        resize_behaviour: Default::default(),
         vertices: verts,
         misc: MiscButtonSettingsYaml {
             active: true,

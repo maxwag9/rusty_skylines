@@ -1,7 +1,7 @@
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 use crate::world::cars::car_simulation::CarTrajectory;
 use crate::world::cars::car_subsystem::make_random_car;
-use crate::world::cars::partitions::{Destination};
+use crate::world::cars::partitions::Destination;
 use crate::world::cars::signfinding::{
     CarSignfindingTrajectory, SFTurnIdentification, SignFindingTrip,
 };
@@ -955,18 +955,18 @@ pub struct Car {
     pub spawn_time: SimTime,
 
     pub driver_profile: DriverProfile,
-    pub mode: CarMode
+    pub mode: CarMode,
 }
 #[derive(Debug, Clone)]
 pub enum CarMode {
     Driving(Destination),
-    Parked
+    Parked,
 }
 impl CarMode {
     pub fn destination(&self) -> Option<&Destination> {
         match self {
-            CarMode::Driving(destination) => { Some(destination) }
-            CarMode::Parked => { None }
+            CarMode::Driving(destination) => Some(destination),
+            CarMode::Parked => None,
         }
     }
 }
@@ -1000,7 +1000,7 @@ impl Default for Car {
             driver_profile: DriverProfile::Normal,
             gear: 0,
             wheel_radius: 0.34,
-            mode: CarMode::Driving(Destination::Building(0, 0, SegmentId(0), 0)) // TODO: Should be Parked?
+            mode: CarMode::Driving(Destination::Building(0, 0, Some(SegmentId(0)), 0)), // TODO: Should be Parked?
         }
     }
 }

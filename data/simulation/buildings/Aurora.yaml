@@ -1,0 +1,78 @@
+name: "Aurora Spire"
+branch: "Commercial"
+tab: "Skyscrapers"
+
+building_levels:
+  level0:
+    roof:
+      !Angled
+      pitch: 0.18
+      direction_rad: 0.785398
+    roof_material: Metal
+    wall_material:
+      !Paint
+      - 0.16
+      - 0.19
+      - 0.24
+    driveway_material: Bricks
+    story_height: 3.4
+    num_stories: 18
+    basement: { }
+    garden:
+      look: Normal
+    garage:
+      story_height: 3.0
+      num_stories: 2
+    miscellaneous:
+      window_material_accent:
+        !Paint
+        - 0.55
+        - 0.68
+        - 0.82
+      solar_modules: false
+      antenna: false
+      usage: Commercial
+
+  changes:
+    2:
+      wall_material:
+        !Paint
+        - 0.12
+        - 0.15
+        - 0.21
+      roof:
+        Flat
+      miscellaneous:
+        window_material_accent:
+          !Paint
+          - 0.25
+          - 0.55
+          - 0.9
+        solar_modules: true
+
+    3:
+      num_stories: 24
+
+    4:
+      wall_material:
+        !Paint
+        - 0.08
+        - 0.11
+        - 0.17
+      story_height: 3.6
+      miscellaneous:
+        window_material_accent:
+          !Paint
+          - 0.35
+          - 0.72
+          - 1.0
+        solar_modules: true
+        antenna: true
+
+    5:
+      num_stories: 32
+      roof:
+        !Angled
+        pitch: 0.12
+        direction_rad: 0.0
+      roof_material: Metal

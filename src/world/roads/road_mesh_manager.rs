@@ -1222,10 +1222,9 @@ pub fn compute_topo_version(chunk_id: ChunkId, storage: &RoadStorage) -> u64 {
 
         let seg = storage.segment(seg_id);
 
-        let (l, r) = storage.lane_counts_for_segment(seg);
+        let lane_counts = storage.lane_counts_for_segment(seg);
 
-        l.hash(&mut hasher);
-        r.hash(&mut hasher);
+        lane_counts.hash(&mut hasher);
     }
 
     let mut nodes = storage.nodes_in_chunk(chunk_id).collect::<Vec<NodeId>>();

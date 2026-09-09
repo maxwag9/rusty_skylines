@@ -14,7 +14,7 @@ pub(crate) mod shader_watcher;
 pub mod shadows;
 mod taa;
 pub(crate) mod textures;
-pub(crate) mod ui;
+pub mod ui;
 pub(crate) mod ui_pipelines;
 pub(crate) mod ui_text_rendering;
 pub(crate) mod ui_upload;

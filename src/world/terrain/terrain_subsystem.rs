@@ -120,18 +120,18 @@ impl CursorMode {
 #[derive(Debug)]
 pub struct Cursor {
     pub mode: CursorMode,
-    pub road_type: Option<RoadType>,
-    pub prop_name: Option<String>,
-    pub zoning_type: ZoningType,
+    pub road_type: RoadType,
+    pub prop_name: String,
+    pub zoning_type: Option<ZoningType>,
 }
 
 impl Cursor {
     pub fn new() -> Self {
         Self {
             mode: CursorMode::Roads,
-            road_type: Some(RoadType::default()),
-            prop_name: Some("oak".to_string()),
-            zoning_type: ZoningType::None,
+            road_type: RoadType::default(),
+            prop_name: "oak".to_string(),
+            zoning_type: None,
         }
     }
 }

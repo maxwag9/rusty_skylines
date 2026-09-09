@@ -1,16 +1,13 @@
 use crate::data::Settings;
 #[allow(unused_mut, unused_assignments)]
 use crate::ui::actions::UiCommand;
-use crate::ui::actions::{CommandContext, ElementContext, string_to_value};
+use crate::ui::actions::{CommandContext, CommandQueue, ElementContext, string_to_value};
 use crate::ui::input::Input;
-use crate::ui::menu::Menu;
 use crate::ui::parser::Value;
-use crate::ui::ui_editor::{Ui, get_element_kind};
-use crate::ui::ui_touch_manager::{ElementEvent, ElementRef, MouseButtons};
-use crate::ui::ui_touch_manager::{GlobalEvent, UiTouchManager};
-use crate::ui::variables::Variables;
+use crate::ui::ui_editor::{Menus, get_element_active, get_element_kind, get_layer_actions};
+use crate::ui::ui_touch_manager::GlobalEvent;
+use crate::ui::ui_touch_manager::{ElementEvent, ElementRef};
 use std::cmp::PartialEq;
-use std::collections::HashMap;
 
 /// Helper trait for parsing argument types
 pub trait ParseArg: Sized {
@@ -92,7 +89,7 @@ impl ParseArg for Option<bool> {
     }
 }
 
-/// Macro to define command mappings - just add lines when you add commands!
+/// Macro to define command mappings - just add lines when I add commands!
 macro_rules! define_commands {
     (
         $(
@@ -102,26 +99,19 @@ macro_rules! define_commands {
     ) => {
 
         pub fn make_ui_command(
-            settings: &Settings,
-            variables: &Variables,
-            menus: &HashMap<String, Menu>,
-            touch_manager: &UiTouchManager,
             func_name: &str,
-            args: Vec<String>,
-            element_ctx: &ElementContext,
-            events: &[ActionEvent],
-            buttons: &MouseButtons
+            args: Vec<String>
         ) -> Option<UiCommand> {
             let name = func_name.to_ascii_lowercase();
 
             match name.as_str() {
                 $(
                     $( $name )|+ => {
-                        define_commands!(@build settings, variables, menus, touch_manager, args, element_ctx, events, buttons, $variant $( { $( $field : $ftype ),* } )?)
+                        define_commands!(@build args, $variant $( { $( $field : $ftype ),* } )?)
                     }
                 ),*,
                 _ => {
-                    eprintln!("[Warning] Unknown UI command: '{}' in element: {}", func_name, element_ctx.self_element.as_ref().map(|s|s.id.clone()).unwrap_or("Unknown".to_string()));
+                    eprintln!("[Warning] Unknown UI command: '{}'", func_name);
                     None
                 }
             }
@@ -129,44 +119,25 @@ macro_rules! define_commands {
     };
 
     // unit variant
-    (@build $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $element_ctx:ident, $events:ident, $buttons:ident, $variant:ident) => {
+    (@build $args:ident, $variant:ident) => {
     Some(UiCommand::$variant)
     };
 
     // struct variant
-    (@build $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $element_ctx:ident, $events:ident, $buttons:ident, $variant:ident { $( $field:ident : $ftype:ty ),* }) => {{
+    (@build $args:ident, $variant:ident { $( $field:ident : $ftype:ty ),* }) => {{
         let mut idx = 0usize;
 
         $(
             let $field = define_commands!(
-                @parse $settings, $vars, $menus, $tm, $args, idx, $element_ctx, $events, $buttons, $field, $ftype
+                @parse $args, idx, $field, $ftype
             )?;
         )*
 
         Some(UiCommand::$variant { $( $field ),* })
     }};
 
-    // SPECIAL FIELD: element_ctx
-    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element_ctx:ident, $events:ident, $buttons:ident, element_ctx, $ftype:ty) => {{
-        Some($element_ctx.clone())
-    }};
-
-    // SPECIAL FIELD: events
-    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element_ctx:ident, $events:ident, $buttons:ident, events, $ftype:ty) => {{
-        Some($events.to_vec())
-    }};
-
-    // SPECIAL FIELD: buttons
-    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element_ctx:ident, $events:ident, $buttons:ident, buttons, $ftype:ty) => {{
-        Some($buttons.clone())
-    }};
-
     // SPECIAL FIELD: commands
-    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element_ctx:ident, $events:ident, $buttons:ident, commands, $ftype:ty) => {{
+    (@parse $args:ident, $idx:ident, commands, $ftype:ty) => {{
         if let Some(raw) = $args.get($idx) {
             #[allow(unused_assignments)]
             {
@@ -186,7 +157,7 @@ macro_rules! define_commands {
                         // Only split on ';' if we are not inside brackets/parens
                         let part = raw[start..i].trim();
                         if !part.is_empty() {
-                            cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $events, $buttons))
+                            cmds.extend(parse_primitive_action(part))
                         }
                         start = i + 1;
                     }
@@ -197,7 +168,7 @@ macro_rules! define_commands {
             // Don't forget the last command after the final ';'
             let part = raw[start..].trim();
             if !part.is_empty() {
-                cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $events, $buttons))
+                cmds.extend(parse_primitive_action(part))
             }
 
             Some(cmds)
@@ -207,8 +178,7 @@ macro_rules! define_commands {
     }};
 
     // SPECIAL FIELD: then / else_branch
-    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element_ctx:ident, $events:ident, $buttons:ident, then, $ftype:ty) => {{
+    (@parse $args:ident, $idx:ident, then, $ftype:ty) => {{
         if let Some(raw) = $args.get($idx) {
             #[allow(unused_assignments)]
             {
@@ -228,7 +198,7 @@ macro_rules! define_commands {
                         // Only split on ';' if we are not inside brackets/parens
                         let part = raw[start..i].trim();
                         if !part.is_empty() {
-                            cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $events, $buttons))
+                            cmds.extend(parse_primitive_action(part))
                         }
                         start = i + 1;
                     }
@@ -239,7 +209,7 @@ macro_rules! define_commands {
             // Don't forget the last command after the final ';'
             let part = raw[start..].trim();
             if !part.is_empty() {
-                cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $events, $buttons))
+                cmds.extend(parse_primitive_action(part))
             }
 
             Some(cmds)
@@ -248,8 +218,7 @@ macro_rules! define_commands {
         }
     }};
 
-    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element_ctx:ident, $events:ident, $buttons:ident, else_branch, $ftype:ty) => {{
+    (@parse $args:ident, $idx:ident, else_branch, $ftype:ty) => {{
         if let Some(raw) = $args.get($idx) {
             #[allow(unused_assignments)]
             {
@@ -269,7 +238,7 @@ macro_rules! define_commands {
                         // Only split on ';' if we are not inside brackets/parens
                         let part = raw[start..i].trim();
                         if !part.is_empty() {
-                            cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $events, $buttons))
+                            cmds.extend(parse_primitive_action(part))
                         }
                         start = i + 1;
                     }
@@ -280,7 +249,7 @@ macro_rules! define_commands {
             // Don't forget the last command after the final ';'
             let part = raw[start..].trim();
             if !part.is_empty() {
-                cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $events, $buttons))
+                cmds.extend(parse_primitive_action(part))
             }
 
             Some(cmds)
@@ -289,39 +258,25 @@ macro_rules! define_commands {
         }
     }};
 
-    (@branch $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident, $element_ctx:ident, $events:ident, $buttons:ident) => {{
+    (@branch $args:ident, $idx:ident) => {{
         let raw = $args.get($idx)?;
         #[allow(unused_assignments)]
         {
             $idx += 1;
         }
 
-        let cmds = raw.split(';')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element_ctx, $events, $buttons)).flatten()
-            .collect();
+        let cmds = raw.split(';').map(str::trim).filter(|s| !s.is_empty()).map(|s| parse_primitive_action(s)).flatten().collect();
 
         Some(cmds)
     }};
     // SPECIAL FIELD: raw String
-    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident,
-        $args:ident, $idx:ident,
-        $element_ctx:ident, $events:ident, $buttons:ident,
-        $field:ident, String) => {{
-
-        let val = $args.get($idx)
-            .cloned()
-            .unwrap_or_default();
-
+    (@parse $args:ident, $idx:ident, $field:ident, String) => {{
+        let val = $args.get($idx).cloned().unwrap_or_default();
         $idx += 1;
-
         Some(val)
     }};
     // GENERIC FIELD PARSER
-    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element_ctx:ident, $events:ident, $buttons:ident, $field:ident, $ftype:ty) => {{
-
+    (@parse $args:ident, $idx:ident, $field:ident, $ftype:ty) => {{
         let val = <$ftype as ParseArg>::parse_arg(&$args, &mut $idx)?;
         Some(val)
     }};
@@ -331,76 +286,76 @@ macro_rules! define_commands {
 define_commands! {
     // ===== MENU COMMANDS =====
     "open_menu" | "openmenu"
-        => OpenMenu { element_ctx: ElementContext, menu_name: String },
+        => OpenMenu {menu_name: String },
 
     "close_menu" | "closemenu"
-        => CloseMenu { element_ctx: ElementContext, menu_name: String },
+        => CloseMenu {menu_name: String },
 
     "close_all_menus" | "closeall"
         => CloseAllMenus,
     "close_all_layers"
-        => CloseAllLayers { element_ctx: ElementContext, menu_name: String },
+        => CloseAllLayers {menu_name: String },
     "toggle_menu" | "togglemenu"
-        => ToggleMenu { element_ctx: ElementContext, menu_name: String },
+        => ToggleMenu {menu_name: String },
 
     "menu_active" | "menuactive"
-        => MenuActive { element_ctx: ElementContext, menu_name: String },
+        => MenuActive {menu_name: String },
 
     // ===== LAYER COMMANDS =====
     "open_layer" | "openlayer"
-        => OpenLayer { element_ctx: ElementContext, menu_name: String, layer_name: String },
+        => OpenLayer {menu_name: String, layer_name: String },
 
     "close_layer" | "closelayer"
-        => CloseLayer { element_ctx: ElementContext, menu_name: String, layer_name: String },
+        => CloseLayer {menu_name: String, layer_name: String },
 
     "toggle_layer" | "togglelayer"
-        => ToggleLayer { element_ctx: ElementContext, menu_name: String, layer_name: String },
+        => ToggleLayer {menu_name: String, layer_name: String },
 
     // ===== VARIABLE COMMANDS =====
     "set_var" | "setvar" | "set"
-        => SetVar { element_ctx: ElementContext, name: String, value: String },
+        => SetVar {name: String, value: String },
 
     "inc_var" | "incvar" | "inc"
-        => IncVar { element_ctx: ElementContext, name: String, amount: String },
+        => IncVar {name: String, amount: String },
 
     "dec_var" | "decvar" | "dec"
-        => DecVar { element_ctx: ElementContext, name: String, amount: String },
+        => DecVar {name: String, amount: String },
 
     "mul_var" | "mulvar" | "mul"
-        => MulVar { element_ctx: ElementContext, name: String, factor: String },
+        => MulVar {name: String, factor: String },
 
     "toggle_var" | "togglevar" | "toggle"
-        => ToggleVar { element_ctx: ElementContext, name: String },
+        => ToggleVar {name: String },
 
     "clamp" | "clampvar"
-        => Clamp { element_ctx: ElementContext, name: String, min: String, max: String },
+        => Clamp {name: String, min: String, max: String },
 
     // ===== FLOW CONTROL =====
     "delay" | "wait" | "sleep"
-        => Delay { element_ctx: ElementContext, seconds: String },
+        => Delay {seconds: String },
 
     "halt" | "break"
         => Halt,
 
     "skip"
         => Skip { count: usize },
-    "for" | "forin" => For { element_ctx: ElementContext, value: String, commands: Vec<UiCommand> },
-    "if" => If { element_ctx: ElementContext, condition: String, then: Vec<UiCommand>, else_branch: Vec<UiCommand> },
+    "for" | "forin" => For {value: String, commands: Vec<UiCommand> },
+    "if" => If {condition: String, then: Vec<UiCommand>, else_branch: Vec<UiCommand> },
 
     "ifvareq"
-        => IfVarEq { element_ctx: ElementContext, var_name: String, value: String, then: Vec<UiCommand>, else_branch: Vec<UiCommand>},
+        => IfVarEq {var_name: String, value: String, then: Vec<UiCommand>, else_branch: Vec<UiCommand>},
 
     "add_element" | "addelem" | "add"
-        => AddElement { element_ctx: ElementContext, menu: String, layer: String, id: String, kind: String, center: String, actions: String, undoable: bool},
+        => AddElement {menu: String, layer: String, id: String, kind: String, center: String, actions: String, undoable: bool},
 
     "add_ap" | "addap"
-        => AddAP { element_ctx: ElementContext, menu: String, name: String, ap_name: String, ap_var: String, center: String, scale: String, is_temporary: bool},
+        => AddAP {menu: String, name: String, ap_name: String, ap_var: String, center: String, scale: String, is_temporary: bool},
 
     "del_ap" | "delap"
-        => DeleteAP { element_ctx: ElementContext, menu: String, layer: String, reference_id: String},
+        => DeleteAP {menu: String, layer: String, reference_id: String},
 
     "clone_element" | "cloneelem" | "clone"
-        => CloneElement { element_ctx: ElementContext,
+        => CloneElement {
         from_menu: String,
         from_layer: String,
         from_id: String,
@@ -413,7 +368,7 @@ define_commands! {
     },
 
     "clone_layer" | "clonelayer"
-        => CloneLayer { element_ctx: ElementContext,
+        => CloneLayer {
         from_menu: String,
         from_layer: String,
         to_menu: String,
@@ -421,23 +376,21 @@ define_commands! {
         undoable: bool},
 
     "delete_element" | "delelem" | "delete"
-        => DeleteElement { element_ctx: ElementContext, menu: String, layer: String, id: String, undoable: bool},
+        => DeleteElement {menu: String, layer: String, id: String, undoable: bool},
 
     "delete_layer" | "dellayer"
-        => DeleteLayer { element_ctx: ElementContext, menu: String, layer: String, undoable: bool},
+        => DeleteLayer {menu: String, layer: String, undoable: bool},
 
-    "save" | "savegame" => SaveGame { element_ctx: ElementContext, and_exit: String },
+    "save" | "savegame" => SaveGame {and_exit: String },
 
     "load" | "loadgame" | "load_save"
-        => LoadSave { element_ctx: ElementContext, save_name: String, without_saving: bool  },
+        => LoadSave {save_name: String, without_saving: bool  },
 
     "exit_game" | "leave_game"
         => ExitGame,
-
-    "show_interaction" => ShowInteraction { element_ctx: ElementContext, events: Vec<ActionEvent>, buttons: MouseButtons, color: String, shadow: bool },
     // ===== DEBUG COMMANDS =====
     "print" | "log" | "echo"
-        => Print { element_ctx: ElementContext, statement: String },
+        => Print {statement: String },
 
     "debug_vars" | "debugvars"
         => DebugVars,
@@ -445,7 +398,7 @@ define_commands! {
     "debug_menus" | "debugmenus"
         => DebugMenus,
 
-    "call" => Call { element_ctx: ElementContext, events: Vec<ActionEvent>, buttons: MouseButtons, function_name: String, args: Option<String> },
+    "call" => Call {function_name: String, args: Option<String> },
 
     // ===== UTILITY =====
     "noop" | "no_op" | "none"
@@ -526,71 +479,46 @@ impl ActionEvent {
             GlobalEvent::NavigateDirection { .. } => ActionEvent::Nothing,
         }
     }
+    pub fn is_always_event(&self) -> bool {
+        match self {
+            ActionEvent::Select => true,
+            ActionEvent::DeSelect => true,
+            ActionEvent::Activated => true,
+            ActionEvent::Deactivated => true,
+            ActionEvent::StartUp => true,
+            ActionEvent::ScreenResize => true,
+            _ => false,
+        }
+    }
 }
-pub fn actions_to_uicommands(
+/// ONLY for elements/layer/global_element actions, NOT GLOBAL global ACTIONS!
+pub fn run_actions(
+    command_queue: &mut CommandQueue,
     ctx: &mut CommandContext,
     element: &ElementRef,
-    actions: &[String],
-    events: &[ActionEvent],
-) -> Vec<UiCommand> {
-    let layer_actions = ctx
-        .ui
-        .menus
-        .get(element.menu.as_str())
-        .and_then(|m| m.layers.iter().find(|l| l.name == element.layer))
-        .map(|l| l.actions.clone())
-        .unwrap_or_default();
-    let mut cmds = Vec::new();
-    let all_actions: Vec<String> = actions
-        .iter()
-        .chain(ctx.ui.global_actions.element_actions.iter())
-        .chain(layer_actions.iter())
-        .cloned()
-        .collect::<Vec<String>>();
-    for action in all_actions.iter() {
-        let element = ElementContext {
-            self_element: Some(element.clone()),
-            as_element: None,
-        };
-        cmds.extend(parse_action(action, ctx, events, element));
+    element_actions: Vec<CompiledAction>,
+) {
+    let layer_actions: Vec<CompiledAction> = get_layer_actions(&ctx.ui.menus, element);
+    for action in element_actions {
+        run_action(command_queue, action, ctx);
     }
-
-    cmds
+    for action in layer_actions {
+        run_action_with_element(command_queue, action, ctx, element.clone());
+    }
+    for action in ctx
+        .ui
+        .global_actions
+        .element_compiled_actions
+        .clone()
+        .into_iter()
+    {
+        // Thanks maxim MAxim Maxim
+        run_action_with_element(command_queue, action, ctx, element.clone());
+    }
 }
-pub fn parse_action(
-    action: &String,
-    ctx: &mut CommandContext,
-    events: &[ActionEvent],
-    mut element_ctx: ElementContext,
-) -> Vec<UiCommand> {
-    let mut action_owned = action.clone();
 
-    let filters = parse_action_filters(ctx, &mut element_ctx, &mut action_owned);
-
-    if filters_match(&mut ctx.world.input, ctx.settings, &filters, events) {
-        // Now action_owned only contains the actual command
-        return parse_primitive_action(
-            ctx.settings,
-            &ctx.ui.variables,
-            &ctx.ui.menus,
-            &ctx.ui.touch_manager,
-            action_owned.trim(),
-            &element_ctx,
-            events,
-            &ctx.world.input.mouse.buttons,
-        );
-    };
-    vec![]
-}
 /// Handle a single action string that may be an event wrapper
-fn handle_action_str(
-    settings: &Settings,
-    ui: &mut Ui,
-    events: &[ActionEvent],
-    buttons: &MouseButtons,
-    action: &str,
-    element_ctx: &ElementContext,
-) -> Vec<UiCommand> {
+fn handle_action_str(action: &str) -> Vec<UiCommand> {
     let s = action.trim();
 
     if s.is_empty() {
@@ -637,35 +565,19 @@ fn handle_action_str(
     };
 
     let inner = s[open_paren + 1..close_paren].trim();
-    process_inner_content(settings, ui, events, buttons, inner, element_ctx)
+    process_inner_content(inner)
 }
 
 /// Process the inner content of a matched event wrapper
-fn process_inner_content(
-    settings: &Settings,
-    ui: &mut Ui,
-    events: &[ActionEvent],
-    buttons: &MouseButtons,
-    inner: &str,
-    element_ctx: &ElementContext,
-) -> Vec<UiCommand> {
+fn process_inner_content(inner: &str) -> Vec<UiCommand> {
     for part in split_top_level(inner, b',') {
-        let cmds = handle_action_str(settings, ui, events, buttons, part, element_ctx);
+        let cmds = handle_action_str(part);
 
         if !cmds.is_empty() {
             return cmds;
         }
 
-        let cmds = parse_primitive_action(
-            settings,
-            &ui.variables,
-            &ui.menus,
-            &ui.touch_manager,
-            part,
-            element_ctx,
-            events,
-            buttons,
-        );
+        let cmds = parse_primitive_action(part);
 
         if !cmds.is_empty() {
             return cmds;
@@ -906,16 +818,7 @@ fn split_top_level(s: &str, delimiter: u8) -> Vec<&str> {
     parts
 }
 
-fn parse_primitive_action(
-    settings: &Settings,
-    variables: &Variables,
-    menus: &HashMap<String, Menu>,
-    touch_manager: &UiTouchManager,
-    action: &str,
-    element_ctx: &ElementContext,
-    events: &[ActionEvent],
-    buttons: &MouseButtons,
-) -> Vec<UiCommand> {
+fn parse_primitive_action(action: &str) -> Vec<UiCommand> {
     let s = action.trim();
 
     if s.is_empty() {
@@ -926,18 +829,7 @@ fn parse_primitive_action(
     if chained.len() > 1 {
         return chained
             .into_iter()
-            .flat_map(|part| {
-                parse_primitive_action(
-                    settings,
-                    variables,
-                    menus,
-                    touch_manager,
-                    part,
-                    element_ctx,
-                    events,
-                    buttons,
-                )
-            })
+            .flat_map(|part| parse_primitive_action(part))
             .collect();
     }
 
@@ -967,49 +859,20 @@ fn parse_primitive_action(
             let args_str = s[open_paren + 1..close_paren].trim();
             let args: Vec<String> = parse_arguments(args_str);
 
-            if let Some(cmd) = make_ui_command(
-                settings,
-                variables,
-                menus,
-                touch_manager,
-                func_name,
-                args,
-                element_ctx,
-                events,
-                buttons,
-            ) {
+            if let Some(cmd) = make_ui_command(func_name, args) {
                 out.push(cmd);
             }
 
             let rest = s[close_paren + 1..].trim();
             if let Some(rest) = rest.strip_prefix(';') {
-                out.extend(parse_primitive_action(
-                    settings,
-                    variables,
-                    menus,
-                    touch_manager,
-                    rest,
-                    element_ctx,
-                    events,
-                    buttons,
-                ));
+                out.extend(parse_primitive_action(rest));
             }
 
             return out;
         }
     }
 
-    if let Some(cmd) = make_ui_command(
-        settings,
-        variables,
-        menus,
-        touch_manager,
-        s,
-        Vec::new(),
-        element_ctx,
-        events,
-        buttons,
-    ) {
+    if let Some(cmd) = make_ui_command(s, Vec::new()) {
         out.push(cmd);
     }
 
@@ -1068,13 +931,29 @@ fn button_matches(
     };
     state.pressed || state.just_released
 }
-
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
+pub enum AsFilter {
+    Compiled(ElementRef),
+    Dynamic(Vec<String>),
+    #[default]
+    None,
+}
+impl AsFilter {
+    pub fn dynamic(&self) -> Option<&[String]> {
+        match self {
+            AsFilter::Dynamic(arr) => Some(arr),
+            _ => None,
+        }
+    }
+}
+#[derive(Default, Debug, Clone)]
 struct ActionFilters {
-    buttons: Vec<ParsedButton>,
-    events: Vec<ActionEvent>,
-    keybind_trigger: KeyBindTrigger,
-    modes: Vec<String>,
+    pub scope: ActionScope,
+    pub buttons: Vec<ParsedButton>,
+    pub events: Vec<ActionEvent>,
+    pub keybind_trigger: KeyBindTrigger,
+    pub modes: Vec<String>,
+    pub as_filter: AsFilter,
 }
 #[derive(Default, Debug, Copy, Clone)]
 enum KeyBindTrigger {
@@ -1084,16 +963,111 @@ enum KeyBindTrigger {
     Release,
     Repeat,
 }
+#[derive(Debug, Clone, Default)]
+pub enum ActionScope {
+    #[default]
+    ActiveOnly,
+    Always,
+}
+#[derive(Debug, Clone)]
+pub struct CompiledAction {
+    pub element_ctx: ElementContext,
+    pub filters: ActionFilters,
+    pub commands: Vec<UiCommand>,
+}
+pub fn run_action(
+    command_queue: &mut CommandQueue,
+    action: CompiledAction,
+    ctx: &mut CommandContext,
+) {
+    let mut element_ctx = action.element_ctx;
+    prepare_filters(ctx, &action.filters, &mut element_ctx);
+    if filters_match(
+        &ctx.ui.menus,
+        &mut ctx.world.input,
+        ctx.settings,
+        &action.filters,
+        ctx.ui.action_events.as_slice(),
+        &element_ctx,
+    ) {
+        ctx.element_ctx = element_ctx;
+        command_queue.execute_multiple(action.commands, ctx);
+    };
+}
+pub fn run_action_with_element(
+    command_queue: &mut CommandQueue,
+    action: CompiledAction,
+    ctx: &mut CommandContext,
+    element: ElementRef,
+) {
+    let mut element_ctx = ElementContext {
+        self_element: Some(element),
+        as_element: None,
+    };
+    prepare_filters(ctx, &action.filters, &mut element_ctx);
+    if filters_match(
+        &ctx.ui.menus,
+        &mut ctx.world.input,
+        ctx.settings,
+        &action.filters,
+        ctx.ui.action_events.as_slice(),
+        &element_ctx,
+    ) {
+        ctx.element_ctx = element_ctx;
+        command_queue.execute_multiple(action.commands, ctx);
+    };
+}
+pub fn run_action_with_events(
+    command_queue: &mut CommandQueue,
+    action: CompiledAction,
+    ctx: &mut CommandContext,
+    events: &[ActionEvent],
+) {
+    let mut element_ctx = action.element_ctx;
+    prepare_filters(ctx, &action.filters, &mut element_ctx);
+    if filters_match(
+        &ctx.ui.menus,
+        &mut ctx.world.input,
+        ctx.settings,
+        &action.filters,
+        events,
+        &element_ctx,
+    ) {
+        ctx.ui.action_events = events.to_vec();
+        ctx.element_ctx = element_ctx;
+        command_queue.execute_multiple(action.commands, ctx);
+    };
+}
 
-struct ParsedAction {
-    filters: ActionFilters,
-    command: String,
+pub fn compile_actions(
+    menus: &Menus,
+    self_element: Option<ElementRef>,
+    string_actions: Vec<String>,
+) -> Vec<CompiledAction> {
+    // Command context for parsing as:, which parses an array, I should compile that too, but whatever.
+    let mut compiled_actions = Vec::new();
+    for mut action_string in string_actions {
+        let mut element_ctx = ElementContext {
+            self_element: self_element.clone(),
+            as_element: None,
+        };
+        let filters = parse_action_filters(&mut element_ctx, &mut action_string, menus);
+
+        let commands = parse_primitive_action(action_string.trim());
+        let compiled_action = CompiledAction {
+            element_ctx,
+            filters,
+            commands,
+        };
+        compiled_actions.push(compiled_action);
+    }
+    compiled_actions
 }
 
 fn parse_action_filters(
-    ctx: &mut CommandContext,
     element_ctx: &mut ElementContext,
     action: &mut String,
+    menus: &Menus,
 ) -> ActionFilters {
     let mut filters = ActionFilters::default();
     let mut consumed = 0usize;
@@ -1123,10 +1097,11 @@ fn parse_action_filters(
         }
 
         let parsed = try_parse_button(rest, &mut filters)
+            .or_else(|| try_parse_scope(rest, &mut filters))
             .or_else(|| try_parse_trigger(rest, &mut filters))
             .or_else(|| try_parse_on(rest, &mut filters))
             .or_else(|| try_parse_in(rest, &mut filters))
-            .or_else(|| try_parse_as(rest, &mut filters, element_ctx, ctx));
+            .or_else(|| try_parse_as(rest, &mut filters, element_ctx, menus));
 
         let Some(used) = parsed else {
             break;
@@ -1136,7 +1111,6 @@ fn parse_action_filters(
     }
 
     action.drain(..consumed);
-
     filters
 }
 
@@ -1162,7 +1136,21 @@ fn try_parse_button(input: &str, filters: &mut ActionFilters) -> Option<usize> {
     filters.buttons.push(button);
     Some(consumed)
 }
+fn try_parse_scope(input: &str, filters: &mut ActionFilters) -> Option<usize> {
+    let (value, consumed) = parse_prefixed_value(input, "scope:")?;
 
+    let scope = match value.to_ascii_lowercase().as_str() {
+        "a" | "always" => ActionScope::Always,
+        "active" => ActionScope::ActiveOnly,
+        _ => {
+            println!("Invalid on filter: scope:{}", value);
+            return None;
+        }
+    };
+
+    filters.scope = scope;
+    Some(consumed)
+}
 fn try_parse_trigger(input: &str, filters: &mut ActionFilters) -> Option<usize> {
     let (value, consumed) = parse_prefixed_value(input, "trigger:")?;
 
@@ -1227,12 +1215,27 @@ fn try_parse_as(
     input: &str,
     filters: &mut ActionFilters,
     element_ctx: &mut ElementContext,
-    ctx: &mut CommandContext,
+    menus: &Menus,
 ) -> Option<usize> {
-    let (raw, consumed) = parse_prefixed_value(input, "as:")?;
-    let Some(arr) = Value::parse_array(&ctx.settings, &ctx.ui.variables, raw.as_str()) else {
+    filters.as_filter = AsFilter::None;
+    // Is asdyn:?
+    if let Some((raw, consumed)) = parse_prefixed_value(input, "asdyn:") {
+        let inner = if raw.starts_with('[') && raw.ends_with(']') {
+            &raw[1..raw.len() - 1]
+        } else {
+            raw.as_str()
+        };
+        let arr = Value::split_array_elements(inner);
+        filters.as_filter = AsFilter::Dynamic(arr.iter().map(|str| str.to_string()).collect());
         return Some(consumed);
     };
+    // Is as:?
+    let (raw, consumed) = parse_prefixed_value(input, "as:")?;
+
+    let Some(arr) = Value::parse_array_pure(raw.as_str()) else {
+        return Some(consumed);
+    };
+
     let self_element = if let Some(current) = element_ctx.self_element.as_ref() {
         current
     } else if arr.len() == 3 {
@@ -1240,9 +1243,51 @@ fn try_parse_as(
     } else {
         return Some(consumed);
     };
-    let mut resolve = |s: String| string_to_value(ctx, element_ctx, s).into_string();
     //println!("{:?}", arr);
     let (menu, layer, id) = match arr.as_slice() {
+        [id] => (
+            self_element.menu.clone(),
+            self_element.layer.clone(),
+            id.to_string(),
+        ),
+        [layer, id] => (self_element.menu.clone(), layer.to_string(), id.to_string()),
+        [menu, layer, id, ..] => (menu.to_string(), layer.to_string(), id.to_string()),
+        [] => return Some(consumed),
+    };
+    let Some(kind) = get_element_kind(menus, menu.as_str(), layer.as_str(), id.as_str()) else {
+        return Some(consumed);
+    }; // grad sport gleich sport, hmm grad sport, deswegen schwitze ich mama
+    let as_element = ElementRef {
+        menu,
+        layer,
+        id,
+        kind,
+    };
+    //println!("{:?}", as_element);
+    filters.as_filter = AsFilter::Compiled(as_element.clone());
+    element_ctx.as_element = Some(as_element);
+
+    Some(consumed)
+}
+fn prepare_filters(
+    ctx: &mut CommandContext,
+    filters: &ActionFilters,
+    element_ctx: &mut ElementContext,
+) {
+    let Some(arr) = filters.as_filter.dynamic() else {
+        return;
+    };
+    let self_element = if let Some(current) = element_ctx.self_element.as_ref() {
+        current
+    } else if arr.len() == 3 {
+        &ElementRef::default()
+    } else {
+        return;
+    };
+    ctx.element_ctx = element_ctx.clone(); // Very important for string_to_value()
+    let mut resolve = |s: String| string_to_value(ctx, s).into_string();
+    //println!("{:?}", arr);
+    let (menu, layer, id) = match arr {
         [id] => (
             self_element.menu.clone(),
             self_element.layer.clone(),
@@ -1258,22 +1303,19 @@ fn try_parse_as(
             resolve(layer.to_string()),
             resolve(id.to_string()),
         ),
-        [] => return Some(consumed),
+        [] => return,
     };
     let Some(kind) = get_element_kind(&ctx.ui.menus, menu.as_str(), layer.as_str(), id.as_str())
     else {
-        return Some(consumed);
+        return;
     }; // grad sport gleich sport, hmm grad sport, deswegen schwitze ich mama
-    let as_element = Some(ElementRef {
+    let as_element = ElementRef {
         menu,
         layer,
         id,
         kind,
-    });
-    //println!("{:?}", as_element);
-    element_ctx.as_element = as_element;
-
-    Some(consumed)
+    };
+    element_ctx.as_element = Some(as_element);
 }
 // fn try_parse_as(
 //     input: &str,
@@ -1423,43 +1465,81 @@ fn trim_leading_whitespace(s: &str) -> (&str, usize) {
 }
 
 fn filters_match(
+    menus: &Menus,
     input: &mut Input,
     settings: &Settings,
     filters: &ActionFilters,
     events: &[ActionEvent],
+    element_ctx: &ElementContext,
 ) -> bool {
-    // Check button filters (if any specified, at least one must match)
+    match filters.scope {
+        ActionScope::ActiveOnly => {
+            if !filters.events.is_empty() {
+                let event_requires_active = filters
+                    .events
+                    .iter()
+                    .filter(|filter_event| events.contains(filter_event))
+                    .any(|event| !event.is_always_event());
+
+                if event_requires_active {
+                    let Some(element_ref) = element_ctx.self_element.as_ref() else {
+                        return false;
+                    };
+
+                    if !get_element_active(menus, element_ref).unwrap_or(false) {
+                        return false;
+                    }
+                }
+            } else {
+                let Some(element_ref) = element_ctx.self_element.as_ref() else {
+                    return false;
+                };
+
+                if !get_element_active(menus, element_ref).unwrap_or(false) {
+                    return false;
+                }
+            }
+        }
+
+        ActionScope::Always => {
+            // Just let it pass
+        }
+    }
+
+    // Check button filters
     if !filters.buttons.is_empty() {
         let any_button_matches = filters
             .buttons
             .iter()
             .any(|b| button_matches(input, b.clone(), filters.keybind_trigger));
+
         if !any_button_matches {
             return false;
         }
     }
 
-    // Check event filters (if any specified, at least one must match)
+    // Check event filters
     if !filters.events.is_empty() {
         let any_event_matches = filters.events.iter().any(|e| events.contains(e));
+
         if !any_event_matches {
             if !filters.events.iter().any(|e| e == &ActionEvent::Always) {
                 return false;
             }
         }
     }
+
     // If in editor mode, require the action to explicitly allow editor_mode.
-    // Actions with no in: filter will be rejected while editor_mode is true.
     if settings.editor_mode && filters.modes.is_empty() {
         return false;
     }
+
     // Check mode filters
     if !filters.modes.is_empty() {
         let any_mode_matches = filters.modes.iter().any(|m| match m.as_str() {
             "editor_mode" => settings.editor_mode,
             "play_mode" => !settings.editor_mode,
             "any" => true,
-            // Add more modes here as needed
             other => {
                 println!("Unknown mode filter: '{}'", other);
                 false

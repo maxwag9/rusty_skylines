@@ -5,6 +5,9 @@ layers:
     elements:
       - !Rect
         id: Menu Background
+        actions:
+          - on:startup, set(str:selected_save.0, none:None)
+
         x: 960
         y: 540
         w: 1920
@@ -38,9 +41,9 @@ layers:
       - !Rect
         id: Left_Buttons_Background
         x: 800
-        y: 540
-        w: 1100
-        h: 900
+        y: 560
+        w: 1200
+        h: 1000
         rotation: 0.0
         color:
           - 0.01
@@ -72,7 +75,7 @@ layers:
         actions: [ ]
         x: 960
         y: 50
-        pt: 24.0
+        pt: 30.0
         color:
           - 1.0
           - 1.0
@@ -80,92 +83,72 @@ layers:
           - 1.0
         text: Saves
         misc:
-          active: true
           touchable: false
-          editable: true
-      - !Text
-        id: back_to_main_menu_text
-        actions:
-          - on:r call(open_main_menus)
+      - !Advanced
+        name: back_to_main_menu_text
+        ap_name: button
+        ap_vars:
+          - "str:<- To Main Menu"
+          - "40"
+          - "str:on:r call(open_main_menus)"
         x: 100
-        y: 50
-        pt: 24.0
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: <- To Main Menu
-      - !Text
-        id: delete_save_text
-        actions: [ ]
-        x: 800
-        y: 1000
-        pt: 18.0
-        color:
-          - 0.95
-          - 0.00
-          - 0.00
-          - 1.0
-        text: Delete Save (forever!)
-      - !Text
-        id: empty_save_text
-        actions: [ ]
-        x: 1120
-        y: 1000
-        pt: 18
-        color:
-          - 0.11
-          - 0.845
-          - 0.8
-          - 1.0
-        text: -> Enter temporary, empty save <-
-      - !Text
-        id: play_save_text
-        actions:
-          - on:r set(str:show_world, true); set(str:editor_mode, false); set(str:override_mode, false); load_save(selected_save.0, false); call(open_play_menus);
-        x: 1060
-        y: 950
-        pt: 23.0
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: Play Save
-      - !Text
-        id: reload_saves_text
-        actions:
-          - on:startup, set(str:selected_save, [false])
-          - on:startup set(str:reload_saves, "forin( saves, delete_layer(self.menu, expr:{val.0} + "_option", false) ); call(rust:str:get_saves); forin( saves, add_ap(self.menu, expr:{val.0} + "_option", save_option, val, [960.0, expr:100.0+{idx}*120.0], 2.0, true) )")
-          #- on:startup set(str:reload_saves, "del_ap(self.menu, self.layer, {{saves.0}.0}_option); call(rust:str:get_saves); add_ap(self.menu, {{{saves}.0}.0}_option, save_option, {saves.0}, [960.0, 100.0+1*70.0], 2.0, true)")
-          - on:press call(reload_saves)
-        x: 240
-        y: 950
-        pt: 23.0
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: Reload Saves
-      - !Text
-        id: create_save_text
-        actions:
-          - on:press, set(str:prev_menus, active_menus); close_all_menus(); close_all_layers("CreateSave"); open_layer("CreateSave", "Difficulty")
-        x: 440
-        y: 950
-        pt: 23.0
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: Create Save
+        y: 100
+        scale: 1.0
+      - !Advanced
+        name: delete_save_text
+        ap_name: button
+        ap_vars:
+          - "str:Delete Save (forever!)"
+          - "40"
+          - "str:on:r call(open_main_menus)"
+        x: 340
+        y: 620
+        scale: 1.0
+      - !Advanced
+        name: empty_save_text
+        ap_name: button
+        ap_vars:
+          - "str:-> Enter temporary, empty save <-"
+          - "40"
+          - "str:on:r call(open_main_menus)"
+        x: 340
+        y: 680
+        scale: 1.0
+
+      - !Advanced
+        name: reload_saves_text
+        ap_name: button
+        ap_vars:
+          - "str:Reload Saves"
+          - "40"
+          - "str:on:press on:activated call(var:reload_saves)"
+        x: 340
+        y: 740
+        scale: 1.0
+      - !Advanced
+        name: create_save_text
+        ap_name: button
+        ap_vars:
+          - "str:Create Save"
+          - "40"
+          - str:on:press set(str:prev_menus, active_menus); close_all_menus(); close_all_layers("CreateSave"); open_layer("CreateSave", "Difficulty")
+        x: 340
+        y: 800
+        scale: 1.0
+      - !Advanced
+        name: play_save_text
+        ap_name: button
+        ap_vars:
+          - "str:Play Save"
+          - "40"
+          - "str:on:r set(str:show_world, true); set(str:editor_mode, false); set(str:override_mode, false); load_save(selected_save.0, false); call(open_play_menus);"
+        x: 340
+        y: 860
+        scale: 1.0
       - !Rect
         id: World image
         actions: [ ]
-        x: 1500
+        x: 1600
         y: 400
         w: 256
         h: 180

@@ -1,19 +1,23 @@
+use crate::helpers::paths::sounds_dir;
 use crate::helpers::positions::{ChunkSize, WorldPos};
 use crate::resources::Resources;
 use crate::world::sound::car_sounds::{CarAudioState, collect_car_audio};
+use crate::world::sound::sfx::{SfxConfig, SfxVoice};
+use crate::world::sound::{MAX_CARS_AUDIO, with_stderr_suppressed};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
     Device, Host, HostId, SampleFormat, SampleRate, Stream, StreamConfig, SupportedStreamConfig,
 };
-
-use crate::world::sound::{MAX_CARS_AUDIO, with_stderr_suppressed};
+use std::collections::HashMap;
+use std::f32::consts::PI;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub fn run_sounds(resources: &mut Resources) {
     // every frame
-    let sounds = &mut resources.sounds;
+    let sounds = &mut resources.world.sounds;
 
     // Health check and rebuild if needed
     sounds.check_and_rebuild();
@@ -21,7 +25,6 @@ pub fn run_sounds(resources: &mut Resources) {
     let Ok(mut state) = sounds.state.lock() else {
         return;
     };
-
     let camera = &resources.world.world_state.camera;
     let terrain = &resources.world.terrain;
     let car_storage = resources.world.cars.car_storage_mut();
@@ -54,6 +57,9 @@ pub struct AudioState {
 
     pub camera_height_above_ground: f32,
     pub wind_synth: WindSynth,
+
+    pub sfx_queue: Vec<SfxConfig>,
+    active_sfx: Vec<SfxVoice>,
 }
 
 impl AudioState {
@@ -70,6 +76,9 @@ impl AudioState {
 
             camera_height_above_ground: 0.0,
             wind_synth: WindSynth::new(sample_rate as f32),
+
+            sfx_queue: Vec::new(),
+            active_sfx: Vec::new(),
         }
     }
     pub fn clear(&mut self) {
@@ -87,8 +96,25 @@ pub struct Sounds {
     rebuild_count: u64,
     consecutive_failures: u32,
     last_rebuild_attempt: Instant,
-}
 
+    sfxs: HashMap<String, SfxConfig>,
+}
+impl Sounds {
+    pub fn queue_sfx<S: AsRef<str>>(&self, sfx_name: S) -> bool {
+        if let Ok(mut state) = self.state.lock() {
+            //println!("{:#?} {:?}", self.sfxs, sfx_name.to_lowercase());
+            let sfx_name = sfx_name.as_ref().to_lowercase();
+            if let Some(sfx_config) = self.sfxs.get(&sfx_name) {
+                state.sfx_queue.push(sfx_config.clone());
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+}
 #[derive(Debug)]
 pub enum AudioError {
     NoHostsAvailable,
@@ -157,6 +183,7 @@ impl Sounds {
             rebuild_count: 0,
             consecutive_failures: 1,
             last_rebuild_attempt: now,
+            sfxs: HashMap::new(),
         }
     }
 
@@ -388,6 +415,10 @@ impl Sounds {
         // if let Ok(state) = state.lock().as_mut().map(|s| s) {
         //     init_cars_audio(state);
         // }
+
+        let sfx_folder = sounds_dir();
+        let sfxs = Self::load_sfxs(sfx_folder);
+
         let now = Instant::now();
         Ok(Self {
             stream: Some(stream),
@@ -399,9 +430,94 @@ impl Sounds {
             rebuild_count: 0,
             consecutive_failures: 0,
             last_rebuild_attempt: now,
+            sfxs,
         })
     }
+    fn load_sfxs(folder_path: PathBuf) -> HashMap<String, SfxConfig> {
+        let folder_path = folder_path.as_path();
+        let mut sfxs = HashMap::new();
 
+        let entries = std::fs::read_dir(folder_path).unwrap_or_else(|err| {
+            panic!(
+                "[Sounds] Failed to read sounds folder to get SFXs. Tried path: '{}'. Error: {}",
+                folder_path.display(),
+                err
+            )
+        });
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    eprintln!(
+                        "[Sounds] Failed to read an entry in the sounds folder '{}'. Error: {}",
+                        folder_path.display(),
+                        err
+                    );
+                    continue;
+                }
+            };
+
+            let path = entry.path();
+
+            // Only process files in the root of the folder.
+            if !path.is_file() {
+                continue;
+            }
+
+            // Only process YAML files.
+            if path.extension().and_then(|ext| ext.to_str()) != Some("yaml") {
+                continue;
+            }
+
+            let name = match path.file_stem().and_then(|stem| stem.to_str()) {
+                Some(name) => name.to_owned(),
+                None => {
+                    eprintln!(
+                        "[Sounds] Failed to determine SFX name from file '{}'. Filename is not valid UTF-8.",
+                        path.display()
+                    );
+                    continue;
+                }
+            };
+
+            let contents = match std::fs::read_to_string(&path) {
+                Ok(contents) => contents,
+                Err(err) => {
+                    eprintln!(
+                        "[Sounds] Failed to read SFX file '{}'. Error: {}",
+                        path.display(),
+                        err
+                    );
+                    continue;
+                }
+            };
+
+            let sfx = match serde_yaml::from_str::<SfxConfig>(&contents) {
+                Ok(sfx) => sfx,
+                Err(err) => {
+                    eprintln!(
+                        "[Sounds] Failed to deserialize SFX file '{}'. Expected a valid SfxConfig YAML. Error: {}",
+                        path.display(),
+                        err
+                    );
+                    continue;
+                }
+            };
+
+            let sfx_name = sfx.name.clone();
+
+            if sfxs.insert(sfx_name.to_lowercase(), sfx).is_some() {
+                eprintln!(
+                    "[Sounds] Warning: Duplicate SFX name '{}'. The SFX from file '{}' overwrote the previously loaded SFX with the same name.",
+                    sfx_name,
+                    path.display()
+                );
+            }
+        }
+        println!("[Sounds] Loaded {} SFX files", sfxs.len());
+        sfxs
+    }
     fn build_all_attempts(available_hosts: &[HostId]) -> Vec<InitAttempt> {
         let mut attempts = Vec::new();
 
@@ -903,7 +1019,7 @@ fn fill_audio_buffer(
     data: &mut [f32],
     state_arc: &Arc<Mutex<AudioState>>,
     channels: usize,
-    _sample_rate: SampleRate,
+    sample_rate: SampleRate,
 ) {
     let Ok(mut state) = state_arc.try_lock() else {
         data.fill(0.0);
@@ -938,7 +1054,6 @@ fn fill_audio_buffer(
     let car_count = state.cars.len().min(MAX_CARS_AUDIO);
     const SPEED_OF_SOUND: f32 = 343.0;
 
-    // Process only closest 10 cars (position and every field stays the same, we do not need to recompute all this crap for all 512 samples or so!)
     for idx in 0..car_count {
         let car = &state.cars[idx];
         let to_car = listener_pos.direction_to(car.position);
@@ -959,6 +1074,30 @@ fn fill_audio_buffer(
         gain[idx] = attenuation * 0.7;
     }
 
+    if !state.sfx_queue.is_empty() {
+        let queued: Vec<SfxConfig> = state.sfx_queue.drain(..).collect();
+        let sr = sample_rate as f32;
+
+        for sfx in queued {
+            let too_recent = state.active_sfx.iter().any(|voice| {
+                voice.elapsed < sfx.deduplication_time && voice.config.name == sfx.name
+            });
+
+            if !too_recent {
+                state.active_sfx.push(SfxVoice::new(sfx, sr));
+            }
+        }
+    }
+
+    let sfx_pan: Vec<(f32, f32)> = state
+        .active_sfx
+        .iter()
+        .map(|voice| {
+            let pan = voice.config.pan.clamp(-1.0, 1.0);
+            (((1.0 - pan) * 0.5).sqrt(), ((1.0 + pan) * 0.5).sqrt())
+        })
+        .collect();
+
     let cam_height_above_ground = state.camera_height_above_ground;
 
     for frame in data.chunks_mut(channels) {
@@ -976,6 +1115,12 @@ fn fill_audio_buffer(
             right += sample * pan_r[idx];
         }
 
+        for (voice, (pl, pr)) in state.active_sfx.iter_mut().zip(sfx_pan.iter()) {
+            let sample = voice.next_sample();
+            left += sample * pl;
+            right += sample * pr;
+        }
+
         if channels >= 2 {
             frame[0] = left.clamp(-1.0, 1.0);
             frame[1] = right.clamp(-1.0, 1.0);
@@ -983,6 +1128,8 @@ fn fill_audio_buffer(
             frame[0] = ((left + right) * 0.5).clamp(-1.0, 1.0);
         }
     }
+
+    state.active_sfx.retain(|voice| !voice.is_finished());
 }
 #[derive(Copy, Clone)]
 struct CarSynth {
@@ -1065,8 +1212,6 @@ impl CarSynth {
         self.filter_state[band]
     }
 }
-
-use std::f32::consts::PI;
 
 struct WindSynth {
     sample_rate: f32,

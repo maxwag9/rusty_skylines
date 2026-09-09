@@ -5,55 +5,57 @@ elements:
     actions:
       # Toggle the open/closed state variable
       #- on:activated set(str:{ap}_open, false)
-      - on:release button:left, toggle(str:{ap}_open)
+      - on:release button:left, toggle(str:{ap.0}_open)
       #- on:sel button:a, print(str:{ap}_open, false)
       #- on:scroll button:a, print(str:{ap}, scroll_delta)
-      - on:scroll button:a, inc_var(str:{ap}, scroll_delta)
-      - on:sel button:a, ifvareq({ap}_open, bool:false, forin({ap}.options, del_ap(self.menu, self.layer, expr:"{ap}_Option_"+{idx})))
+      - on:scroll button:a, inc(str:{ap.0}, scroll_delta)
+      - on:sel button:a, ifvareq({ap}_open, bool:false, forin({ap}.options, del_ap(self.menu, self.layer, expr:"{ap.0}_Option_"+{idx})))
       # If opening: Iterate over the options array and clone the template AP
       #- on:release button:a, print(str:{ap}.{idx})
-      - on:release button:left, ifvareq(var:{ap}_open, bool:true, forin({ap}.options, add_ap(self.menu, expr:"{ap}_Option_"+{idx}, "dropdown_option", [expr:"{ap}.options."+{idx}, str:str:{ap}, self.layer], [self.center.x, expr:{self.center.y} + {self.size.y} * ({idx} + 1)], 1.0, true);))
+      - on:release button:left, ifvareq(var:{ap.0}_open, bool:true, forin({ap}.options, add_ap(self.menu, expr:"{ap.0}_Option_"+{idx}, "dropdown_option", [expr:"{ap.0}.options."+{idx}, str:str:{ap.0}, self.layer], [self.center.x, expr:{self.center.y} + {self.size.y} * ({idx} + 1)], 1.0, true);))
       #- on:release button:left, print("dd_{ap}_layer")
       # If closing: Iterate over the options array and delete the cloned APs
       #- on:release button:left, print("{ap}_open")
       #- button:a, print({ap}_open)
       #- button:a, print(Name in dd:, str:{ap}_open)
-      - on:release on:sel button:left, ifvareq({ap}_open, bool:false, forin({ap}.options, del_ap(self.menu, self.layer, expr:"{ap}_Option_"+{idx})))
-
+      - on:release on:sel button:left, ifvareq({ap.0}_open, bool:false, forin({ap.0}.options, del_ap(self.menu, self.layer, expr:"{ap}_Option_"+{idx})))
+      - on:hover_enter, call(rust:play_sound, str:ButtonHover)
+      - on:press, call(rust:play_sound, str:ButtonPress)
       # Visual feedback for the main button
-      - show_interaction(None, false)
+      - call(show_interaction, [[0.1, 0.1, 0.1, 1.0], false]))
     #      - on:hovering, ifvareq({ap}_open, bool:true, set(self.color.fill, [0.5, 0.5, 0.5, 1.0]), set(self.color.fill, [0.2, 0.2, 0.2, 1.0]))
     #      - on:hover_exit, ifvareq({ap}_open, bool:true, set(self.color.fill, [0.4, 0.4, 0.4, 1.0]), set(self.color.fill, [0.1, 0.1, 0.1, 1.0]))
 
     x: 0
     y: 0
-    w: 160
-    h: 40
+    w: 240
+    h: 60
     color:
-      - 0.1
-      - 0.1
-      - 0.1
+      - 0.04
+      - 0.04
+      - 0.04
       - 1.0
     border_color:
       - 1.0
       - 1.0
       - 1.0
       - 1.0
-    roundness: 0.1
+    roundness: 0.2
     border_thickness: 4
 
   - !Text
     id: Main Button Text
     x: 0
     y: 0
-    pt: 12.0
+    pt: 16.0
+    border_width: 5.0
     color:
       - 1.0
       - 1.0
       - 1.0
       - 1.0
     # Evaluates to the currently selected option string
-    text: "{ap}: {{ap}}"
+    text: "{ap.1}: {{ap.0}}"
     anchor: Center
     misc:
       active: true

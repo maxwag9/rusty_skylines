@@ -40,7 +40,7 @@ layers:
         x: 960
         y: 450
         w: 400
-        h: 400
+        h: 500
         rotation: 0.0
         color:
           - 0.01
@@ -74,8 +74,6 @@ layers:
         x: 960
         y: 330
         scale: 1.0
-
-        editing_tool: false
       - !Advanced
         name: settings_button
         ap_name: button
@@ -86,8 +84,6 @@ layers:
         x: 960
         y: 440
         scale: 1.0
-
-        editing_tool: false
       - !Advanced
         name: pingpong_button
         ap_name: button
@@ -100,21 +96,27 @@ layers:
         x: 960
         y: 540
         scale: 1.0
-
-        editing_tool: false
+      - !Advanced
+        name: exit_world_to_main_menu_button
+        ap_name: button
+        ap_vars:
+          - "str:Exit World and Save"
+          - "30"
+          - "str:on:r save(true); call(open_main_menus)"
+        x: 960
+        y: 610
+        scale: 1.0
       - !Advanced
         name: exit_game_button
         ap_name: button
         ap_vars:
           - "str:Exit Game"
           - "30"
-          - "str:on:r exit_game()"
+          - "str:on:r exit_game(); "
         x: 960
-        y: 610
+        y: 680
         scale: 1.0
 
-        editing_tool: false
-    editing_tool: false
 #  - name: test_buttons
 #    order: 3
 #    elements:

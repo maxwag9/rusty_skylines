@@ -2,12 +2,13 @@
 
 use crate::helpers::positions::WorldPos;
 use crate::systems::systems::RoadDestroyType;
-use crate::world::roads::roads::{RoadCommand, RoadStorage, RoadTypes};
+use crate::world::roads::roads::{EMA, RoadCommand, RoadStorage, RoadTypes};
 use glam::Vec3;
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
+use strum_macros::EnumString;
 
 pub type RoadTypeId = u32;
 #[derive(Clone, Debug)]
@@ -18,7 +19,7 @@ pub struct RoadStyleParams {
 }
 
 impl RoadStyleParams {
-    pub fn _set_mode(&mut self, mode: BuildMode) {
+    pub fn set_mode(&mut self, mode: BuildMode) {
         if self.mode != mode {
             self.mode = mode;
             self.state = EditorState::Idle;
@@ -431,9 +432,13 @@ impl RoadType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
 pub enum BuildMode {
+    #[strum(serialize = "Straight", serialize = "straight")]
+    #[default]
     Straight,
+
+    #[strum(serialize = "Curved", serialize = "curved")]
     Curved,
 }
 
@@ -548,7 +553,7 @@ impl Hash for SplitInfo {
         self.split_pos.hash(state);
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct SegmentPreview {
     pub road_type_id: RoadTypeId,
     pub mode: BuildMode,
@@ -793,4 +798,26 @@ pub fn hash_vec3<H: Hasher>(v: Vec3, state: &mut H) {
     v.x.hash_bits(state);
     v.y.hash_bits(state);
     v.z.hash_bits(state);
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LaneProjection {
+    pub position: WorldPos,
+    pub distance: f64,
+    pub tangent: Vec3,
+    pub t: f64,
+    pub poly_idx: PolyIdx,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DestinationTravelTimes {
+    pub district: Option<EMA>,
+    pub partition: Option<EMA>,
+    pub segment: Option<EMA>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Hash)]
+pub struct LaneDirectionCounts {
+    pub forward: usize,
+    pub backward: usize,
 }

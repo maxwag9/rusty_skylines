@@ -1,12 +1,12 @@
 use crate::helpers::positions::{ChunkCoord, WorldPos};
 use crate::world::buildings::buildings::{BuildingId, Buildings};
 use crate::world::buildings::zoning::{DistrictId, LotEntrance};
+use crate::world::cars::parking::ParkingSpotId;
 use crate::world::roads::road_structs::{NodeId, SegmentId};
 use crate::world::roads::roads::{RoadRegionId, RoadStorage};
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::world::cars::parking::ParkingSpotId;
 
 pub type PartitionId = u32;
 pub type LaneT = f32;
@@ -29,12 +29,12 @@ pub enum RouteStatus {
 pub enum Destination {
     // Node(NodeId),
     // Segment(LaneId, LaneT),
-    Building(DistrictId, PartitionId, SegmentId, BuildingId),
-    ParkingSpot(LotEntrance, ParkingSpotId, BuildingId)
+    Building(DistrictId, PartitionId, Option<SegmentId>, BuildingId),
+    ParkingSpot(LotEntrance, ParkingSpotId, BuildingId),
 }
 impl Destination {
     #[inline]
-    pub fn as_building(&self) -> Option<(DistrictId, PartitionId, SegmentId, BuildingId)> {
+    pub fn as_building(&self) -> Option<(DistrictId, PartitionId, Option<SegmentId>, BuildingId)> {
         match *self {
             Destination::Building(district_id, partition_id, segment_id, building_id) => {
                 Some((district_id, partition_id, segment_id, building_id))
@@ -45,12 +45,8 @@ impl Destination {
     #[inline]
     pub fn as_building_id(&self) -> Option<BuildingId> {
         match self {
-            Destination::Building(.., building_id) => {
-                Some(*building_id)
-            }
-            Destination::ParkingSpot(_, _, building_id) => {
-                Some(*building_id)
-            }
+            Destination::Building(.., building_id) => Some(*building_id),
+            Destination::ParkingSpot(_, _, building_id) => Some(*building_id),
         }
     }
 
@@ -67,12 +63,8 @@ impl Destination {
     #[inline]
     pub fn kind(&self) -> DestinationKind {
         match self {
-            Destination::Building(..) => {
-                DestinationKind::Building
-            }
-            Destination::ParkingSpot(..) => {
-                DestinationKind::ParkingSpot
-            }
+            Destination::Building(..) => DestinationKind::Building,
+            Destination::ParkingSpot(..) => DestinationKind::ParkingSpot,
         }
     }
 }

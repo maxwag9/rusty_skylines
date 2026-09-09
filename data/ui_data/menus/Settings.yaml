@@ -119,7 +119,9 @@ layers:
       - !Advanced
         name: checkbox_tonemap_ui
         ap_name: checkbox
-        ap_var: str:tonemap_ui
+        ap_var:
+          - "str:tonemap_ui"
+          - "25"
         x: 75
         y: 800
         scale: 1.0
@@ -128,7 +130,9 @@ layers:
       - !Advanced
         name: tonemapping_state_dropdown
         ap_name: dropdown
-        ap_var: str:tonemapping_state
+        ap_var:
+          - str:tonemapping_state
+          - str:Tonemapping
         x: 600
         y: 280
         scale: 1.0
@@ -137,7 +141,9 @@ layers:
       - !Advanced
         name: color_grade_state_dropdown
         ap_name: dropdown
-        ap_var: str:color_grading_state
+        ap_var:
+          - str:color_grading_state
+          - str:Color Grade
         x: 600
         y: 360
         scale: 1.0
@@ -146,7 +152,9 @@ layers:
       - !Advanced
         name: present_mode_dropdown
         ap_name: dropdown
-        ap_var: str:present_mode
+        ap_var:
+          - str:present_mode
+          - str:Present Mode
         x: 600
         y: 440
         scale: 1.0
@@ -155,7 +163,9 @@ layers:
       - !Advanced
         name: shadow_type_dropdown
         ap_name: dropdown
-        ap_var: str:shadow_type
+        ap_var:
+          - str:shadow_type
+          - str:Shadow Type
         x: 600
         y: 520
         scale: 1.0
@@ -164,7 +174,9 @@ layers:
       - !Advanced
         name: fullscreen_mode_dropdown
         ap_name: dropdown
-        ap_var: str:fullscreen_mode
+        ap_var:
+          - str:fullscreen_mode
+          - str:Fullscreen
         x: 600
         y: 600
         scale: 1.0
@@ -268,7 +280,7 @@ layers:
           - "str:saturation"
           - "str:Saturation"
           - "0.0"
-          - "2.0"
+          - "20.0"
           - "0.1"
           - "none:None"
           - "none:None"

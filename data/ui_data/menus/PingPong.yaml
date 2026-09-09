@@ -72,6 +72,7 @@ layers:
         x: 960
         y: 50
         pt: 25.0
+        border_width: 5.0
         color:
           - 1.0
           - 1.0
@@ -85,6 +86,7 @@ layers:
         x: 100
         y: 50
         pt: 18.0
+        border_width: 5.0
         color:
           - 1.0
           - 1.0
@@ -97,7 +99,8 @@ layers:
           - on:d inc(str:ball.speed, 0.1)
         x: 100
         y: 150
-        pt: 14.999999
+        pt: 15
+        border_width: 5.0
         color:
           - 0.1
           - 1.0
@@ -110,7 +113,8 @@ layers:
           - on:d dec(str:ball.speed, 0.1)
         x: 100
         y: 120
-        pt: 14.999999
+        pt: 15
+        border_width: 5.0
         color:
           - 1.0
           - 0.1
@@ -123,7 +127,8 @@ layers:
           - on:d inc(str:paddle_speed, 0.1)
         x: 100
         y: 220
-        pt: 14.999999
+        pt: 15
+        border_width: 5.0
         color:
           - 0.1
           - 1.0
@@ -136,7 +141,8 @@ layers:
           - on:d dec(str:paddle_speed, 0.1)
         x: 100
         y: 190
-        pt: 14.999999
+        pt: 15
+        border_width: 5.0
         color:
           - 1.0
           - 0.1
@@ -148,6 +154,7 @@ layers:
         x: 100
         y: 80
         pt: 16.0
+        border_width: 5.0
         color:
           - 1.0
           - 1.0
@@ -163,6 +170,7 @@ layers:
         x: 1820
         y: 80
         pt: 16.0
+        border_width: 5.0
         color:
           - 1.0
           - 1.0
@@ -191,9 +199,9 @@ layers:
           - if(expr:{self.center.x} < 0, inc(str:ball.visitor_score, 1); set(str:ball.velocity.x, 1.5); set(str:ball.velocity.y, expr:random(-1.5, 1.5)); set(str:self.center.x, expr:{screen.x} * 0.5); set(str:self.center.y, expr:{screen.y} * 0.5); )
           - if(expr:{self.center.x} > {screen.x}, inc(str:ball.home_score, 1); set(str:ball.velocity.x, -1.5); set(str:ball.velocity.y, expr:random(-1.5, 1.5)); set(str:self.center.x, expr:{screen.x} * 0.5); set(str:self.center.y, expr:{screen.y} * 0.5))
           # Smooth squish recovery (lerp back to 1.0)
-          - set(str:ball.squish, expr:{ball.squish} * 0.78 + 0.22)
-          - set(str:self.radius, expr:{ball.orig_radius} * {ball.squish})
-          - button:"KeyX" trigger:r in:any, set(str:ball.velocity, [0, 1]); print(did it)
+          #- set(str:ball.squish, expr:{ball.squish} * 0.78 + 0.22)
+          #- set(str:self.radius, expr:{ball.orig_radius} * {ball.squish})
+          - button:"KeyX" trigger:r in:any, set(str:ball.velocity, [0, 1]);
         style: Hue Circle
         x: 0.0
         y: 0.0

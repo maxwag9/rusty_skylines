@@ -22,6 +22,8 @@ use crate::ui::vertex::{
     ElementKind, UiButtonCircle, UiButtonHandle, UiButtonPolygon, UiButtonRect, UiButtonText,
     UiElement,
 };
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::ParallelIterator;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -88,7 +90,7 @@ impl From<&ElementRef> for ElementRef {
 impl ElementRef {
     pub fn action(&self, ui: &Ui) -> Vec<String> {
         match get_element(&ui.menus, self) {
-            Some(e) => e.actions(),
+            Some(e) => e.string_actions(),
             None => vec![],
         }
     }
@@ -123,7 +125,6 @@ pub struct HitTestResult {
     pub affected_element: Option<ElementRef>,
     pub z_order: u32,
     pub element_order: usize,
-    pub actions: Vec<String>,
     /// Distance from element center (useful for tie-breaking)
     pub distance: f32,
     /// For polygon: which vertex was hit, if any
@@ -278,7 +279,6 @@ pub trait Touchable {
     fn is_active(&self) -> bool;
     fn is_pressable(&self) -> bool;
     fn is_editable(&self, override_mode: bool) -> bool;
-    fn action(&self) -> Vec<String>;
     fn sizes(&self) -> Vec<SizeProperty>;
     fn main_size(&self) -> SizeProperty;
 }
@@ -340,9 +340,6 @@ impl Touchable for UiButtonCircle {
         self.misc.editable.editable(override_mode)
     }
 
-    fn action(&self) -> Vec<String> {
-        self.actions.clone()
-    }
     fn sizes(&self) -> Vec<SizeProperty> {
         vec![
             SizeProperty::Radius(self.radius),
@@ -350,6 +347,7 @@ impl Touchable for UiButtonCircle {
             SizeProperty::InsideBorder(self.inside_border_thickness),
         ]
     }
+
     fn main_size(&self) -> SizeProperty {
         SizeProperty::Radius(self.radius)
     }
@@ -425,13 +423,10 @@ impl Touchable for UiButtonPolygon {
         self.misc.editable.editable(override_mode)
     }
 
-    fn action(&self) -> Vec<String> {
-        self.actions.clone()
-    }
-
     fn sizes(&self) -> Vec<SizeProperty> {
         vec![SizeProperty::PolygonScale(self.scale)]
     }
+
     fn main_size(&self) -> SizeProperty {
         SizeProperty::PolygonScale(self.scale)
     }
@@ -502,10 +497,6 @@ impl Touchable for UiButtonRect {
         self.misc.editable.editable(override_mode)
     }
 
-    fn action(&self) -> Vec<String> {
-        self.actions.clone()
-    }
-
     fn sizes(&self) -> Vec<SizeProperty> {
         vec![
             SizeProperty::Rect(self.size()),
@@ -574,18 +565,16 @@ impl Touchable for UiButtonText {
         self.misc.editable.editable(override_mode)
     }
 
-    fn action(&self) -> Vec<String> {
-        self.actions.clone()
-    }
-
     fn sizes(&self) -> Vec<SizeProperty> {
         vec![
             SizeProperty::Pt(self.pt),
+            SizeProperty::Border(self.border_width),
             SizeProperty::Rect([self.width, self.height]),
         ]
     }
+
     fn main_size(&self) -> SizeProperty {
-        SizeProperty::Pt(self.pt)
+        SizeProperty::Rect([self.width, self.height])
     }
 }
 
@@ -647,12 +636,10 @@ impl Touchable for UiButtonHandle {
         self.misc.editable.editable(override_mode)
     }
 
-    fn action(&self) -> Vec<String> {
-        vec![]
-    }
     fn sizes(&self) -> Vec<SizeProperty> {
         vec![SizeProperty::Radius(self.radius)]
     }
+
     fn main_size(&self) -> SizeProperty {
         SizeProperty::Radius(self.radius)
     }
@@ -721,38 +708,25 @@ impl HitDetector {
     /// Find the topmost hit element at a point
     pub fn find_top_hit(
         point: [f32; 2],
-        elements: &Vec<TouchableElement>,
+        elements: &[TouchableElement],
         editor_mode: bool,
         override_mode: bool,
     ) -> Option<HitTestResult> {
-        let mut best: Option<HitTestResult> = None;
-
-        for element in elements {
-            let hit = Self::test_element(
-                point,
-                element.menu,
-                element.layer,
-                element.order,
-                element.idx,
-                element.element,
-                editor_mode,
-                override_mode,
-            );
-
-            if let Some(candidate) = hit {
-                match &best {
-                    Some(current) if candidate.priority() > current.priority() => {
-                        best = Some(candidate);
-                    }
-                    None => {
-                        best = Some(candidate);
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        best
+        elements
+            .iter()
+            .filter_map(|element| {
+                Self::test_element(
+                    point,
+                    element.menu,
+                    element.layer,
+                    element.order,
+                    element.idx,
+                    element.element,
+                    editor_mode,
+                    override_mode,
+                )
+            })
+            .max_by_key(|candidate| candidate.priority())
     }
 
     /// Test a single element for hit
@@ -766,14 +740,13 @@ impl HitDetector {
         editor_mode: bool,
         override_mode: bool,
     ) -> Option<HitTestResult> {
-        let (id, kind, active, pressable, editable, actions) = match element {
+        let (id, kind, active, pressable, editable) = match element {
             UiElement::Circle(c) => (
                 c.id.clone(),
                 ElementKind::Circle,
                 c.misc.active,
                 c.misc.touchable,
                 &c.misc.editable,
-                c.actions.clone(),
             ),
             UiElement::Polygon(p) => (
                 p.id.clone(),
@@ -781,7 +754,6 @@ impl HitDetector {
                 p.misc.active,
                 p.misc.touchable,
                 &p.misc.editable,
-                p.actions.clone(),
             ),
             UiElement::Text(t) => (
                 t.id.clone(),
@@ -789,7 +761,6 @@ impl HitDetector {
                 t.misc.active,
                 t.misc.touchable,
                 &t.misc.editable,
-                t.actions.clone(),
             ),
             UiElement::Handle(h) => (
                 h.id.clone(),
@@ -797,7 +768,6 @@ impl HitDetector {
                 h.misc.active,
                 h.misc.touchable,
                 &h.misc.editable,
-                vec![],
             ),
             UiElement::Outline(_) => return None, // Outlines aren't interactive
             UiElement::Rect(r) => (
@@ -806,7 +776,6 @@ impl HitDetector {
                 r.misc.active,
                 r.misc.touchable,
                 &r.misc.editable,
-                r.actions.clone(),
             ),
             UiElement::Advanced(_) => return None,
         };
@@ -848,7 +817,6 @@ impl HitDetector {
             affected_element,
             z_order: layer_order,
             element_order,
-            actions,
             distance: hit.distance,
             vertex_index: hit.vertex_index,
             text_being_edited,
@@ -915,7 +883,6 @@ pub struct DragCoordinator {
 pub struct ActiveDrag {
     pub element: ElementRef,
     pub affected_element: Option<ElementRef>,
-    pub actions: Vec<String>,
     pub buttons: MouseButtons,
     pub start_position: [f32; 2],
     pub current_position: [f32; 2],
@@ -950,7 +917,6 @@ impl DragCoordinator {
         &mut self,
         element: ElementRef,
         affected_element: Option<ElementRef>,
-        actions: Vec<String>,
         buttons: MouseButtons,
         mouse_pos: [f32; 2],
         anchor: [f32; 2],
@@ -961,7 +927,6 @@ impl DragCoordinator {
         self.active_drag = Some(ActiveDrag {
             element,
             affected_element,
-            actions,
             buttons,
             start_position: mouse_pos,
             current_position: mouse_pos,
@@ -1393,7 +1358,6 @@ impl UiTouchManager {
                 self.drag.begin(
                     element.clone(),
                     hit.affected_element.clone(),
-                    hit.actions.clone(),
                     input.mouse.buttons,
                     mouse_pos,
                     anchor,
@@ -1741,7 +1705,6 @@ mod tests {
         dc.begin(
             elem.clone(),
             Some(elem),
-            vec![],
             MouseButtons::default(),
             [100.0, 100.0],
             [100.0, 100.0],

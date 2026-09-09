@@ -8,6 +8,7 @@ use crate::world::roads::roads::{
     Lane, LaneGeometry, METERS_PER_LANE_POLYLINE_STEP, RoadCommand, RoadManager, RoadStorage,
     nearest_lane_to_point, project_point_to_lane_xz, sample_lane_position,
 };
+use crate::world::sound::sound::Sounds;
 use crate::world::statisticals::CityState;
 use crate::world::statisticals::money::*;
 use crate::world::terrain::terrain_subsystem::{CursorMode, Terrain};
@@ -15,17 +16,39 @@ use glam::{Vec2, Vec3, Vec3Swizzles};
 use std::collections::HashSet;
 use std::mem::take;
 
-const NODE_SNAP_RADIUS: f64 = 8.0;
+const NODE_SNAP_RADIUS: f64 = 3.0;
 const LANE_SNAP_RADIUS: f64 = 8.0;
-const ENDPOINT_T_EPS: f64 = 0.02;
+const ENDPOINT_SNAP_RADIUS: f64 = 2.0;
 const MIN_SEGMENT_LENGTH: f64 = 1.0;
 const CROSSING_SNAP_TO_NODE_RADIUS: f64 = 20.0;
+
+#[derive(Debug, Clone, Copy)]
+struct NodeCandidate {
+    node_id: NodeId,
+    position: WorldPos,
+    distance: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LaneCandidate {
+    lane_id: LaneId,
+    t: f64,
+    position: WorldPos,
+    distance: f64,
+}
+
+struct SegmentSplit {
+    commands: Vec<RoadCommand>,
+    new_node_id: NodeId,
+    endpoint_nodes: [NodeId; 2],
+}
 
 pub struct RoadEditor {
     //allocator: IdAllocator,
     pub style: RoadStyleParams,
     pub pending_outside_commands: Vec<RoadEditorCommand>,
     pub pending_chunk_rebuilds: Vec<ChunkId>,
+    pub last_road_length: f64,
 }
 
 impl RoadEditor {
@@ -35,6 +58,7 @@ impl RoadEditor {
             style: RoadStyleParams::default(),
             pending_outside_commands: Vec::new(),
             pending_chunk_rebuilds: Vec::new(),
+            last_road_length: Default::default(),
         }
     }
 
@@ -45,17 +69,16 @@ impl RoadEditor {
         city_state: &mut CityState,
         input: &mut Input,
         gizmo: &mut Gizmo,
+        sounds: &mut Sounds,
     ) -> Vec<RoadEditorCommand> {
         let Some(road_type) = (match terrain.cursor.mode {
-            CursorMode::Roads => &terrain.cursor.road_type,
-            _ => &None,
+            CursorMode::Roads => Some(&terrain.cursor.road_type),
+            _ => None,
         }) else {
             return take(&mut self.pending_outside_commands);
         };
-        //println!("Well shit? {}", input.mouse.pos);
         let road_type_id = road_manager.road_types.add_road_type(&road_type);
         self.style.set_road_type_id(road_type_id);
-        //self.allocator.update(&road_manager.roads);
         let storage = &road_manager.roads;
         let mut output = Vec::new();
 
@@ -87,7 +110,9 @@ impl RoadEditor {
         }
 
         let place_pressed = input.action_pressed_once("Place Road Node");
-        //println!("{}", place_pressed);
+        if place_pressed {
+            sounds.queue_sfx("PlaceRoad");
+        }
         match self.style.state().clone() {
             EditorState::Idle => {
                 self.handle_idle(storage, &snap, place_pressed, &mut output);
@@ -112,6 +137,7 @@ impl RoadEditor {
                     &snap,
                     place_pressed,
                     &mut output,
+                    gizmo,
                 );
             }
             EditorState::CurvePickEnd { start, control } => {
@@ -145,7 +171,7 @@ impl RoadEditor {
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
         if place_pressed {
-            let anchor = self.build_anchor_from_snap(snap);
+            let anchor = self.build_anchor_from_snap(storage, snap);
             match self.style.mode() {
                 BuildMode::Straight => {
                     self.style
@@ -182,7 +208,7 @@ impl RoadEditor {
         let Some(road_type) = self.style.road_type(&road_manager.road_types) else {
             return;
         };
-        let end_anchor = self.build_anchor_from_snap(snap);
+        let end_anchor = self.build_anchor_from_snap(storage, snap);
         let end_pos = snap.world_pos;
         let polyline =
             make_straight_centerline(terrain_renderer, start_pos, end_pos, road_type.structure);
@@ -190,7 +216,6 @@ impl RoadEditor {
 
         let (is_valid, reason) = self.validate_placement(storage, start, &end_anchor);
 
-        // Find crossings for preview
         let crossings = self.find_all_crossings(
             storage,
             terrain_renderer,
@@ -202,7 +227,6 @@ impl RoadEditor {
             &end_anchor,
             gizmo,
         );
-        // println!("{:?}", reason);
         let seg_preview = SegmentPreview {
             road_type_id: self.style.road_type_id(),
             mode: self.style.mode(),
@@ -224,8 +248,11 @@ impl RoadEditor {
         let node_preview = self.build_node_preview_from_snap(storage, snap);
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
+        if let Some(err) = seg_preview.reason_invalid {
+            output.push(RoadEditorCommand::PreviewError(err));
+        }
+
         let cost = calculate_road_cost(road_type, crossings.as_slice(), estimated_length) as i64;
-        // Preview crossing points
         for crossing in crossings {
             output.push(RoadEditorCommand::PreviewCrossing(crossing));
         }
@@ -272,7 +299,6 @@ impl RoadEditor {
                 ));
                 return;
             };
-            // Can buy and now placed, so show how much it cost to build for a few seconds.
             gizmo.text(
                 format!("{:.0}€", -cost),
                 sign_pos,
@@ -298,10 +324,6 @@ impl RoadEditor {
                 output.push(RoadEditorCommand::Road(cmd));
             }
             self.style.set_to_idle();
-        } else if place_pressed {
-            if let Some(err) = seg_preview.reason_invalid {
-                output.push(RoadEditorCommand::PreviewError(err));
-            }
         }
     }
 
@@ -312,6 +334,7 @@ impl RoadEditor {
         snap: &SnapResult,
         place_pressed: bool,
         output: &mut Vec<RoadEditorCommand>,
+        gizmo: &mut Gizmo,
     ) {
         let Some(start_pos) = start.planned_node.position(&road_manager.roads) else {
             output.push(RoadEditorCommand::PreviewError(
@@ -342,6 +365,18 @@ impl RoadEditor {
             crossing_count: 0,
         };
         output.push(RoadEditorCommand::PreviewSegment(seg_preview));
+
+        let sign_pos = control_pos.add_vec3(Vec3::new(0.0, 10.0, 0.0));
+        gizmo.text(
+            format!("{:.1}m", estimated_length),
+            sign_pos,
+            2.0,
+            [0.43, 0.50, 0.53, 0.85],
+            None,
+            true,
+            0.0,
+            0.0,
+        );
 
         if place_pressed {
             self.style.set_state(EditorState::CurvePickEnd {
@@ -375,7 +410,7 @@ impl RoadEditor {
         let Some(road_type) = self.style.road_type(&road_manager.road_types) else {
             return;
         };
-        let end_anchor = self.build_anchor_from_snap(snap);
+        let end_anchor = self.build_anchor_from_snap(storage, snap);
         let end_pos = snap.world_pos;
 
         let estimated_length = estimate_bezier_arc_length(
@@ -397,7 +432,6 @@ impl RoadEditor {
 
         let (is_valid, reason) = self.validate_placement(storage, start, &end_anchor);
 
-        // Find crossings for preview
         let crossings = self.find_all_crossings(
             storage,
             terrain_renderer,
@@ -431,8 +465,11 @@ impl RoadEditor {
         let node_preview = self.build_node_preview_from_snap(storage, snap);
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
+        if let Some(err) = seg_preview.reason_invalid {
+            output.push(RoadEditorCommand::PreviewError(err));
+        }
+
         let cost = calculate_road_cost(road_type, crossings.as_slice(), estimated_length) as i64;
-        // Preview crossing points
         for crossing in crossings {
             output.push(RoadEditorCommand::PreviewCrossing(crossing));
         }
@@ -478,7 +515,6 @@ impl RoadEditor {
                 ));
                 return;
             };
-            // Can buy and now placed, so show how much it cost to build for a few seconds.
             gizmo.text(
                 format!("{:.0}€", -cost),
                 sign_pos,
@@ -504,10 +540,6 @@ impl RoadEditor {
                 output.push(RoadEditorCommand::Road(cmd));
             }
             self.style.set_to_idle()
-        } else if place_pressed {
-            if let Some(err) = seg_preview.reason_invalid {
-                output.push(RoadEditorCommand::PreviewError(err));
-            }
         }
     }
     // ==================== CROSSING DETECTION ====================
@@ -549,6 +581,9 @@ impl RoadEditor {
             }
             None => vec![start_pos, end_pos],
         };
+
+        let path_len = polyline_length(&test_polyline).max(1e-6);
+        let endpoint_t_margin = (ENDPOINT_SNAP_RADIUS / path_len).min(0.5);
 
         let excluded_segments = self.get_excluded_segments(storage, start_anchor, end_anchor);
 
@@ -611,7 +646,7 @@ impl RoadEditor {
                     if let Some((new_t, _proj_dist)) =
                         self.project_point_to_path(start_pos, end_pos, control, closest_pos)
                     {
-                        if new_t > ENDPOINT_T_EPS && new_t < 1.0 - ENDPOINT_T_EPS {
+                        if new_t > endpoint_t_margin && new_t < 1.0 - endpoint_t_margin {
                             crossings.push(CrossingPoint {
                                 t: new_t,
                                 pos: closest_pos,
@@ -623,7 +658,7 @@ impl RoadEditor {
                     }
                 }
 
-                if crossing.t > ENDPOINT_T_EPS && crossing.t < 1.0 - ENDPOINT_T_EPS {
+                if crossing.t > endpoint_t_margin && crossing.t < 1.0 - endpoint_t_margin {
                     crossed_segments.insert(seg_id);
                     crossings.push(crossing);
                 }
@@ -641,7 +676,7 @@ impl RoadEditor {
             if let Some((t, dist)) =
                 self.project_point_to_path(start_pos, end_pos, control, node_pos)
             {
-                if dist < NODE_SNAP_RADIUS && t > ENDPOINT_T_EPS && t < 1.0 - ENDPOINT_T_EPS {
+                if dist < NODE_SNAP_RADIUS && t > endpoint_t_margin && t < 1.0 - endpoint_t_margin {
                     crossings.push(CrossingPoint {
                         t,
                         pos: node_pos,
@@ -653,12 +688,7 @@ impl RoadEditor {
 
         crossings.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
 
-        let crossings = self.deduplicate_crossings(crossings);
-
-        // for crossing in crossings.iter() {
-        //     gizmo.cross(crossing.world_pos, 1.0, [0.0, 1.0, 1.0], 10.0);
-        // }
-        crossings
+        self.deduplicate_crossings(crossings)
     }
 
     fn find_segment_center_crossing(
@@ -805,15 +835,15 @@ impl RoadEditor {
     ) -> Option<CrossingPoint> {
         let lane = storage.lane(*lane_id);
         let lane_points = &lane.geometry().points;
+        let lane_endpoint_margin =
+            (ENDPOINT_SNAP_RADIUS / lane.geometry().total_len.max(1e-6)).min(0.5);
 
-        // For each segment in our test polyline
         for i in 0..test_polyline.len() - 1 {
             let p1 = test_polyline[i];
             let p2 = test_polyline[i + 1];
             let origin = p1;
             let a1 = Vec2::ZERO;
             let a2 = origin.delta_to(p2).xz();
-            // Check against each segment of the lane
             for j in 0..lane_points.len() - 1 {
                 let q1 = lane_points[j];
                 let q2 = lane_points[j + 1];
@@ -822,20 +852,16 @@ impl RoadEditor {
                 if let Some((our_seg_t, lane_seg_t)) =
                     line_segment_intersection_2d(a1.x, a1.y, a2.x, a2.y, b1.x, b1.y, b2.x, b2.y)
                 {
-                    // Convert segment-local t to global t for our path
                     let polyline_len = test_polyline.len();
                     let path_t = (i as f64 + our_seg_t as f64) / (polyline_len - 1) as f64;
 
-                    // Convert to global t for the lane
                     let lane_len = lane_points.len();
                     let lane_t = (j as f64 + lane_seg_t as f64) / (lane_len - 1) as f64;
 
-                    // Skip if lane intersection is too close to lane endpoints
-                    if lane_t < ENDPOINT_T_EPS || lane_t > 1.0 - ENDPOINT_T_EPS {
+                    if lane_t < lane_endpoint_margin || lane_t > 1.0 - lane_endpoint_margin {
                         continue;
                     }
 
-                    // Calculate world position at crossing
                     let world_pos = self.sample_path_at_t(
                         terrain_renderer,
                         start_pos,
@@ -1025,18 +1051,15 @@ impl RoadEditor {
             let node_id = match crossing.kind {
                 CrossingKind::ExistingNode(id) => id,
                 CrossingKind::LaneCrossing { lane_id, .. } => {
-                    let Some((split_cmds, new_node_id, endpoint_nodes)) =
-                        self.plan_split(storage, lane_id, crossing.pos, chunk_id)
+                    let Some(split) = self.plan_split(storage, lane_id, crossing.pos, chunk_id)
                     else {
                         continue;
                     };
-                    cmds.extend(split_cmds);
-                    // Queue intersection rebuilds for the two nodes whose old lanes just got disabled
-                    for node_id in endpoint_nodes.to_vec() {
+                    cmds.extend(split.commands);
+                    for node_id in split.endpoint_nodes {
                         push_intersection_for_node(&mut cmds, node_id, chunk_id);
                     }
-                    //println!("New split node {:?} exists: {}", new_node_id, storage.node(new_node_id).is_some());
-                    new_node_id
+                    split.new_node_id
                 }
             };
 
@@ -1168,21 +1191,22 @@ impl RoadEditor {
         pos: WorldPos,
         gizmo: &mut Gizmo,
     ) -> SnapResult {
-        if let Some((node_id, node_pos, dist)) = self.find_nearest_node(storage, pos) {
+        if let Some(node) = self.find_nearest_node(storage, pos) {
             return SnapResult {
-                world_pos: node_pos,
-                kind: SnapKind::Node { id: node_id },
-                distance: dist,
+                world_pos: node.position,
+                kind: SnapKind::Node { id: node.node_id },
+                distance: node.distance,
             };
         }
 
-        if let Some((lane_id, t, projected_pos, dist)) =
-            self.find_nearest_lane_snap(storage, terrain_renderer, pos, gizmo)
-        {
+        if let Some(lane) = self.find_nearest_lane_snap(storage, terrain_renderer, pos, gizmo) {
             return SnapResult {
-                world_pos: projected_pos,
-                kind: SnapKind::Lane { lane_id, t },
-                distance: dist,
+                world_pos: lane.position,
+                kind: SnapKind::Lane {
+                    lane_id: lane.lane_id,
+                    t: lane.t,
+                },
+                distance: lane.distance,
             };
         }
 
@@ -1193,21 +1217,19 @@ impl RoadEditor {
         }
     }
 
-    fn find_nearest_node(
-        &self,
-        storage: &RoadStorage,
-        pos: WorldPos,
-    ) -> Option<(NodeId, WorldPos, f64)> {
-        let mut best: Option<(NodeId, WorldPos, f64)> = None;
+    fn find_nearest_node(&self, storage: &RoadStorage, pos: WorldPos) -> Option<NodeCandidate> {
+        let mut best: Option<NodeCandidate> = None;
 
         for (id, node) in storage.iter_nodes() {
             let node_pos = node.pos();
             let dist = pos.distance_to(node_pos);
 
-            if dist < NODE_SNAP_RADIUS {
-                if best.is_none() || dist < best.unwrap().2 {
-                    best = Some((id, node_pos, dist));
-                }
+            if dist < NODE_SNAP_RADIUS && best.as_ref().map_or(true, |b| dist < b.distance) {
+                best = Some(NodeCandidate {
+                    node_id: id,
+                    position: node_pos,
+                    distance: dist,
+                });
             }
         }
 
@@ -1220,7 +1242,7 @@ impl RoadEditor {
         terrain_renderer: &Terrain,
         pos: WorldPos,
         _gizmo: &mut Gizmo,
-    ) -> Option<(LaneId, f64, WorldPos, f64)> {
+    ) -> Option<LaneCandidate> {
         let nearest_lane_id = nearest_lane_to_point(storage, pos)?;
         let nearest_lane = storage.lane(nearest_lane_id);
         let segment_id = nearest_lane.segment();
@@ -1242,14 +1264,12 @@ impl RoadEditor {
 
         for lane_id in segment.lanes() {
             let lane = storage.lane(*lane_id);
-
             let idx = lane.lane_index();
             if idx == 1 {
                 lane_plus_1 = Some((*lane_id, lane));
             } else if idx == -1 {
                 lane_minus_1 = Some((*lane_id, lane));
             }
-
             if idx.abs() < closest_abs_idx {
                 closest_abs_idx = idx.abs();
                 closest_to_zero = Some((*lane_id, lane));
@@ -1272,8 +1292,8 @@ impl RoadEditor {
                     1.0 - segment_t
                 };
 
-                let p1 = sample_lane_position(l1, t1, storage)?;
-                let p2 = sample_lane_position(l2, t2, storage)?;
+                let p1 = sample_lane_position(l1.geometry(), t1)?;
+                let p2 = sample_lane_position(l2.geometry(), t2)?;
 
                 let center = WorldPos {
                     chunk: p1.chunk,
@@ -1291,7 +1311,7 @@ impl RoadEditor {
                 } else {
                     1.0 - segment_t
                 };
-                let p = sample_lane_position(lane, lane_t, storage)?;
+                let p = sample_lane_position(lane.geometry(), lane_t)?;
                 (id, p, lane_t)
             } else {
                 return None;
@@ -1307,27 +1327,46 @@ impl RoadEditor {
         }
 
         let rep_lane = storage.lane(rep_lane_id);
+        let endpoint_t_margin =
+            (ENDPOINT_SNAP_RADIUS / rep_lane.geometry().total_len.max(1e-6)).min(0.5);
 
-        if rep_t < ENDPOINT_T_EPS {
-            let node_id = rep_lane.from_node();
-            let node = storage.node(node_id);
-            return Some((rep_lane_id, 0.0, node.pos(), dist));
+        if rep_t < endpoint_t_margin {
+            let node = storage.node(rep_lane.from_node());
+            return Some(LaneCandidate {
+                lane_id: rep_lane_id,
+                t: 0.0,
+                position: node.pos(),
+                distance: dist,
+            });
         }
 
-        if rep_t > 1.0 - ENDPOINT_T_EPS {
-            let node_id = rep_lane.to_node();
-            let node = storage.node(node_id);
-            return Some((rep_lane_id, 1.0, node.pos(), dist));
+        if rep_t > 1.0 - endpoint_t_margin {
+            let node = storage.node(rep_lane.to_node());
+            return Some(LaneCandidate {
+                lane_id: rep_lane_id,
+                t: 1.0,
+                position: node.pos(),
+                distance: dist,
+            });
         }
-        // gizmo.cross(final_pos, 1.0, [0.0, 1.0, 1.0], 10.0);
-        Some((rep_lane_id, rep_t, final_pos, dist))
+
+        Some(LaneCandidate {
+            lane_id: rep_lane_id,
+            t: rep_t,
+            position: final_pos,
+            distance: dist,
+        })
     }
 
-    fn build_anchor_from_snap(&self, snap: &SnapResult) -> Anchor {
+    fn build_anchor_from_snap(&self, storage: &RoadStorage, snap: &SnapResult) -> Anchor {
         let planned_node = match snap.kind {
             SnapKind::Node { id } => PlannedNode::Existing(id),
             SnapKind::Lane { lane_id, t } => {
-                if t < ENDPOINT_T_EPS || t > 1.0 - ENDPOINT_T_EPS {
+                let lane = storage.lane(lane_id);
+                let endpoint_t_margin =
+                    (ENDPOINT_SNAP_RADIUS / lane.geometry().total_len.max(1e-6)).min(0.5);
+
+                if t < endpoint_t_margin || t > 1.0 - endpoint_t_margin {
                     PlannedNode::New {
                         pos: snap.world_pos,
                     }
@@ -1382,10 +1421,13 @@ impl RoadEditor {
             }
 
             SnapKind::Lane { lane_id, t } => {
-                if t < ENDPOINT_T_EPS || t > 1.0 - ENDPOINT_T_EPS {
+                let lane = storage.lane(lane_id);
+                let endpoint_t_margin =
+                    (ENDPOINT_SNAP_RADIUS / lane.geometry().total_len.max(1e-6)).min(0.5);
+
+                if t < endpoint_t_margin || t > 1.0 - endpoint_t_margin {
                     (NodePreviewResult::NewNode, Vec::new(), Vec::new())
                 } else {
-                    let lane = storage.lane(lane_id);
                     let dir = lane.polyline()[0].delta_to(lane.polyline()[1]);
 
                     (
@@ -1416,13 +1458,13 @@ impl RoadEditor {
         t: f64,
     ) -> Option<LanePreview> {
         let lane = storage.lane(lane_id);
-        let mut p = sample_lane_position(lane, t, storage)?;
+        let mut p = lane.geometry().sample_at_t(t)?;
 
         let sample_count = 11;
         let mut sample_points = Vec::with_capacity(sample_count);
         for i in 0..sample_count {
             let sample_t = i as f64 / (sample_count - 1) as f64;
-            let mut s = sample_lane_position(lane, sample_t, storage)?;
+            let mut s = lane.geometry().sample_at_t(sample_t)?;
             s.local.y = terrain_renderer.get_height_at(s, false) + CLEARANCE;
             sample_points.push(s);
         }
@@ -1488,14 +1530,13 @@ impl RoadEditor {
                 Some((node_id, *pos))
             }
             PlannedNode::Split { lane_id, pos, .. } => {
-                let (split_cmds, new_node_id, endpoint_nodes) =
-                    self.plan_split(storage, *lane_id, *pos, chunk_id)?;
-                cmds.extend(split_cmds);
-                for node_id in endpoint_nodes.to_vec() {
+                let split = self.plan_split(storage, *lane_id, *pos, chunk_id)?;
+                cmds.extend(split.commands);
+                for node_id in split.endpoint_nodes {
                     push_intersection_for_node(cmds, node_id, chunk_id);
                 }
 
-                Some((new_node_id, *pos))
+                Some((split.new_node_id, *pos))
             }
         }
     }
@@ -1506,7 +1547,7 @@ impl RoadEditor {
         lane_id: LaneId,
         split_pos: WorldPos,
         chunk_id: ChunkId,
-    ) -> Option<(Vec<RoadCommand>, NodeId, [NodeId; 2])> {
+    ) -> Option<SegmentSplit> {
         let lane = storage.lane(lane_id);
         let old_segment_id = lane.segment();
         let old_segment = storage.segment(old_segment_id).clone();
@@ -1519,7 +1560,6 @@ impl RoadEditor {
 
         let old_lanes = old_segment.lanes.clone();
 
-        // Remove old segment lanes from endpoint nodes.
         a_node.replace_incoming_lanes(
             a_node
                 .incoming_lanes()
@@ -1666,7 +1706,11 @@ impl RoadEditor {
             }
         }
 
-        Some((cmds, split_node_id, [a_id, b_id]))
+        Some(SegmentSplit {
+            commands: cmds,
+            new_node_id: split_node_id,
+            endpoint_nodes: [a_id, b_id],
+        })
     }
 
     fn emit_lanes_from_centerline(
@@ -1887,8 +1931,8 @@ pub fn offset_polyline(
     lane_width: f32,
     structure_type: StructureType,
 ) -> Vec<WorldPos> {
-    if center.is_empty() {
-        return Vec::new();
+    if center.len() < 2 {
+        return center.to_vec();
     }
 
     let offset = (lane_index as f32 + if lane_index < 0 { 0.5 } else { -0.5 }) * lane_width;

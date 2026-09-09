@@ -212,6 +212,7 @@ name={name}\n\
 version={version}\n\
 timestamp_unix={timestamp}\n\
 chunk_size={chunk_size:?}\n\
+difficulty={difficulty}\n\
 compression=zstd\n\
 payload=compressed_binary\n\
 all_of_this_crap_is_for_your_enjoyment\n\
@@ -220,7 +221,8 @@ all_of_this_crap_is_for_your_enjoyment\n\
         name = sanitize_header_value(&save.name),
         version = sanitize_header_value(&save.load_result.to_string()),
         timestamp = save.timestamp_unix,
-        chunk_size = save.chunk_size
+        chunk_size = save.chunk_size,
+        difficulty = sanitize_header_value(&save.difficulty)
     )
 }
 
@@ -508,16 +510,18 @@ pub fn make_safe_save_name(name: &str) -> String {
     Copy,
     Debug,
 )]
-#[revisioned(revision = 2)]
+#[revisioned(revision = 3)]
 pub enum SaveVersion {
     #[default]
+    #[revision(start = 3)]
+    AlphaV1_8_7a,
     #[revision(start = 2)]
     AlphaV1_8_6a,
     AlphaV1_8_3a,
 }
 impl SaveVersion {
     pub fn current() -> SaveVersion {
-        SaveVersion::iter().max().unwrap()
+        SaveVersion::iter().min().unwrap()
     }
 }
 #[revisioned(revision = 3)]

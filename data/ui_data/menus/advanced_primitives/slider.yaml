@@ -5,8 +5,8 @@ elements:
     actions: [ ]
     x: 0
     y: 0
-    w: 150
-    h: 40
+    w: 300
+    h: 80
     color:
       - 0.00
       - 0.00
@@ -25,18 +25,19 @@ elements:
     actions: [ ]
     x: 0
     y: 0
-    w: 140
-    h: 10
+    w: 270
+    h: 20
     color:
       - 0.9
       - 0.9
       - 0.9
       - 0.9
-    roundness: 0.3
+    roundness: 0.4
 
   - !Circle
     id: Slider knob
     actions:
+      - on:startup, set(str:{ap.0}_target_pos, self.center.x)
       - as:["slider_bar"],
         set(str:min_px, expr:{as.center.x} - {as.size.x} * 0.5);
         
@@ -45,7 +46,8 @@ elements:
         set(str:{ap.0}_target_pos, expr:{min_px}+({option_index}/({ap.5}.len-1)*{as.size.x})),
         set(str:{ap.0}_target_pos, expr:{min_px}+(({{ap.0}}-{ap.2})/({ap.3}-{ap.2})*{as.size.x}));
         );
-      - on:h_enter, set(str:self.radius, expr:{self.radius}*1.1)
+      - on:h_enter, set(str:self.radius, expr:{self.radius}*1.1);
+      - on:drag_start, call(rust:play_sound, str:ButtonPress)
       - on:h_exit, set(str:self.radius, expr:{self.radius}/1.1)
       - on:drag_move as:["slider_bar"],
         set(str:min_px, expr:{as.center.x} - {as.size.x} * 0.5);
@@ -54,22 +56,28 @@ elements:
         set(str:mouse_t, expr:({clamped_mouse_x}-{min_px})/({max_px}-{min_px}));
         
         if({ap.7},
+        
         set(str:option_index, expr:round({mouse_t}*({ap.5}.len-1)));
+        if(expr:{{ap.0}_last_option_index??0} != {option_index}, call(rust:play_sound, str:ButtonHover));
+        set(str:{ap.0}_last_option_index, option_index);
         set(str:{ap.0}, expr:array_get({ap.5}, {option_index}));
         set(str:{ap.0}_target_pos, expr:{min_px}+({option_index}/({ap.5}.len-1)*{as.size.x})),
-        
+
         set(str:slider_value, expr:{ap.2}+{mouse_t}*({ap.3}-{ap.2}));
         set(str:snapped_slider_value, expr:round({slider_value}/{ap.4})*{ap.4});
+        if(expr:{{ap.0}_last_snapped_slider_value??0} != {snapped_slider_value}, call(rust:play_sound, str:ButtonHover));
+        set(str:{ap.0}_last_snapped_slider_value, snapped_slider_value);
+
         if(expr:is_some({ap.5}),
         set(str:{ap.0}, expr:nearest({snapped_slider_value}, {ap.5})),
         set(str:{ap.0}, snapped_slider_value)
         );
         set(str:{ap.0}_target_pos, expr:{min_px}+(({{ap.0}}-{ap.2})/({ap.3}-{ap.2})*{as.size.x}))
         );
-      - on:always, set(str:self.center.x, expr:{self.center.x} + ({{ap.0}_target_pos} - {self.center.x}) * 0.08);
+      - set(str:self.center.x, expr:{self.center.x} + ({{ap.0}_target_pos} - {self.center.x}) * 0.08);
     x: 0.0
     y: 0.0
-    radius: 15
+    radius: 20
     fill_color:
       - 0.5
       - 0.5
@@ -85,9 +93,7 @@ elements:
       glow_speed: 5.0
       glow_intensity: 0.5
     misc:
-      active: true
       pressable: true
-      editable: true
   - !Text
     id: slider_value_text
     actions:
@@ -100,6 +106,7 @@ elements:
     x: 0
     y: 0
     pt: 19.0
+    border_width: 5.0
     color:
       - 1
       - 0.0
@@ -108,32 +115,36 @@ elements:
     text: 'fuck'
     anchor: Center
     misc:
-      active: true
       pressable: false
-      editable: true
   - !Text
     id: slider_min_text
-    x: -110
-    y: -17
+    x: -140
+    y: 48
     pt: 10.0
+    border_width: 5.0
     color:
-      - 0.5
+      - 0.9
       - 0.5
       - 0.5
       - 0.8
     text: '{expr:{ap.2}:.2}'
     anchor: Center
+    misc:
+      pressable: false
   - !Text
     id: slider_max_text
-    x: 110
-    y: -17
+    x: 140
+    y: 48
     pt: 10.0
+    border_width: 5.0
     color:
       - 0.5
-      - 0.5
+      - 0.9
       - 0.5
       - 0.8
     text: '{expr:{ap.3}:.2}'
     anchor: Center
+    misc:
+      pressable: false
 
     #if({ap.5}.exists, set(str:{ap.0}, nearest(snapped_slider_value, {ap.5})), set(str:{ap.0}, {snapped_slider_value}));

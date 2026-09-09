@@ -7,10 +7,8 @@ use crate::helpers::paths::data_dir;
 use crate::renderer::props::Props;
 use crate::resources::{CommandQueues, Time};
 use crate::simulation::Simulation;
-use crate::ui::action_parser::{ActionEvent, actions_to_uicommands, parse_action};
-use crate::ui::actions::{
-    CommandContext, CommandQueue, ElementContext, UiCommand, process_commands,
-};
+use crate::ui::action_parser::{ActionEvent, CompiledAction, compile_actions, run_action_with_events, run_actions};
+use crate::ui::actions::{CommandContext, CommandQueue, ElementContext, process_commands};
 use crate::ui::helper::calc_move_speed;
 use crate::ui::input::{Input, Mouse};
 use crate::ui::menu::Menu;
@@ -32,6 +30,7 @@ use crate::ui::ui_touch_manager::{
 use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
 use crate::world::game_state::GameState;
+use crate::world::sound::sound::Sounds;
 use crate::world::world::World;
 use sanitize_filename::sanitize;
 use serde::{Deserialize, Serialize};
@@ -62,7 +61,7 @@ struct EventProcessingResult {
     /// Action to trigger
     trigger_action: Option<String>,
     /// Whether a drag operation ended
-    drag_ended: bool,
+    drag_ended: bool
 }
 
 pub struct GuiOptions {
@@ -70,9 +69,11 @@ pub struct GuiOptions {
     pub override_mode: bool,
 }
 
+pub type Menus = HashMap<String, Menu>;
+
 pub struct Ui {
+    pub menus: Menus,
     // Core data
-    pub menus: HashMap<String, Menu>,
     pub global_actions: GlobalActions,
     pub variables: Variables,
     pub console_lines: VecDeque<String>,
@@ -89,51 +90,73 @@ pub struct Ui {
     // Element clipboard
     pub element_clipboard: Option<UiElement>,
     pub aps: HashMap<String, UiLayerYaml>,
+
+    pub action_events: Vec<ActionEvent>
 }
 #[derive(Default, Clone, Serialize, Deserialize, Debug)]
-pub struct GlobalActions {
+pub struct GlobalActionsYaml {
     pub element_actions: Vec<String>,
-    pub global_actions: Vec<String>,
+    pub global_actions: Vec<String>
 }
+#[derive(Default, Clone, Debug)]
+pub struct GlobalActions {
+    pub element_string_actions: Vec<String>,
+    pub global_string_actions: Vec<String>,
+    pub element_compiled_actions: Vec<CompiledAction>,
+    pub global_compiled_actions: Vec<CompiledAction>,
+}
+
+impl GlobalActions {
+    fn from_yaml(yaml: GlobalActionsYaml) -> GlobalActions {
+        GlobalActions {
+            element_string_actions: yaml.element_actions,
+            global_string_actions: yaml.global_actions,
+            element_compiled_actions: vec![],
+            global_compiled_actions: vec![],
+        }
+    }
+}
+
 impl Ui {
-    pub fn new(settings: &Settings, variables: Variables, window_size: PhysicalSize<u32>) -> Self {
-        let menus_dir = data_dir("ui_data/menus");
-        let ap_dir = data_dir("ui_data/menus/advanced_primitives");
-        let legacy_path = data_dir("ui_data/gui_layout.yaml");
-        let bend_mode = &settings.bend_mode;
-        let menu_files: Vec<MenuYaml> = load_menus_from_directory(&menus_dir, bend_mode)
-            .ok()
-            .filter(|menus| !menus.is_empty())
-            .unwrap_or_else(|| {
-                println!("No menus in directory, trying legacy file...");
-                load_legacy_gui_layout(&legacy_path, bend_mode)
-            });
-        let advanced_primitives: HashMap<String, UiLayerYaml> =
-            load_advanced_primitives_from_directory(&ap_dir, bend_mode)
-                .ok()
-                .filter(|ap| !ap.is_empty())
-                .unwrap_or_else(|| {
-                    println!("No advanced primitives in {:?}", ap_dir);
-                    Vec::new()
-                })
-                .into_iter()
-                .map(|l| (l.name.clone(), l)) // This IS the AP name, not ID!
-                .collect();
-        let global_actions: GlobalActions = load_global_actions(&menus_dir, bend_mode)
-            .ok()
-            .unwrap_or_default();
+    pub fn new(settings: &Settings, variables: Variables, window_size: PhysicalSize<f32>) -> Self {
+
         //println!("Global Actions loaded: {:?}", global_actions);
         let mut loader = Self {
             menus: HashMap::new(),
-            aps: advanced_primitives,
-            global_actions,
+            aps: HashMap::new(),
+            global_actions: GlobalActions::default(),
             variables,
             console_lines: VecDeque::new(),
             touch_manager: UiTouchManager::new(settings),
             ui_edit_manager: UiEditManager::new(),
             drag_start_state: None,
             element_clipboard: None,
+            action_events: vec![],
         };
+
+        loader.reload_ui(settings, window_size);
+        loader
+    }
+    pub fn reload_ui(&mut self, settings: &Settings, window_size: PhysicalSize<f32>) {
+        self.menus = HashMap::new();
+        let menus_dir = data_dir("ui_data/menus");
+        let ap_dir = data_dir("ui_data/menus/advanced_primitives");
+        let legacy_path = data_dir("ui_data/gui_layout.yaml");
+        let bend_mode = &settings.bend_mode;
+        let menu_files: Vec<MenuYaml> = load_menus_from_directory(&menus_dir, bend_mode).ok()
+            .filter(|menus| !menus.is_empty())
+            .unwrap_or_else(|| {
+                println!("No menus in directory, trying legacy file...");
+                load_legacy_gui_layout(&legacy_path, bend_mode)
+            });
+        self.aps = load_advanced_primitives_from_directory(&ap_dir, bend_mode).ok().filter(|ap| !ap.is_empty())
+                .unwrap_or_else(|| {
+                    println!("No advanced primitives in {:?}", ap_dir);
+                    Vec::new()
+                }).into_iter()
+                .map(|l| (l.name.clone(), l)) // This IS the AP name, not ID!
+                .collect();
+        self.global_actions = GlobalActions::from_yaml(load_global_actions(&menus_dir, bend_mode).ok().unwrap_or_default());
         let mut advanced_primitive_refs: HashMap<String, Vec<(AdvancedPrimitive, u32)>> =
             HashMap::new(); // menu name, ap.
         // Load menus
@@ -142,16 +165,12 @@ impl Ui {
 
             for l in menu_yaml.layers {
                 // UiLayerYaml
-                let elements: Vec<UiElement> = l
-                    .elements
-                    .unwrap_or_default()
-                    .into_iter()
+                let elements: Vec<UiElement> = l.elements.unwrap_or_default().into_iter()
                     .flat_map(|t| match t.advanced_primitive() {
                         None => UiElement::from_yaml(t, window_size),
                         Some(ap) => {
                             advanced_primitive_refs
-                                .entry(menu_yaml.name.clone())
-                                .or_default()
+                                .entry(menu_yaml.name.clone()).or_default()
                                 .push((ap.clone(), l.order));
 
                             UiElement::from_yaml(t, window_size)
@@ -165,18 +184,19 @@ impl Ui {
                     order: l.order,
                     active: l.active,
                     opaque: l.opaque,
-                    actions: l.actions,
+                    string_actions: l.actions,
+                    compiled_actions: vec![],
                     elements,
                     ap_vars: vec![],
                     gpu: LayerGpu::default(),
                     dirty: LayerDirty::all(),
                     saveable: true,
                     editing_tool: l.editing_tool,
-                    outline_poly_vertices: vec![],
+                    outline_poly_vertices: vec![]
                 });
             }
 
-            loader.menus.insert(
+            self.menus.insert(
                 menu_yaml.name.clone(),
                 Menu {
                     layers,
@@ -184,18 +204,17 @@ impl Ui {
                 },
             );
         }
-
-        loader.add_editor_layers();
+        self.add_editor_layers();
 
         for (menu_name, aps) in advanced_primitive_refs {
-            let Some(menu) = loader.menus.get_mut(&menu_name) else {
+            let Some(menu) = self.menus.get_mut(&menu_name) else {
                 continue;
             };
             for (ap, order) in aps {
                 let layer = ap.to_layer(
                     settings,
-                    &loader.variables,
-                    &loader.aps,
+                    &self.variables,
+                    &self.aps,
                     order + 1,
                     window_size,
                 );
@@ -204,24 +223,53 @@ impl Ui {
             }
         }
 
-        for (_, menu) in loader.menus.iter_mut() {
+        for (_, menu) in self.menus.iter_mut() {
             menu.sort_layers()
         }
-        loader
+
+        let menu_names: Vec<_> = self.menus.keys().cloned().collect();
+
+        for menu_name in menu_names {
+            let layer_count = self.menus[&menu_name].layers.len();
+            for i in 0..layer_count {
+                let (layer_name, string_actions) = {
+                    let layer = &self.menus[&menu_name].layers[i];
+                    (layer.name.clone(), layer.string_actions.clone())
+                };
+                let compiled_actions = compile_actions(&self.menus, None, string_actions);
+                self.menus.get_mut(&menu_name).unwrap().layers[i].compiled_actions = compiled_actions;
+                let elem_count = self.menus[&menu_name].layers[i].elements.len();
+                for j in 0..elem_count {
+                    let (element_id, element_kind, string_actions) = {
+                        let element = &self.menus[&menu_name].layers[i].elements[j];
+                        (element.id().to_string(), element.kind(), element.string_actions())
+                    };
+                    let element_ref = ElementRef {
+                        menu: menu_name.clone(),
+                        layer: layer_name.clone(),
+                        id: element_id,
+                        kind: element_kind,
+                    };
+                    let compiled_actions = compile_actions(&self.menus, Some(element_ref), string_actions);
+                    self.menus.get_mut(&menu_name).unwrap().layers[i].elements[j].set_compiled_actions(compiled_actions);
+                }
+            }
+        }
+        self.global_actions.element_compiled_actions = compile_actions(&self.menus, None, self.global_actions.element_string_actions.clone());
+        self.global_actions.global_compiled_actions = compile_actions(&self.menus, None, self.global_actions.global_string_actions.clone());
+        self.touch_manager.global_events.push(GlobalEvent::StartUp);
+        println!("Reloaded UI");
     }
-    pub fn resize(&mut self, old_size: PhysicalSize<u32>, new_size: PhysicalSize<u32>) {
-        self.menus
-            .values_mut()
+    pub fn resize(&mut self, old_size: PhysicalSize<f32>, new_size: PhysicalSize<f32>) {
+        self.menus.values_mut()
             .flat_map(|m| m.layers.iter_mut())
             .flat_map(|l| {
                 l.dirty.mark_all(); // Dirty all elements so they actually get updated lol
                 l.iter_all_mut()
-            })
-            .for_each(|e| {
+            }).for_each(|e| {
                 e.rescale_to_window(old_size, new_size);
             });
-        self.variables
-            .set_array("screen", vec![new_size.width, new_size.height]);
+        self.variables.set_array("screen", vec![new_size.width, new_size.height]);
         self.touch_manager.add_screen_resize_event = true;
     }
     pub fn handle_touches(
@@ -229,16 +277,20 @@ impl Ui {
         dt: f32,
         props: &mut Props,
         world: &mut World,
-        window_size: PhysicalSize<u32>,
+        window_size: PhysicalSize<f32>,
         command_queues: &mut CommandQueues,
         settings: &mut Settings,
         event_loop: &dyn ActiveEventLoop,
         game_state: &mut GameState,
-        simulation: &mut Simulation,
+        simulation: &mut Simulation
     ) {
         self.touch_manager.editor.enabled = settings.editor_mode;
         if !self.touch_manager.options.show_gui {
             return;
+        }
+        self.touch_manager.events.values_mut().for_each(|events| { events.clear() });
+        if world.input.action_repeat("Reload UI") {
+            self.reload_ui(settings, window_size);
         }
         self.touch_manager.config.snap_enabled = world.input.action_down("UI Snap Modifier");
 
@@ -248,7 +300,7 @@ impl Ui {
             &mut self.touch_manager,
             &mut self.menus,
             &mut self.variables,
-            &world.input.mouse,
+            &world.input.mouse
         );
         let input = &mut world.input;
         self.handle_undo_redo_input(input, dt);
@@ -256,6 +308,7 @@ impl Ui {
         // Collect elements - borrow only self.menus
         let elements = Self::collect_touchable_elements(&self.menus, settings.editor_mode);
         self.touch_manager.update(dt, input, &elements, &world.time);
+
         for (menu_name, menu) in self.menus.iter() {
             for layer in menu.layers.iter() {
                 for element in layer.iter_all() {
@@ -268,19 +321,13 @@ impl Ui {
 
                     let is_active = element.is_active() && layer.active && menu.active;
 
-                    let was_active = *self
-                        .touch_manager
-                        .element_actives
-                        .entry(element_ref.clone())
-                        .or_insert(false);
+                    let was_active = *self.touch_manager.element_actives.entry(element_ref.clone()).or_insert(false);
                     // if element_ref == ElementRef::new("Settings", "checkbox_render_signfinding_gizmo", "Checkbox Indicator", ElementKind::Rect) {
                     //     println!("Checkbox in question:");
                     //     println!("is_active: {}, was_active: {}", is_active, was_active);
                     // }
                     if was_active != is_active {
-                        self.touch_manager
-                            .element_actives
-                            .insert(element_ref.clone(), is_active);
+                        self.touch_manager.element_actives.insert(element_ref.clone(), is_active);
                         //println!("Huh {}", element_ref.id);
                         self.touch_manager.push_event(
                             element_ref.clone(),
@@ -297,13 +344,15 @@ impl Ui {
                         self.touch_manager.global_events.push(GlobalEvent::StartUp);
                     }
                     if self.touch_manager.add_screen_resize_event {
-                        self.touch_manager
-                            .global_events
-                            .push(GlobalEvent::ScreenResize); // Selbstverständlich
+                        self.touch_manager.global_events.push(GlobalEvent::ScreenResize); // Selbstverständlich
                     }
                     // Important for when not hovering and such, super important for always-on functions!
-                    self.touch_manager
-                        .push_event(element_ref, ElementEvent::Nothing);
+                    //if is_active {
+                    self.touch_manager.push_event(element_ref, ElementEvent::Nothing); // TODO: Huge CPU performance impact! Cuts down UI logic time from 4.3ms to 0.3ms.
+                    //}
+                    //
+                    // The 'ignoring inactive elements' fix cut down from 8.3ms to 4.3ms. Might need a separate action list for inactive elements, and one for always-on functions.
+                    // But then there could be an inactive always-on function... Maybe I keep the single list, but add a preprocessing stage with some keyword at the beginning of an action, like 'in_on on:press, inc(…).'
                 }
             }
         }
@@ -317,7 +366,7 @@ impl Ui {
             settings,
             event_loop,
             game_state,
-            simulation,
+            simulation
         );
         //println!("{:?}", result);
         let input = &mut world.input;
@@ -326,7 +375,7 @@ impl Ui {
         //println!("The Variable is: {:?}", self.variables.get("tonemapping_state_open"));
         // Handle text editing
         //if self.touch_manager.editor.enabled {
-        self.handle_text_editing(input);
+        self.handle_text_editing(input, &mut world.sounds);
         //}
 
         // Handle keyboard navigation
@@ -365,7 +414,7 @@ impl Ui {
         menus: &'_ HashMap<String, Menu>,
         editor_mode: bool,
     ) -> Vec<TouchableElement<'_>> {
-        let mut elements = Vec::new();
+        let mut elements = Vec::with_capacity(128);
 
         for (menu_name, menu) in menus {
             if !menu.active {
@@ -401,11 +450,11 @@ impl Ui {
         ui_command_queue: &mut CommandQueue,
         world: &mut World,
         props: &mut Props,
-        window_size: PhysicalSize<u32>,
+        window_size: PhysicalSize<f32>,
         settings: &mut Settings,
         event_loop: &dyn ActiveEventLoop,
         game_state: &mut GameState,
-        simulation: &mut Simulation,
+        simulation: &mut Simulation
     ) -> EventProcessingResult {
         let mut result = EventProcessingResult::default();
         // Drain events from touch manager
@@ -423,9 +472,10 @@ impl Ui {
             event_loop,
             game_state,
             simulation,
+            element_ctx: Default::default()
         };
         // COLLECTING ui actions
-        push_commands(ui_command_queue, ctx); // BEFORE DRAINING EVENTS!
+        run_all_actions(ui_command_queue, ctx); // BEFORE DRAINING EVENTS!
 
         // let events: Vec<TouchEvent> = self.touch_manager.events.drain().map(|kv|kv.1).flatten()
         //     .chain(self.touch_manager.global_events.drain(..)).collect();
@@ -814,8 +864,6 @@ impl Ui {
         if !self.is_editable(element) {
             return;
         };
-        // Get action for element
-        let action = self.get_element_action(element);
         let is_input_box = self.is_input_box(element);
         if let Some(editor_tool) = is_layer_editor_tool(&self.menus, element) {
             if editor_tool {
@@ -866,15 +914,14 @@ impl Ui {
         result: &mut EventProcessingResult,
     ) {
         // Find all elements in box
-        let elements: Vec<TouchableElement> =
-            Self::collect_touchable_elements(&self.menus, self.touch_manager.editor.enabled);
+        let elements: Vec<TouchableElement> = Self::collect_touchable_elements(&self.menus, self.touch_manager.editor.enabled);
 
         let selected = HitDetector::find_in_box(start, end, &elements);
 
         self.touch_manager.selection.set_from_box(
             selected,
             &mut self.menus,
-            &mut self.touch_manager.editor,
+            &mut self.touch_manager.editor
         );
         result.update_selection = true;
     }
@@ -1103,19 +1150,6 @@ impl Ui {
             .map(|p| p.scaled_vertices().iter().map(|v| v.pos).collect())
     }
 
-    fn get_element_action(&self, element: &ElementRef) -> Vec<String> {
-        let Some(e) = self.get_element(element) else {
-            return vec![];
-        };
-        match e {
-            UiElement::Circle(c) => c.actions.clone(),
-            UiElement::Polygon(p) => p.actions.clone(),
-            UiElement::Text(t) => t.actions.clone(),
-            UiElement::Rect(r) => r.actions.clone(),
-            _ => vec![],
-        }
-    }
-
     fn is_input_box(&self, element: &ElementRef) -> bool {
         self.get_element(element)
             .and_then(|e| e.as_text())
@@ -1322,7 +1356,7 @@ impl Ui {
         }
     }
 
-    fn handle_text_editing(&mut self, input: &mut Input) {
+    fn handle_text_editing(&mut self, input: &mut Input, sounds: &mut Sounds) {
         let editing_text = self.touch_manager.editor.editing_text.clone();
         handle_text_editing(
             &editing_text,
@@ -1330,6 +1364,7 @@ impl Ui {
             &mut self.menus,
             &mut self.ui_edit_manager,
             input,
+            sounds
         );
     }
 
@@ -1337,7 +1372,7 @@ impl Ui {
         &mut self,
         menus_dir: PathBuf,
         ap_dir: PathBuf,
-        window_size: PhysicalSize<u32>,
+        window_size: PhysicalSize<f32>,
     ) -> anyhow::Result<()> {
         fs::create_dir_all(&menus_dir)?;
         fs::create_dir_all(&ap_dir)?;
@@ -1379,7 +1414,7 @@ impl Ui {
         &self,
         menu_name: &str,
         menu: &Menu,
-        window_size: PhysicalSize<u32>,
+        window_size: PhysicalSize<f32>,
     ) -> MenuYaml {
         let layers = menu
             .layers
@@ -1390,7 +1425,7 @@ impl Ui {
                 order: l.order,
                 active: l.active,
                 opaque: l.opaque,
-                actions: l.actions.clone(),
+                actions: l.string_actions.clone(),
                 elements: Some(
                     l.elements
                         .iter()
@@ -1411,31 +1446,24 @@ impl Ui {
         let mut being_hovered = false;
         let mut selected_being_hovered = false;
 
-        for (menu_name, menu) in &mut self.menus {
-            for layer in &mut menu.layers {
-                let mut any_changed = false;
+        // (menu_name, layer_name, element_id, resolved_text)
+        let mut resolved_texts = Vec::new();
 
-                for t in layer.elements.iter_mut().filter_map(UiElement::as_text_mut) {
-                    if (self.touch_manager.selection.just_deselected
-                        || self.touch_manager.selection.just_selected)
-                        && !t.being_edited
-                    {
-                        t.clear_selection();
-                        layer.dirty.mark_texts();
-                    }
-                    if t.being_edited || t.being_hovered || t.just_unhovered {
-                        any_changed = true;
-                    }
-                    let text_ref = &ElementRef::new(
-                        menu_name,
-                        layer.name.as_str(),
-                        t.id.clone().as_str(),
-                        ElementKind::Text,
-                    );
-                    let is_selected = self.touch_manager.selection.is_selected(text_ref);
-                    if !being_hovered && t.being_hovered {
+        // Immutable resolving pass
+        for (menu_name, menu) in &self.menus {
+            for layer in &menu.layers {
+                for t in layer.elements.iter().filter_map(UiElement::as_text) {
+                    if t.being_hovered {
                         being_hovered = true;
-                        if is_selected {
+
+                        let text_ref = ElementRef::new(
+                            menu_name,
+                            layer.name.as_str(),
+                            t.id.as_str(),
+                            ElementKind::Text,
+                        );
+
+                        if self.touch_manager.selection.is_selected(&text_ref) {
                             selected_being_hovered = true;
                         }
                     }
@@ -1448,21 +1476,109 @@ impl Ui {
                         continue;
                     }
 
-                    if !t.input_box || self.touch_manager.options.override_mode {
-                        let new_text = resolve_template(&t.template, &self.variables, settings);
-                        if new_text != t.text {
-                            t.text = new_text;
-                            any_changed = true;
-                        }
+                    let text_ref = ElementRef::new(
+                        menu_name,
+                        layer.name.as_str(),
+                        t.id.as_str(),
+                        ElementKind::Text,
+                    );
+
+                    let is_selected = self.touch_manager.selection.is_selected(&text_ref);
+
+                    let new_text = if !t.input_box || self.touch_manager.options.override_mode {
+                        let element_ctx = ElementContext::from_self(text_ref.clone());
+
+                        resolve_template(
+                            &t.template,
+                            &self.variables,
+                            settings,
+                            &self.menus,
+                            &element_ctx,
+                        )
+                    } else if is_selected {
+                        // Can't mutate variables in the immutable menus pass,
+                        // so defer input-box updates to the mutable pass.
+                        continue;
                     } else {
+                        let element_ctx = ElementContext::from_self(text_ref.clone());
+
+                        resolve_template(
+                            &t.template,
+                            &self.variables,
+                            settings,
+                            &self.menus,
+                            &element_ctx,
+                        )
+                    };
+
+                    if new_text != t.text {
+                        resolved_texts.push((
+                            menu_name.clone(),
+                            layer.name.clone(),
+                            t.id.clone(),
+                            new_text,
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Mutable apply pass
+        for (menu_name, layer_name, element_id, new_text) in resolved_texts {
+            if let Some(menu) = self.menus.get_mut(&menu_name) {
+                if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) {
+                    if let Some(t) = layer
+                        .elements
+                        .iter_mut()
+                        .filter_map(UiElement::as_text_mut)
+                        .find(|t| t.id == element_id)
+                    {
+                        t.text = new_text;
+                        layer.dirty.mark_texts();
+                    }
+                }
+            }
+        }
+
+        // Selection/input-box bookkeeping still needs mutation, so do that
+        // separately after the resolving pass.
+        for (menu_name, menu) in &mut self.menus {
+            for layer in &mut menu.layers {
+                let mut any_changed = false;
+
+                for t in layer.elements.iter_mut().filter_map(UiElement::as_text_mut) {
+                    if (self.touch_manager.selection.just_deselected
+                        || self.touch_manager.selection.just_selected)
+                        && !t.being_edited
+                    {
+                        t.clear_selection();
+                        any_changed = true;
+                    }
+
+                    if t.input_box {
+                        let text_ref = ElementRef::new(
+                            menu_name,
+                            layer.name.as_str(),
+                            t.id.as_str(),
+                            ElementKind::Text,
+                        );
+
+                        let is_selected = self.touch_manager.selection.is_selected(&text_ref);
+
                         if is_selected {
-                            let new_text = set_input_box(&t.template, &t.text, &mut self.variables);
+                            let new_text =
+                                set_input_box(&t.template, &t.text, &mut self.variables);
+
                             if new_text != t.text {
                                 t.text = new_text;
                                 any_changed = true;
                             }
-                        } else {
-                            let new_text = resolve_template(&t.template, &self.variables, settings);
+                        }
+
+                        if t.input_box && self.touch_manager.selection.just_deselected && is_selected {
+                            let new_text =
+                                set_input_box(&t.template, &t.text, &mut self.variables);
+
                             if new_text != t.text {
                                 t.text = new_text;
                                 any_changed = true;
@@ -1470,14 +1586,8 @@ impl Ui {
                         }
                     }
 
-                    if t.input_box && self.touch_manager.selection.just_deselected {
-                        if is_selected {
-                            let new_text = set_input_box(&t.template, &t.text, &mut self.variables);
-                            if new_text != t.text {
-                                t.text = new_text;
-                                any_changed = true;
-                            }
-                        }
+                    if t.being_edited || t.being_hovered || t.just_unhovered {
+                        any_changed = true;
                     }
                 }
 
@@ -1487,10 +1597,8 @@ impl Ui {
             }
         }
 
-        self.variables
-            .set_bool("any_text.being_hovered", being_hovered);
-        self.variables
-            .set_bool("selected_text.being_hovered", selected_being_hovered);
+        self.variables.set_bool("any_text.being_hovered", being_hovered);
+        self.variables.set_bool("selected_text.being_hovered", selected_being_hovered);
     }
 
     /// Updates existing handles and outlines based on their parent elements' positions and sizes
@@ -1566,7 +1674,7 @@ impl Ui {
         element: &UiElement,
         sel: &ElementRef,
         editor_mode: bool,
-        override_mode: bool,
+        override_mode: bool
     ) {
         match element {
             UiElement::Circle(c) => {
@@ -1621,6 +1729,7 @@ impl Ui {
                         x: c.x,
                         y: c.y,
                         radius: c.radius,
+                        resize_behaviour: Default::default(),
                         handle_color: [0.65, 0.22, 0.05, 1.0],
                         handle_misc: HandleMisc {
                             handle_len: 0.09,
@@ -1653,11 +1762,13 @@ impl Ui {
                     for (i, v) in p.scaled_vertices().iter().enumerate() {
                         let vertex_outline = UiButtonCircle {
                             id: format!("vertex_outline_{}", i),
-                            actions: vec![],
+                            string_actions: vec![],
+                            compiled_actions: vec![],
                             style: "None".to_string(),
                             x: v.pos[0],
                             y: v.pos[1],
                             radius: 10.0,
+                            resize_behaviour: Default::default(),
                             original_radius: 10.0,
                             inside_border_thickness: 2.0,
                             border_thickness: 0.0,
@@ -1679,7 +1790,7 @@ impl Ui {
                                 editable: Editability::HARDNOTEDITABLE,
                             },
                             yaml_element: None,
-                            cache: None,
+                            cache: None
                         };
                         editor_layer
                             .elements
@@ -1835,7 +1946,7 @@ impl Ui {
                                 &element,
                                 sel,
                                 editor_mode,
-                                self.touch_manager.options.override_mode,
+                                self.touch_manager.options.override_mode
                             );
                         }
                     }
@@ -2024,56 +2135,39 @@ impl Ui {
             name: "editor_selection".into(),
             ap_name: None,
             order: 900,
+            string_actions: vec![],
+            compiled_actions: vec![],
             active: true,
             ap_vars: vec![],
-            actions: vec![],
             elements: vec![],
             dirty: LayerDirty::all(),
             gpu: LayerGpu::default(),
             opaque: true,
             saveable: false,
             editing_tool: false,
-            outline_poly_vertices: vec![],
+            outline_poly_vertices: vec![]
         });
 
         menu.layers.push(RuntimeLayer {
             name: "editor_handles".into(),
             ap_name: None,
             order: 950,
+            string_actions: vec![],
+            compiled_actions: vec![],
             active: true,
             ap_vars: vec![],
-            actions: vec![],
             elements: vec![],
             dirty: LayerDirty::all(),
             gpu: LayerGpu::default(),
             opaque: true,
             saveable: false,
             editing_tool: false,
-            outline_poly_vertices: vec![],
+            outline_poly_vertices: vec![]
         });
 
         menu.sort_layers();
     }
-    pub fn set_starting_menu(&mut self, settings: &Settings, ui_command_queue: &mut CommandQueue) {
-        ui_command_queue.push(UiCommand::CloseAllMenus);
-        ui_command_queue.push(UiCommand::OpenMenu {
-            element_ctx: ElementContext::default(),
-            menu_name: "str:MainMenu".to_string(),
-        });
-        ui_command_queue.push(UiCommand::CloseAllMenus);
-        // ui_command_queue.push(UiCommand::OpenMenu {
-        //     element_ref: ElementRef::default(),
-        //     menu_name: "str:Milestones".to_string(),
-        // });
-        // ui_command_queue.push(UiCommand::CloseMenu {
-        //     element_ref: ElementRef::default(),
-        //     menu_name: "str:Editor_Menu".to_string(),
-        // });
-        // ui_command_queue.push(UiCommand::CloseMenu {
-        //     element_ref: ElementRef::default(),
-        //     menu_name: "str:Debug_Menu".to_string(),
-        // });
-    }
+
     pub fn hash_id(id: &str) -> f32 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -2084,43 +2178,39 @@ impl Ui {
     }
 }
 
-fn push_commands(ui_command_queue: &mut CommandQueue, ctx: &mut CommandContext) {
+fn run_all_actions(ui_command_queue: &mut CommandQueue, ctx: &mut CommandContext) {
     //let dont = "Don't use element things in global actions, only in global element actions or inside elements' actions";
     let buttons = &ctx.world.input.mouse.buttons.clone();
     let mut global_action_events = Vec::new();
     global_action_events.push(ActionEvent::Always);
+    //global_action_events.push(ActionEvent::Nothing);
     if ctx.world.time.game_just_started() {
         global_action_events.push(ActionEvent::StartUp);
     }
-    let global_action_events = global_action_events.as_slice();
-    for action in ctx.ui.global_actions.global_actions.clone().iter() {
-        let element_ctx = ElementContext {
-            self_element: None,
-            as_element: None,
-        };
+    // global_action_events.extend(ctx.ui.touch_manager.global_events.clone());
 
-        ui_command_queue.push_many(parse_action(action, ctx, global_action_events, element_ctx));
+    let global_action_events = global_action_events.as_slice();
+    for action in ctx.ui.global_actions.global_compiled_actions.clone() {
+        //println!("{:?}", action.commands);
+        run_action_with_events(ui_command_queue, action, ctx, global_action_events);
     }
+
     for (element_ref, events) in ctx.ui.touch_manager.events.clone().into_iter() {
         //println!("{:?}", events);
-        let Some(actions) = get_element_actions(&ctx.ui.menus, &element_ref) else {
+        let Some(element) = get_element_borrowed(&ctx.ui.menus, &element_ref) else {
             continue;
         };
 
-        let events: Vec<ActionEvent> = events
-            .iter()
+        let actions = element.compiled_actions();
+        if actions.is_empty() { continue };
+
+        let events: Vec<ActionEvent> = events.iter()
             .map(|element_event| ActionEvent::from_element_event(element_event))
-            .chain(
-                ctx.ui
-                    .touch_manager
-                    .global_events
-                    .iter()
-                    .map(|global_event| ActionEvent::from_global_event(global_event)),
-            )
-            .collect();
-        let commands =
-            actions_to_uicommands(ctx, &element_ref, actions.as_slice(), events.as_slice());
-        ui_command_queue.push_many(commands);
+            .chain(ctx.ui.touch_manager.global_events.iter()
+                .map(|global_event| ActionEvent::from_global_event(global_event))).collect();
+        ctx.ui.action_events = events;
+
+        run_actions(ui_command_queue, ctx, &element_ref, actions);
     }
 }
 
@@ -2162,6 +2252,16 @@ pub fn get_element_mut<'a>(
 
     layer.find_element_mut(element_id)
 }
+pub fn get_element_borrowed<'a>(
+    menus: &'a HashMap<String, Menu>,
+    element: &ElementRef,
+) -> Option<&'a UiElement> {
+    let menu = menus.get(&element.menu)?;
+    let layer = menu.layers.iter().find(|l| l.name == element.layer)?;
+    let element_id = &element.id;
+
+    layer.find_element(element_id)
+}
 pub fn get_layer(menus: &HashMap<String, Menu>, element: &ElementRef) -> Option<RuntimeLayer> {
     let menu = menus.get(&element.menu)?;
     let layer = menu
@@ -2182,6 +2282,16 @@ pub fn get_layer_ap_var(menus: &HashMap<String, Menu>, element: &ElementRef) -> 
 
     layer.ap_vars.clone()
 }
+pub fn get_layer_actions(menus: &HashMap<String, Menu>, element: &ElementRef) -> Vec<CompiledAction> {
+    let Some(menu) = menus.get(&element.menu) else {
+        return vec![];
+    };
+    let Some(layer) = menu.layers.iter().find(|l| l.name == element.layer) else {
+        return vec![];
+    };
+
+    layer.compiled_actions.clone()
+}
 pub fn is_layer_editor_tool(menus: &HashMap<String, Menu>, element: &ElementRef) -> Option<bool> {
     let menu = menus.get(&element.menu)?;
     let layer = menu.layers.iter().find(|l| l.name == element.layer)?;
@@ -2190,15 +2300,15 @@ pub fn is_layer_editor_tool(menus: &HashMap<String, Menu>, element: &ElementRef)
 }
 pub fn get_element_position(
     menus: &HashMap<String, Menu>,
-    element: &ElementRef,
+    element: &ElementRef
 ) -> Option<[f32; 2]> {
     Some(get_element(menus, element)?.center())
 }
 pub fn get_element_actions(
     menus: &HashMap<String, Menu>,
-    element: &ElementRef,
+    element: &ElementRef
 ) -> Option<Vec<String>> {
-    Some(get_element(menus, element)?.actions())
+    Some(get_element(menus, element)?.string_actions())
 }
 pub fn get_element_sizes(menus: &HashMap<String, Menu>, element: &ElementRef) -> Vec<SizeProperty> {
     let Some(menu) = menus.get(&element.menu) else {
@@ -2234,8 +2344,8 @@ pub fn get_element_sizes(menus: &HashMap<String, Menu>, element: &ElementRef) ->
     vec.unwrap_or(vec![])
 }
 pub fn get_element_main_size(
-    menus: &HashMap<String, Menu>,
-    element: &ElementRef,
+    menus: &Menus,
+    element: &ElementRef
 ) -> Option<SizeProperty> {
     let menu = menus.get(&element.menu)?;
     let layer = menu.layers.iter().find(|l| l.name == element.layer)?;
@@ -2265,10 +2375,10 @@ pub fn get_element_main_size(
     }
 }
 pub fn get_element_kind(
-    menus: &HashMap<String, Menu>,
+    menus: &Menus,
     menu: &str,
     layer: &str,
-    id: &str,
+    id: &str
 ) -> Option<ElementKind> {
     let menu = menus.get(menu)?;
     let layer = menu.layers.iter().find(|l| l.name == layer)?;
@@ -2279,11 +2389,23 @@ pub fn get_element_kind(
         .find(|e| e.id() == id)
         .map(|e| e.kind())
 }
+/// 'effective activity' - ChatGPT
+pub fn get_element_active(
+    menus: &Menus,
+    element: &ElementRef,
+) -> Option<bool> {
+    let menu = menus.get(&element.menu)?;
+    let layer = menu.layers.iter().find(|l| l.name == element.layer)?;
+
+    layer.elements.iter()
+        .find(|e| e.id() == element.id)
+        .map(|e| e.is_active() && layer.active && menu.active)
+}
 
 pub struct TouchableElement<'a> {
     pub menu: &'a str,
     pub layer: &'a str,
     pub order: u32,
     pub idx: usize,
-    pub element: &'a UiElement,
+    pub element: &'a UiElement
 }

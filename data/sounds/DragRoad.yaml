@@ -1,0 +1,19 @@
+name: DragRoad
+
+layers:
+  - waveform: Noise
+    start_freq: 550.0
+    end_freq: 850.0
+    fm_ratio: 1.0
+    fm_amount: 0.2
+    gain: 0.6
+
+duration: 0.045
+attack: 0.004
+decay: 0.008
+sustain: 0.0
+release: 0.035
+glide_curve: 1.0
+gain: 0.2
+pan: 0.0
+deduplication_time: 0.05

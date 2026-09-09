@@ -5,10 +5,11 @@ elements:
     id: Button_Background
     actions:
       - "in:any, as:[str:button_text], set(str:as.pt, {ap.1}); set(str:self.size, expr:{as.size}+15.0); set(str:self.center, [expr:{as.center.x}+{as.size.x}*0.5, as.center.y]) call(str:{ap.2});"
-      - "on:hovering, ifvareq({ap}, bool:false, set_var(str:self.color.border, [0.3, 0.0, 0.0, 1.0]), set_var(str:self.color.border, [0.0, 0.3, 0.0, 1.0]))"
+      - "on:hover_enter, call(rust:play_sound, str:ButtonHover)"
+      - "on:hovering, ifvareq({ap}, bool:false, set_var(str:self.color.border, [0.3, 0.0, 0.0, 1.0]), set_var(str:self.color.border, [0.0, 0.3, 0.0, 1.0]));"
       - "on:hover_exit on:activated, ifvareq({ap}, bool:false, set_var(str:self.color.border, [1.0, 0.0, 0.0, 1.0]), set_var(str:self.color.border, [0.0, 1.0, 0.0, 1.0]))"
       - "on:down, set(str:previous_fill, self.color.fill); set(str:self.color.fill, [0.8, 0.8, 0.8, 0.2])"
-      - "on:release, toggle(str:{ap}); set(str:self.color.fill, [0.8, 0.8, 0.8, 0.05])"
+      - "on:release, toggle(str:{ap}); set(str:self.color.fill, [0.8, 0.8, 0.8, 0.05]); call(rust:play_sound, str:ButtonPress)"
       #      - "show_interaction(self.color.fill)"
       #- "in:any, set(str:x, expr:{self.center.x}/{screen.x}); set(str:y, expr:{self.center.y}/{screen.y}); set(str:corner, expr:exp(-8.0*({x}*{x} + {y}*{y}))); set(str:self.color.border, [corner, expr:1-{corner}, expr:1-{corner}, 1])"
     x: 0
@@ -31,7 +32,8 @@ elements:
     id: button_text
     x: 0
     y: 0
-    pt: 40.0
+    pt: 25.0
+    border_width: 5.0
     color:
       - 1.0
       - 1.0

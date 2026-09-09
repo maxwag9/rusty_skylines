@@ -15,7 +15,10 @@ use std::f32::consts::{PI, TAU};
 use std::mem;
 use std::path::PathBuf;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
-use wgpu::{Buffer, BufferAddress, BufferDescriptor, BufferUsages, Device, Face, IndexFormat, Queue, RenderPass, VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode};
+use wgpu::{
+    Buffer, BufferAddress, BufferDescriptor, BufferUsages, Device, Face, IndexFormat, Queue,
+    RenderPass, VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode,
+};
 use wgpu_render_manager::generator::{MipmapMode, TextureKey, TextureParams};
 use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions};
 use wgpu_render_manager::renderer::RenderManager;
@@ -70,17 +73,17 @@ impl PropVertex {
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct GpuPropInstance {
-    pub chunk_xz: [i32; 2],      // 8 bytes
-    pub local_pos: [f32; 3],     // 12 bytes
+    pub chunk_xz: [i32; 2],  // 8 bytes
+    pub local_pos: [f32; 3], // 12 bytes
 
-    pub scale: f32,              // 4 bytes
-    pub rotation_sin: f32,       // 4 bytes
-    pub rotation_cos: f32,       // 4 bytes
+    pub scale: f32,        // 4 bytes
+    pub rotation_sin: f32, // 4 bytes
+    pub rotation_cos: f32, // 4 bytes
 
-    pub seed: f32,               // 4 bytes
-    pub wind_strength: f32,      // 4 bytes
+    pub seed: f32,          // 4 bytes
+    pub wind_strength: f32, // 4 bytes
 
-    pub color: [f32; 4],         // 16 bytes
+    pub color: [f32; 4], // 16 bytes
 }
 
 impl GpuPropInstance {
@@ -177,7 +180,7 @@ pub struct PropInstance {
     pub seed: u32,
     pub variant: u16,
     pub wind_strength: f32,
-    pub generated: bool // true = procedurally placed by terrain gen (trees), regenerated deterministically, never saved
+    pub generated: bool, // true = procedurally placed by terrain gen (trees), regenerated deterministically, never saved
 }
 
 pub struct Mesh {
@@ -191,7 +194,7 @@ pub struct PropChunk {
     pub chunk_coord: ChunkCoord,
     pub archetype_instances: HashMap<ArchetypeId, Vec<PropInstanceId>>,
     pub gpu_instance_buffers: HashMap<ArchetypeId, (Buffer, u32)>,
-    pub dirty_archetypes: HashSet<ArchetypeId>
+    pub dirty_archetypes: HashSet<ArchetypeId>,
 }
 impl PropChunk {
     pub fn new(chunk_coord: ChunkCoord) -> Self {
@@ -199,7 +202,7 @@ impl PropChunk {
             chunk_coord,
             archetype_instances: HashMap::new(),
             gpu_instance_buffers: HashMap::new(),
-            dirty_archetypes: HashSet::new()
+            dirty_archetypes: HashSet::new(),
         }
     }
 }
@@ -242,7 +245,7 @@ pub struct Props {
     manual_prop_count: usize,
     visible_generated_prop_count: usize,
     visible_manual_prop_count: usize,
-    preview_prop_id: Option<PropInstanceId>
+    preview_prop_id: Option<PropInstanceId>,
 }
 
 impl Props {
@@ -261,7 +264,7 @@ impl Props {
             manual_prop_count: 0,
             visible_generated_prop_count: 0,
             visible_manual_prop_count: 0,
-            preview_prop_id: None
+            preview_prop_id: None,
         }
     }
 
@@ -357,7 +360,7 @@ impl Props {
                 seed: prop.seed,
                 variant: prop.variant,
                 wind_strength: prop.wind_strength,
-                generated: false
+                generated: false,
             };
             self.add_instance(prop_instance);
         }
@@ -380,24 +383,35 @@ impl Props {
         id
     }
     pub fn get_archetype_id_for_name(&self, name: &str) -> Option<ArchetypeId> {
-        self.archetype_to_id.get(name.to_lowercase().as_str()).copied()
+        self.archetype_to_id
+            .get(name.to_lowercase().as_str())
+            .copied()
     }
     pub fn is_registered(&self, key: impl Into<String>) -> bool {
         self.archetype_to_id.contains_key(&key.into())
     }
 
-    pub fn add_instance(
-        &mut self,
-        mut instance: PropInstance
-    ) -> PropInstanceId {
+    pub fn add_instance(&mut self, mut instance: PropInstance) -> PropInstanceId {
         let chunk_coord = instance.pos.chunk;
-        let chunk = self.chunks.entry(chunk_coord).or_insert_with(|| PropChunk::new(chunk_coord));
+        let chunk = self
+            .chunks
+            .entry(chunk_coord)
+            .or_insert_with(|| PropChunk::new(chunk_coord));
 
-        let chunk_instances = chunk.archetype_instances.entry(instance.archetype_id.unwrap()).or_default(); // It SHOULD panic to ensure I coded it correctly.
+        let chunk_instances = chunk
+            .archetype_instances
+            .entry(instance.archetype_id.unwrap())
+            .or_default(); // It SHOULD panic to ensure I coded it correctly.
 
-        if instance.generated { self.generated_prop_count += 1; } else { self.manual_prop_count += 1; }
+        if instance.generated {
+            self.generated_prop_count += 1;
+        } else {
+            self.manual_prop_count += 1;
+        }
 
-        chunk.dirty_archetypes.insert(instance.archetype_id.unwrap());
+        chunk
+            .dirty_archetypes
+            .insert(instance.archetype_id.unwrap());
         self.dirty_chunks.insert(chunk_coord);
         let id = if let Some(id) = self.prop_instances_free.pop() {
             instance.id = Some(id);
@@ -478,7 +492,7 @@ impl Props {
         &mut self,
         chunk_coord: ChunkCoord,
         new_instances: Vec<PropInstance>,
-        archetypes: Vec<String>
+        archetypes: Vec<String>,
     ) {
         for archetype in archetypes.into_iter() {
             self.ensure_archetype(archetype);
@@ -518,7 +532,7 @@ impl Props {
     fn instance_key(
         chunk: ChunkCoord,
         archetype_id: ArchetypeId,
-        id: Option<PropInstanceId>
+        id: Option<PropInstanceId>,
     ) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -533,7 +547,7 @@ impl Props {
         device: &Device,
         queue: &Queue,
         camera: &Camera,
-        terrain: &Terrain
+        terrain: &Terrain,
     ) {
         // let visible_chunks: Vec<ChunkCoord> = terrain
         //     .visible
@@ -555,8 +569,7 @@ impl Props {
             let dirty: Vec<ArchetypeId> = chunk.dirty_archetypes.drain().collect();
 
             for archetype_id in dirty {
-                let Some(instances) = chunk.archetype_instances.get(&archetype_id)
-                else {
+                let Some(instances) = chunk.archetype_instances.get(&archetype_id) else {
                     continue;
                 };
 
@@ -565,27 +578,28 @@ impl Props {
                     continue;
                 }
 
-                let mut gpu_instances =
-                    Vec::with_capacity(instances.len());
+                let mut gpu_instances = Vec::with_capacity(instances.len());
 
                 for &id in instances {
-                    let Some(inst) = self.prop_instances.get(id as usize).and_then(|x| x.as_ref()) else {
+                    let Some(inst) = self
+                        .prop_instances
+                        .get(id as usize)
+                        .and_then(|x| x.as_ref())
+                    else {
                         continue;
                     };
 
                     let seed = inst.seed as f32 / u32::MAX as f32;
 
-                    gpu_instances.push(
-                        GpuPropInstance::new(
-                            inst.pos.chunk,
-                            inst.pos.local,
-                            inst.scale,
-                            inst.rotation_y_rad,
-                            inst.color,
-                            seed,
-                            inst.wind_strength
-                        )
-                    );
+                    gpu_instances.push(GpuPropInstance::new(
+                        inst.pos.chunk,
+                        inst.pos.local,
+                        inst.scale,
+                        inst.rotation_y_rad,
+                        inst.color,
+                        seed,
+                        inst.wind_strength,
+                    ));
                 }
 
                 let count = gpu_instances.len() as u32;
@@ -602,9 +616,8 @@ impl Props {
                 };
 
                 if recreate {
-                    let capacity =
-                        (count.max(1) * 2) as BufferAddress
-                            * size_of::<GpuPropInstance>() as BufferAddress;
+                    let capacity = (count.max(1) * 2) as BufferAddress
+                        * size_of::<GpuPropInstance>() as BufferAddress;
 
                     let buffer = device.create_buffer(&BufferDescriptor {
                         label: Some("prop_instance_buffer"),
@@ -613,10 +626,9 @@ impl Props {
                         mapped_at_creation: false,
                     });
 
-                    chunk.gpu_instance_buffers.insert(
-                        archetype_id,
-                        (buffer, count),
-                    );
+                    chunk
+                        .gpu_instance_buffers
+                        .insert(archetype_id, (buffer, count));
                 }
 
                 if let Some((buffer, stored_count)) =
@@ -632,9 +644,7 @@ impl Props {
     pub fn place_props(&mut self, terrain: &Terrain, input: &mut Input, device: &Device) {
         match &terrain.cursor.mode {
             CursorMode::Props => {
-                let Some(name) = &terrain.cursor.prop_name else {
-                    return;
-                };
+                let name = &terrain.cursor.prop_name;
                 let name = &name.to_lowercase();
                 if !self.is_registered(name) {
                     if let Some(archetype) = make_archetype(name, device) {
@@ -644,20 +654,18 @@ impl Props {
                 if let Some(picked_point) = &terrain.last_picked {
                     if let Some(&archetype_id) = self.archetype_to_id.get(name) {
                         if input.action_repeat("Place Prop") {
-                            self.add_instance(
-                                PropInstance {
-                                    id: None,
-                                    archetype_id: Some(archetype_id),
-                                    pos: picked_point.pos,
-                                    scale: rand::random_range(0.8..1.5),
-                                    rotation_y_rad: rand::random_range(0.0..5.0),
-                                    seed: rand::random(),
-                                    color: [1.0, 1.0, 1.0, 1.0],
-                                    wind_strength: 0.2,
-                                    variant: 0,
-                                    generated: false
-                                },
-                            );
+                            self.add_instance(PropInstance {
+                                id: None,
+                                archetype_id: Some(archetype_id),
+                                pos: picked_point.pos,
+                                scale: rand::random_range(0.8..1.5),
+                                rotation_y_rad: rand::random_range(0.0..5.0),
+                                seed: rand::random(),
+                                color: [1.0, 1.0, 1.0, 1.0],
+                                wind_strength: 0.2,
+                                variant: 0,
+                                generated: false,
+                            });
                         }
                         if self.preview_prop_id.is_none() {
                             let prop_instance = PropInstance {
@@ -675,7 +683,11 @@ impl Props {
                             self.preview_prop_id = Some(self.place_prop(name, prop_instance));
                         }
                         if let Some(id) = self.preview_prop_id {
-                            if let Some(prop) = self.prop_instances.get_mut(id as usize).and_then(|x| x.as_mut()) {
+                            if let Some(prop) = self
+                                .prop_instances
+                                .get_mut(id as usize)
+                                .and_then(|x| x.as_mut())
+                            {
                                 prop.pos = picked_point.pos;
                                 self.dirty_chunks.insert(prop.pos.chunk);
                             }
@@ -683,14 +695,14 @@ impl Props {
                     }
                 }
             }
-            _ => return
+            _ => return,
         }
     }
 
     pub fn place_prop(
         &mut self,
         archetype_name: impl Into<String>,
-        mut prop_instance: PropInstance
+        mut prop_instance: PropInstance,
     ) -> PropInstanceId {
         let archetype_id = self.ensure_archetype(archetype_name);
         prop_instance.archetype_id = Some(archetype_id);
@@ -715,7 +727,7 @@ impl Props {
         camera: &'a Camera,
         terrain: &'a Terrain,
         pipelines: &Pipelines,
-        settings: &Settings
+        settings: &Settings,
     ) {
         let eye = camera.eye_world();
         // let mut eye = WorldPos::default();
@@ -771,7 +783,7 @@ impl Props {
                     shader_path.as_path(),
                     &opts,
                     &[&pipelines.buffers.camera],
-                    pass
+                    pass,
                 );
                 pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 pass.set_vertex_buffer(1, inst_buf.slice(..));
@@ -791,7 +803,7 @@ impl Props {
         pipelines: &Pipelines,
         settings: &Settings,
         shadow_mat_buffer: &'a Buffer,
-        cascade_idx: usize
+        cascade_idx: usize,
     ) {
         let eye = camera.eye_world();
 
@@ -866,7 +878,7 @@ struct Archetype {
     lod1: Option<Mesh>,
     lod2: Option<Mesh>,
     lod3: Option<Mesh>,
-    texture_keys: [TextureKey; 4] // 4 slots for textures in the shader.
+    texture_keys: [TextureKey; 4], // 4 slots for textures in the shader.
 }
 
 impl Archetype {
@@ -949,7 +961,7 @@ fn make_oak_tree(device: &Device) -> Option<Archetype> {
                     _pad1: 0.0,
                 },
                 256,
-                MipmapMode::AlphaPreserving
+                MipmapMode::AlphaPreserving,
             ),
             TextureKey::new(
                 "bark",
@@ -966,7 +978,7 @@ fn make_oak_tree(device: &Device) -> Option<Archetype> {
                     _pad1: 0.0,
                 },
                 256,
-                MipmapMode::Generate
+                MipmapMode::Generate,
             ),
             TextureKey::notex(),
             TextureKey::notex(),
@@ -1122,7 +1134,7 @@ fn interpret_lsystem(
     base_length: f32,
     base_thickness: f32,
     seed: u32,
-    leaf_scale: f32
+    leaf_scale: f32,
 ) -> (Vec<BranchSegment>, Vec<LeafCluster>) {
     let mut branches = Vec::new();
     let mut leaves = Vec::new();
@@ -1193,7 +1205,9 @@ fn interpret_lsystem(
                 let is_terminal = state.thickness < 0.04 || state.depth >= 3;
 
                 if is_terminal {
-                    let size = rng.range(0.4, 0.75) * (state.length / base_length).sqrt().max(0.35) * leaf_scale;
+                    let size = rng.range(0.4, 0.75)
+                        * (state.length / base_length).sqrt().max(0.35)
+                        * leaf_scale;
 
                     leaves.push(LeafCluster {
                         position: state.position + state.direction * rng.range(-0.05, 0.12),
@@ -1441,12 +1455,7 @@ fn generate_tree_billboard_cross(
 
         let normal = Vec3::new(-right.z, 0.0, right.x);
 
-        let uvs = [
-            [0.0, 1.0],
-            [1.0, 1.0],
-            [1.0, 0.0],
-            [0.0, 0.0],
-        ];
+        let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
 
         for i in 0..4 {
             vertices.push(PropVertex {
@@ -1537,12 +1546,7 @@ fn generate_tree_billboard_cross(
         let b1 = trunk_base + next * 2;
         let t1 = trunk_base + next * 2 + 1;
 
-        indices.extend_from_slice(&[
-            b0, t0, b1,
-            b1, t0, t1,
-            b1, t0, b0,
-            t1, t0, b1,
-        ]);
+        indices.extend_from_slice(&[b0, t0, b1, b1, t0, t1, b1, t0, b0, t1, t0, b1]);
     }
 
     // Pointed top
@@ -1552,14 +1556,7 @@ fn generate_tree_billboard_cross(
         let t0 = trunk_base + i * 2 + 1;
         let t1 = trunk_base + next * 2 + 1;
 
-        indices.extend_from_slice(&[
-            t0,
-            t1,
-            tip_index,
-            tip_index,
-            t1,
-            t0,
-        ]);
+        indices.extend_from_slice(&[t0, t1, tip_index, tip_index, t1, t0]);
     }
 }
 
@@ -1741,7 +1738,7 @@ fn generate_tree_mesh(
         structure.base_length,
         structure.base_thickness,
         structure.seed,
-        render_params.leaf_scale
+        render_params.leaf_scale,
     );
 
     // Generate branch geometry

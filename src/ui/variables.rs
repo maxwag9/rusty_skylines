@@ -373,7 +373,7 @@ pub fn load_colors(path: PathBuf, settings: &Settings, vars: &mut Variables) {
         //println!("'{}'", key);
         //println!("{}", value_str);
         keys.push(key);
-        let value = Value::from_str(settings, vars, value_str, true, true);
+        let value = Value::from_str_pure(value_str);
         match &value {
             Value::Array(_) => {}
             _ => {
