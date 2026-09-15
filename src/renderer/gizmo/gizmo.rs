@@ -11,7 +11,7 @@ use crate::ui::ui_editor::Ui;
 use crate::ui::vertex::{LineVtxWorld, TextVtxRender, ThickLineVtxRender, ThinLineVtxRender};
 use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::{Zoning, ZoningStorage, point_in_polygon_xz};
-use crate::world::camera::Camera;
+use crate::world::camera::{Camera, CameraMode};
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::parking::{PARK_L, PARK_W, ParkingStorage};
 use crate::world::cars::partitions::PartitionId;
@@ -865,9 +865,9 @@ impl Gizmo {
         thickness: f32,
         duration: f32,
     ) {
-        let cs = chunk_size() as f32;
-        let delta = end.to_relative_pos(start);
+        let delta = end.delta_to(start);
         let len = delta.length();
+
         if len < 0.0001 {
             return;
         }
@@ -878,34 +878,40 @@ impl Gizmo {
 
         let mut verts = Vec::new();
 
-        // Parameters
         let target_spacing = 150.0;
         let steps = (len / target_spacing).ceil().max(1.0) as usize;
         let step_len = len / steps as f32;
         let dash_ratio = if dashed { 0.5 } else { 1.0 };
         let dash_len = step_len * dash_ratio;
 
-        let head_len = 0.15;
-        let head_width = 0.30;
+        let head_ratio = 0.15;
+        let head_width_ratio = 2.0;
+
         let spin_speed = 1.0;
         let time = self.total_game_time as f32;
 
-        // Generate arrow heads from end backwards
         for i in 0..steps {
-            let t_head = len - i as f32 * step_len;
-            if t_head <= 0.0 {
+            let t0 = i as f32 * step_len;
+            let t1 = (t0 + dash_len).min(len);
+
+            if t0 >= len {
                 break;
             }
 
-            let t0 = (t_head - dash_len).max(0.0);
             let p0 = start.add_vec3(dir * t0);
-            let p1 = start.add_vec3(dir * t_head);
+            let p1 = start.add_vec3(dir * t1);
 
-            // Shaft segment
             verts.push(LineVtxWorld::new(p0, color));
             verts.push(LineVtxWorld::new(p1, color));
 
-            // Arrow head
+            let segment_len = t1 - t0;
+            if segment_len <= 0.0001 {
+                continue;
+            }
+
+            let head_len = segment_len * head_ratio;
+            let head_width = head_len * head_width_ratio;
+
             let angle = time * spin_speed + (i as f32 * 12.9898).sin() * PI;
             let rot = rotate_frame(side, up_perp, angle);
             let back = p1.add_vec3(-dir * head_len);
@@ -918,10 +924,13 @@ impl Gizmo {
 
         self.push(verts, thickness, duration, false);
 
-        let right = Vec3::new(dir.z, 0.0, -dir.x).normalize() * thickness;
-        let left_start = start.sub_vec3(right);
-        let right_end = start.add_vec3(right);
-        self.line(left_start, right_end, color, thickness, duration);
+        if with_start_stopper {
+            let right = Vec3::new(dir.z, 0.0, -dir.x).normalize() * thickness;
+            let left_start = start.sub_vec3(right);
+            let right_start = start.add_vec3(right);
+
+            self.line(left_start, right_start, color, thickness, duration);
+        }
     }
 
     pub fn tile(
@@ -1218,7 +1227,7 @@ impl Gizmo {
         camera: &Camera,
     ) {
         self.total_game_time = total_game_time;
-        let target = camera.target;
+        let target = camera.debug_anchor(10.0);
 
         let mut renders = pending_gizmo_renders()
             .lock()
@@ -1528,8 +1537,7 @@ impl Gizmo {
     pub fn update_orbit_gizmo(
         &mut self,
         ui: &mut Ui,
-        target: WorldPos,
-        orbit_radius: f32,
+        camera: &Camera,
         sun_direction: Vec3,
         moon_direction: Vec3,
         scale_with_orbit: bool,
@@ -1541,10 +1549,13 @@ impl Gizmo {
             .unwrap_or(false);
         ui.variables.set_bool("debug_mode", debug_menu_active);
         if debug_menu_active {
-            let scale = scale_with_orbit
-                .then_some(orbit_radius * 0.1)
-                .unwrap_or(1.0);
-            self.axes_with_sun(target, scale, sun_direction, moon_direction, 0.0, 0.0);
+            let anchor = camera.debug_anchor(1.5);
+            let scale = match camera.mode {
+                CameraMode::Orbit if scale_with_orbit => camera.orbit_radius * 0.1,
+                CameraMode::Orbit => 1.0,
+                CameraMode::FirstPerson => return, // 0.01, // fixed, human-scale gizmo
+            };
+            self.axes_with_sun(anchor, scale, sun_direction, moon_direction, 0.0, 0.0);
         }
     }
 

@@ -1,19 +1,41 @@
 name: Write
-
+pitch_scale: 1.05
+time_scale: 1.0
 layers:
   - waveform: Noise
-    start_freq: 850.0
-    end_freq: 1150.0
-    fm_ratio: 1.0
-    fm_amount: 0.25
-    gain: 0.42
-
-duration: 0.045
-attack: 0.004
-decay: 0.008
-sustain: 0.0
-release: 0.035
-glide_curve: 1.0
-gain: 0.12
+    start_freq: 920.0
+    end_freq: 1280.0
+    glide_curve: 1.4
+    fm_ratio: 1.1
+    fm_amount: 0.3
+    pulse_width: 0.5
+    delay: 0.0
+    duration: 0.032
+    attack: 0.001
+    decay: 0.012
+    sustain: 0.0
+    release: 0.022
+    lp_freq: 4200.0
+    hp_freq: 600.0
+    gain: 0.55
+    pan: 0.0
+  - waveform: Pulse
+    start_freq: 2100.0
+    end_freq: 1650.0
+    glide_curve: 0.8
+    fm_ratio: 2.0
+    fm_amount: 0.12
+    pulse_width: 0.18
+    delay: 0.0
+    duration: 0.028
+    attack: 0.0
+    decay: 0.008
+    sustain: 0.0
+    release: 0.018
+    lp_freq: 5500.0
+    hp_freq: 900.0
+    gain: 0.22
+    pan: 0.08
+gain: 0.14
 pan: 0.0
 deduplication_time: 0.02

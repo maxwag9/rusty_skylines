@@ -1,0 +1,23 @@
+name: Console
+layers:
+  - name: main_menu_buttons
+    order: 300000000
+    elements:
+      - !Text
+        id: console_text
+        actions:
+          - scope:always open_menu(self.menu);
+        x: 10
+        y: 700
+        pt: 10.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.4
+        text: '{current_console_line}'
+        anchor: TopLeft
+        misc:
+          pressable: false
+
+

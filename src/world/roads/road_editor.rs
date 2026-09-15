@@ -2,7 +2,7 @@ use crate::helpers::positions::{LocalPos, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::ui::input::Input;
 use crate::world::roads::road_helpers::*;
-use crate::world::roads::road_mesh_manager::{CLEARANCE, ChunkId};
+use crate::world::roads::road_mesh_manager::{CLEARANCE, ChunkCoord};
 use crate::world::roads::road_structs::*;
 use crate::world::roads::roads::{
     Lane, LaneGeometry, METERS_PER_LANE_POLYLINE_STEP, RoadCommand, RoadManager, RoadStorage,
@@ -47,7 +47,7 @@ pub struct RoadEditor {
     //allocator: IdAllocator,
     pub style: RoadStyleParams,
     pub pending_outside_commands: Vec<RoadEditorCommand>,
-    pub pending_chunk_rebuilds: Vec<ChunkId>,
+    pub pending_chunk_rebuilds: Vec<ChunkCoord>,
     pub last_road_length: f64,
 }
 
@@ -94,7 +94,7 @@ impl RoadEditor {
             return output;
         };
 
-        let chunk_id = picked.chunk.id;
+        let chunk_coord = picked.chunk.chunk_coord;
         let snap = self.find_best_snap(storage, terrain, picked.pos, gizmo);
 
         output.push(RoadEditorCommand::PreviewSnap(SnapPreview {
@@ -124,7 +124,7 @@ impl RoadEditor {
                     &start,
                     &snap,
                     place_pressed,
-                    chunk_id,
+                    chunk_coord,
                     city_state,
                     &mut output,
                     gizmo,
@@ -148,7 +148,7 @@ impl RoadEditor {
                     control,
                     &snap,
                     place_pressed,
-                    chunk_id,
+                    chunk_coord,
                     city_state,
                     &mut output,
                     gizmo,
@@ -192,7 +192,7 @@ impl RoadEditor {
         start: &Anchor,
         snap: &SnapResult,
         place_pressed: bool,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
         city_state: &mut CityState,
         output: &mut Vec<RoadEditorCommand>,
         gizmo: &mut Gizmo,
@@ -316,7 +316,7 @@ impl RoadEditor {
                 start,
                 &end_anchor,
                 None,
-                chunk_id,
+                chunk_coord,
                 output,
                 gizmo,
             );
@@ -394,7 +394,7 @@ impl RoadEditor {
         control: WorldPos,
         snap: &SnapResult,
         place_pressed: bool,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
         city_state: &mut CityState,
         output: &mut Vec<RoadEditorCommand>,
         gizmo: &mut Gizmo,
@@ -532,7 +532,7 @@ impl RoadEditor {
                 start,
                 &end_anchor,
                 Some(control),
-                chunk_id,
+                chunk_coord,
                 output,
                 gizmo,
             );
@@ -1003,7 +1003,7 @@ impl RoadEditor {
         start: &Anchor,
         end: &Anchor,
         control: Option<WorldPos>,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
         output: &mut Vec<RoadEditorCommand>,
         gizmo: &mut Gizmo,
     ) -> Vec<RoadCommand> {
@@ -1035,7 +1035,7 @@ impl RoadEditor {
 
         // Resolve start anchor
         let Some((start_node_id, start_node_pos)) =
-            self.resolve_anchor(storage, start, chunk_id, &mut cmds)
+            self.resolve_anchor(storage, start, chunk_coord, &mut cmds)
         else {
             return Vec::new();
         };
@@ -1051,13 +1051,13 @@ impl RoadEditor {
             let node_id = match crossing.kind {
                 CrossingKind::ExistingNode(id) => id,
                 CrossingKind::LaneCrossing { lane_id, .. } => {
-                    let Some(split) = self.plan_split(storage, lane_id, crossing.pos, chunk_id)
+                    let Some(split) = self.plan_split(storage, lane_id, crossing.pos, chunk_coord)
                     else {
                         continue;
                     };
                     cmds.extend(split.commands);
                     for node_id in split.endpoint_nodes {
-                        push_intersection_for_node(&mut cmds, node_id, chunk_id);
+                        push_intersection_for_node(&mut cmds, node_id, chunk_coord);
                     }
                     split.new_node_id
                 }
@@ -1072,7 +1072,7 @@ impl RoadEditor {
 
         // Resolve end anchor
         let Some((end_node_id, end_node_pos)) =
-            self.resolve_anchor(storage, end, chunk_id, &mut cmds)
+            self.resolve_anchor(storage, end, chunk_coord, &mut cmds)
         else {
             return cmds;
         };
@@ -1117,7 +1117,7 @@ impl RoadEditor {
                 start: from.node_id,
                 end: to.node_id,
                 structure: road_type.structure(),
-                chunk_id,
+                chunk_coord,
                 road_type_id: self.style.road_type_id(),
             });
 
@@ -1130,14 +1130,14 @@ impl RoadEditor {
                 from.node_id,
                 to.node_id,
                 &segment_centerline,
-                chunk_id,
+                chunk_coord,
             );
         }
 
         // Generate intersections for all waypoint nodes
         for waypoint in &waypoints {
             //println!("node {:?} exists: {}", waypoint.node_id, storage.node(waypoint.node_id).is_some());
-            push_intersection_for_node(&mut cmds, waypoint.node_id, chunk_id);
+            push_intersection_for_node(&mut cmds, waypoint.node_id, chunk_coord);
         }
         cmds
     }
@@ -1513,7 +1513,7 @@ impl RoadEditor {
         &mut self,
         storage: &mut RoadStorage,
         anchor: &Anchor,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
         cmds: &mut Vec<RoadCommand>,
     ) -> Option<(NodeId, WorldPos)> {
         match &anchor.planned_node {
@@ -1530,10 +1530,10 @@ impl RoadEditor {
                 Some((node_id, *pos))
             }
             PlannedNode::Split { lane_id, pos, .. } => {
-                let split = self.plan_split(storage, *lane_id, *pos, chunk_id)?;
+                let split = self.plan_split(storage, *lane_id, *pos, chunk_coord)?;
                 cmds.extend(split.commands);
                 for node_id in split.endpoint_nodes {
-                    push_intersection_for_node(cmds, node_id, chunk_id);
+                    push_intersection_for_node(cmds, node_id, chunk_coord);
                 }
 
                 Some((split.new_node_id, *pos))
@@ -1546,7 +1546,7 @@ impl RoadEditor {
         storage: &mut RoadStorage,
         lane_id: LaneId,
         split_pos: WorldPos,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
     ) -> Option<SegmentSplit> {
         let lane = storage.lane(lane_id);
         let old_segment_id = lane.segment();
@@ -1600,7 +1600,7 @@ impl RoadEditor {
 
         cmds.push(RoadCommand::DeleteSegment {
             segment_id: old_segment_id,
-            chunk_id,
+            chunk_coord,
             remove_orphan_nodes: false,
         });
 
@@ -1629,7 +1629,7 @@ impl RoadEditor {
             start: a_id,
             end: split_node_id,
             structure: old_segment.structure(),
-            chunk_id,
+            chunk_coord,
             road_type_id: old_segment.road_type_id,
         });
 
@@ -1638,7 +1638,7 @@ impl RoadEditor {
             start: split_node_id,
             end: b_id,
             structure: old_segment.structure(),
-            chunk_id,
+            chunk_coord,
             road_type_id: old_segment.road_type_id,
         });
 
@@ -1659,7 +1659,7 @@ impl RoadEditor {
                     speed_limit: old_lane.speed_limit(),
                     capacity: old_lane.capacity(),
                     vehicle_mask: old_lane.vehicle_mask(),
-                    chunk_id,
+                    chunk_coord,
                 });
 
                 let lane2 = storage.alloc_lane_id();
@@ -1673,7 +1673,7 @@ impl RoadEditor {
                     speed_limit: old_lane.speed_limit(),
                     capacity: old_lane.capacity(),
                     vehicle_mask: old_lane.vehicle_mask(),
-                    chunk_id,
+                    chunk_coord,
                 });
             } else {
                 let lane1 = storage.alloc_lane_id();
@@ -1687,7 +1687,7 @@ impl RoadEditor {
                     speed_limit: old_lane.speed_limit(),
                     capacity: old_lane.capacity(),
                     vehicle_mask: old_lane.vehicle_mask(),
-                    chunk_id,
+                    chunk_coord,
                 });
 
                 let lane2 = storage.alloc_lane_id();
@@ -1701,7 +1701,7 @@ impl RoadEditor {
                     speed_limit: old_lane.speed_limit(),
                     capacity: old_lane.capacity(),
                     vehicle_mask: old_lane.vehicle_mask(),
-                    chunk_id,
+                    chunk_coord,
                 });
             }
         }
@@ -1723,7 +1723,7 @@ impl RoadEditor {
         start: NodeId,
         end: NodeId,
         centerline: &[WorldPos],
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
     ) {
         let (left_lanes, right_lanes) = road_type.lanes_each_direction();
         let speed = road_type.speed_limit();
@@ -1753,7 +1753,7 @@ impl RoadEditor {
                 speed_limit: speed,
                 capacity,
                 vehicle_mask: mask,
-                chunk_id,
+                chunk_coord,
             });
         }
 
@@ -1780,7 +1780,7 @@ impl RoadEditor {
                 speed_limit: speed,
                 capacity,
                 vehicle_mask: mask,
-                chunk_id,
+                chunk_coord,
             });
         }
     }

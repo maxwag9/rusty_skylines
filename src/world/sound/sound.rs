@@ -1116,9 +1116,9 @@ fn fill_audio_buffer(
         }
 
         for (voice, (pl, pr)) in state.active_sfx.iter_mut().zip(sfx_pan.iter()) {
-            let sample = voice.next_sample();
-            left += sample * pl;
-            right += sample * pr;
+            let (l, r) = voice.next_sample();
+            left += l * pl;
+            right += r * pr;
         }
 
         if channels >= 2 {

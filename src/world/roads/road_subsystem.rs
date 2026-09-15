@@ -1,6 +1,6 @@
 //! road_mesh_renderer.rs
 use crate::world::roads::road_editor::RoadEditor;
-use crate::world::roads::road_mesh_manager::{ChunkId, MeshConfig, RoadMeshManager};
+use crate::world::roads::road_mesh_manager::{ChunkCoord, MeshConfig, RoadMeshManager};
 use crate::world::roads::roads::{
     RoadManager, apply_road_commands_preview, apply_road_commands_real, collect_affected_chunks,
 };
@@ -31,8 +31,8 @@ pub struct ChunkGpuMesh {
 pub struct RoadRenderSubsystem {
     pub mesh_manager: RoadMeshManager,
 
-    pub chunk_gpu: HashMap<ChunkId, ChunkGpuMesh>,
-    pub visible_draw_list: Vec<ChunkId>,
+    pub chunk_gpu: HashMap<ChunkCoord, ChunkGpuMesh>,
+    pub visible_draw_list: Vec<ChunkCoord>,
 
     pub preview_gpu: PreviewGpuMesh,
     pub road_appearance: RoadAppearanceGpu,
@@ -80,10 +80,10 @@ impl RoadRenderSubsystem {
         // --- Chunk meshes for committed roads ---
         // Rebuild any dirty chunk meshes from commands
         let affected_chunks = collect_affected_chunks(roads.road_commands.as_slice());
-        for chunk_id in &affected_chunks {
+        for chunk_coord in &affected_chunks {
             self.mesh_manager.update_chunk_mesh(
                 terrain,
-                *chunk_id,
+                *chunk_coord,
                 &roads.road_manager,
                 &roads.road_editor.style,
                 gizmo,
@@ -95,25 +95,25 @@ impl RoadRenderSubsystem {
         let mut chunk_rebuild_ids = std::mem::take(&mut roads.road_editor.pending_chunk_rebuilds);
 
         for v in &terrain.visible {
-            let chunk_id = v.id;
+            let chunk_coord = v.chunk_coord;
 
             let needs_rebuild = self
                 .mesh_manager
-                .chunk_needs_update(chunk_id, &roads.road_manager.roads);
+                .chunk_needs_update(chunk_coord, &roads.road_manager.roads);
             if needs_rebuild {
-                chunk_rebuild_ids.push(chunk_id)
+                chunk_rebuild_ids.push(chunk_coord)
             } else {
-                let mesh = match self.mesh_manager.get_chunk_mesh(chunk_id) {
+                let mesh = match self.mesh_manager.get_chunk_mesh(chunk_coord) {
                     Some(m) => m,
                     None => continue,
                 };
 
                 if mesh.indices.is_empty() || mesh.vertices.is_empty() {
-                    self.chunk_gpu.remove(&chunk_id);
+                    self.chunk_gpu.remove(&chunk_coord);
                     continue;
                 }
 
-                let needs_gpu_upload = match self.chunk_gpu.get(&chunk_id) {
+                let needs_gpu_upload = match self.chunk_gpu.get(&chunk_coord) {
                     Some(gpu) => gpu.topo_version != mesh.topo_version,
                     None => true,
                 };
@@ -132,7 +132,7 @@ impl RoadRenderSubsystem {
                     });
 
                     self.chunk_gpu.insert(
-                        chunk_id,
+                        chunk_coord,
                         ChunkGpuMesh {
                             vertex: vb,
                             index: ib,
@@ -142,27 +142,27 @@ impl RoadRenderSubsystem {
                     );
                 }
 
-                if self.chunk_gpu.contains_key(&chunk_id) {
-                    self.visible_draw_list.push(chunk_id);
+                if self.chunk_gpu.contains_key(&chunk_coord) {
+                    self.visible_draw_list.push(chunk_coord);
                 }
             };
         }
 
-        for chunk_id in chunk_rebuild_ids {
+        for chunk_coord in chunk_rebuild_ids {
             let mesh = self.mesh_manager.update_chunk_mesh(
                 terrain,
-                chunk_id,
+                chunk_coord,
                 &roads.road_manager,
                 &roads.road_editor.style,
                 gizmo,
             );
 
             if mesh.indices.is_empty() || mesh.vertices.is_empty() {
-                self.chunk_gpu.remove(&chunk_id);
+                self.chunk_gpu.remove(&chunk_coord);
                 continue;
             }
 
-            let needs_gpu_upload = match self.chunk_gpu.get(&chunk_id) {
+            let needs_gpu_upload = match self.chunk_gpu.get(&chunk_coord) {
                 Some(gpu) => gpu.topo_version != mesh.topo_version,
                 None => true,
             };
@@ -181,7 +181,7 @@ impl RoadRenderSubsystem {
                 });
 
                 self.chunk_gpu.insert(
-                    chunk_id,
+                    chunk_coord,
                     ChunkGpuMesh {
                         vertex: vb,
                         index: ib,
@@ -191,8 +191,8 @@ impl RoadRenderSubsystem {
                 );
             }
 
-            if self.chunk_gpu.contains_key(&chunk_id) {
-                self.visible_draw_list.push(chunk_id);
+            if self.chunk_gpu.contains_key(&chunk_coord) {
+                self.visible_draw_list.push(chunk_coord);
             }
         }
     }

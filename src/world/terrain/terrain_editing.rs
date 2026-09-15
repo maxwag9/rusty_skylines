@@ -542,6 +542,7 @@ impl TerrainEditor {
     ) -> Vec<GpuChunkHandle> {
         // Drain here so we don't hold a borrow on self during the loop.
         let dirty: Vec<ChunkCoord> = self.dirty_chunks.drain().collect();
+        //info!("{:?}", dirty);
         let mut freed = Vec::new();
 
         for coord in dirty.iter() {
@@ -553,12 +554,12 @@ impl TerrainEditor {
         }
         // for coord in dirty {
         //     roads.road_manager.roads.update_heights_in_chunk(chunks, terrain_gen, coord);
-        //     roads.road_editor.pending_chunk_rebuilds.push(coord.chunk_id());
-        //     for node_id in roads.road_manager.roads.nodes_in_chunk(coord.chunk_id()) {
+        //     roads.road_editor.pending_chunk_rebuilds.push(coord.chunk_coord());
+        //     for node_id in roads.road_manager.roads.nodes_in_chunk(coord.chunk_coord()) {
         //         // roads.road_editor.pending_outside_commands.push(RoadEditorCommand::Road(MakeIntersection {
         //         //     node_id,
         //         //     intersection_params: IntersectionBuildParams::default(),
-        //         //     chunk_id: coord.chunk_id(),
+        //         //     chunk_coord: coord.chunk_coord(),
         //         //     recalc_clearance: true
         //         // }))
         //     }

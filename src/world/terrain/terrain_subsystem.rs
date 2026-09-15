@@ -11,9 +11,11 @@ use crate::simulation::Ticker;
 use crate::ui::input::Input;
 use crate::ui::variables::Variables;
 use crate::ui::vertex::Vertex;
-use crate::world::buildings::zoning::ZoningType;
+use crate::world::buildings::building_mesher::BuildingMeshBuilder;
+use crate::world::buildings::buildings::BuildingId;
+use crate::world::buildings::zoning::{LotId, ZoningType};
 use crate::world::camera::Camera;
-use crate::world::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
+use crate::world::roads::road_mesh_manager::ChunkCoord;
 use crate::world::roads::road_structs::RoadType;
 use crate::world::roads::road_subsystem::Roads;
 use crate::world::terrain::chunk_builder::*;
@@ -31,19 +33,14 @@ use std::time::Instant;
 use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ChunkCoords {
+pub struct VisibleChunk {
     pub chunk_coord: ChunkCoord, // Y IS UP/DOWN LIKE IN MINECRAFT NOT CRINGE Z LIKE BLENDER ETC. (Blender is awesome)
     pub dist2: i32,              // In chunk space
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct VisibleChunk {
-    pub coords: ChunkCoords,
-    pub id: ChunkId,
 }
 #[derive(Clone)]
 pub struct PickedPoint {
     pub pos: WorldPos,
-    pub chunk: VisibleChunk,
+    pub chunk: VisibleChunk, //Entf x2
 }
 
 #[derive(Clone, Copy)]
@@ -58,6 +55,7 @@ pub enum CursorMode {
     None,
     Roads,
     Zoning,
+    Buildings,
     Props,
     TerrainEditing,
     Cars,
@@ -70,6 +68,7 @@ impl From<String> for CursorMode {
             "none" => CursorMode::None,
             "roads" => CursorMode::Roads,
             "zoning" => CursorMode::Zoning,
+            "buildings" => CursorMode::Buildings,
             "props" => CursorMode::Props,
             "terrain_editing" => CursorMode::TerrainEditing,
             "cars" => CursorMode::Cars,
@@ -80,10 +79,11 @@ impl From<String> for CursorMode {
     }
 }
 impl CursorMode {
-    fn order() -> [CursorMode; 8] {
+    fn order() -> [CursorMode; 9] {
         [
             CursorMode::Roads,
             CursorMode::Zoning,
+            CursorMode::Buildings,
             CursorMode::Area,
             CursorMode::Props,
             CursorMode::TerrainEditing,
@@ -93,23 +93,9 @@ impl CursorMode {
         ]
     }
 
-    fn kind_eq(a: &CursorMode, b: &CursorMode) -> bool {
-        matches!(
-            (a, b),
-            (CursorMode::None, CursorMode::None)
-                | (CursorMode::Props, CursorMode::Props)
-                | (CursorMode::Cars, CursorMode::Cars)
-                | (CursorMode::TerrainEditing, CursorMode::TerrainEditing)
-                | (CursorMode::Roads, CursorMode::Roads)
-                | (CursorMode::Zoning, CursorMode::Zoning)
-                | (CursorMode::Area, CursorMode::Area)
-                | (CursorMode::Destruction, CursorMode::Destruction)
-        )
-    }
-
     pub fn next(&self) -> CursorMode {
         let order = Self::order();
-        let i = order.iter().position(|m| Self::kind_eq(m, self)).unwrap();
+        let i = order.iter().position(|m| m == self).unwrap();
         order[(i + 1) % order.len()].to_owned()
     }
 
@@ -117,12 +103,32 @@ impl CursorMode {
         Command::SetCursorMode(self.next())
     }
 }
+#[derive(Debug, Clone)]
+pub struct PreviewBuildingModel {
+    pub vertex: Buffer,
+    pub index: Buffer,
+    pub mesh: BuildingMeshBuilder,
+    pub signature: u64,
+    pub old_pos: WorldPos,
+    pub old_dir: Vec3,
+}
+#[derive(Debug, Clone)]
+pub struct PreviewBuilding {
+    pub name: String,
+    pub cached_model: Option<PreviewBuildingModel>,
+    pub new_pos: WorldPos,
+    pub new_dir: Vec3,
+    pub lot_id: LotId,
+    pub building_id: BuildingId,
+}
+
 #[derive(Debug)]
 pub struct Cursor {
     pub mode: CursorMode,
     pub road_type: RoadType,
     pub prop_name: String,
     pub zoning_type: Option<ZoningType>,
+    pub preview_building: Option<PreviewBuilding>,
 }
 
 impl Cursor {
@@ -132,6 +138,7 @@ impl Cursor {
             road_type: RoadType::default(),
             prop_name: "oak".to_string(),
             zoning_type: None,
+            preview_building: None,
         }
     }
 }
@@ -178,7 +185,7 @@ impl TerrainJobs {
                 break;
             }
 
-            let coord = v.coords.chunk_coord;
+            let coord = v.chunk_coord;
             let coord_x_neg = ChunkCoord::new(coord.x - 1, coord.z);
             let coord_x_pos = ChunkCoord::new(coord.x + 1, coord.z);
             let coord_z_neg = ChunkCoord::new(coord.x, coord.z - 1);
@@ -212,7 +219,7 @@ impl TerrainJobs {
             let has_edits = terrain_editor.has_edits_on_chunk(coord);
 
             let (version, version_atomic) = self.workers.new_version_for(coord);
-            let priority = (u64::MAX - v.coords.dist2 as u64) / 16;
+            let priority = (u64::MAX - v.dist2 as u64) / 16;
 
             let terrain_edits_snapshot = TerrainEditsSnapshot {
                 edits: Arc::new(terrain_editor.edits.clone()),
@@ -469,7 +476,7 @@ impl Terrain {
         aspect: f32,
         settings: &Settings,
         input_state: &mut Input,
-        _time: &Time,
+        time: &mut Time,
         roads: &mut Roads,
         props: &mut Props,
         variables: &Variables,
@@ -499,15 +506,15 @@ impl Terrain {
         // } else {
         //     // Just re-sort by distance
         //     self.visible.sort_unstable_by_key(|v| {
-        //         let dx = v.coords.chunk_coord.x - current_chunk.x;
-        //         let dz = v.coords.chunk_coord.z - current_chunk.z;
+        //         let dx = v.chunk_coord.x - current_chunk.x;
+        //         let dz = v.chunk_coord.z - current_chunk.z;
         //         dx*dx + dz*dz
         //     });
         // }
         self.frame_timings.collect_visible_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
-        self.visible.sort_unstable_by_key(|v| v.coords.dist2);
+        self.visible.sort_unstable_by_key(|v| v.dist2);
         self.frame_timings.sort_visible_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
@@ -530,10 +537,12 @@ impl Terrain {
         self.frame_timings.unload_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
+
+        time.timer.checkpoint("T-Edit", false);
         if settings.show_world {
             self.handle_terrain_editing(input_state, roads);
         }
-
+        time.timer.checkpoint("T-Edit", true);
         self.frame_timings.edit_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         self.frame_timings.total_ms = t_frame.elapsed().as_secs_f32() * 1000.0;
@@ -735,11 +744,8 @@ impl Terrain {
 
             if aabb_in_frustum(&frame.planes, min, max) {
                 visible.push(VisibleChunk {
-                    coords: ChunkCoords {
-                        chunk_coord: coord,
-                        dist2,
-                    },
-                    id: chunk_coord_to_id(coord.x, coord.z),
+                    chunk_coord: coord,
+                    dist2,
                 });
             }
         }
@@ -761,7 +767,7 @@ impl Terrain {
         let mut base_steps = Vec::with_capacity(n);
 
         for (i, v) in self.visible.iter().enumerate() {
-            let dist2 = v.coords.dist2;
+            let dist2 = v.dist2;
 
             let step = if dist2 > r2_gen {
                 lod_step_for_distance(r2_gen + 1)
@@ -770,14 +776,14 @@ impl Terrain {
             };
 
             base_steps.push(step);
-            self.lod_coord_to_index.insert(v.coords.chunk_coord, i);
+            self.lod_coord_to_index.insert(v.chunk_coord, i);
         }
 
         self.lod_steps_buffer = base_steps.clone();
 
         // single stabilization pass only
         for (i, v) in self.visible.iter().enumerate() {
-            let coord = v.coords.chunk_coord;
+            let coord = v.chunk_coord;
             let s = base_steps[i];
 
             let mut max_n = s;
@@ -815,8 +821,7 @@ impl Terrain {
         self.lod_map.reserve(n);
 
         for (i, v) in self.visible.iter().enumerate() {
-            self.lod_map
-                .insert(v.coords.chunk_coord, self.lod_steps_buffer[i]);
+            self.lod_map.insert(v.chunk_coord, self.lod_steps_buffer[i]);
         }
     }
 
@@ -829,7 +834,7 @@ impl Terrain {
         // Build a set of currently-visible coords so we never unload them.
         let mut visible_set: HashSet<ChunkCoord> = HashSet::with_capacity(self.visible.len());
         for v in self.visible.iter() {
-            visible_set.insert(v.coords.chunk_coord);
+            visible_set.insert(v.chunk_coord);
         }
 
         let mut to_remove = Vec::new();
@@ -904,11 +909,8 @@ impl Terrain {
                 {
                     // Update last picked info
                     let visible_chunk = VisibleChunk {
-                        coords: ChunkCoords {
-                            chunk_coord,
-                            dist2: 0,
-                        },
-                        id: chunk_coord_to_id(cx, cz),
+                        chunk_coord,
+                        dist2: 0,
                     };
 
                     self.last_picked = Some(PickedPoint {

@@ -42,17 +42,17 @@ layers:
         w: 400
         h: 400
         rotation: 0.0
+        texture: "shader:shaders/fun!/test.wgsl"
         color:
           - 0.01
           - 0.01
           - 0.01
-          - 0.98
+          - 0.08
         border_color:
           - 1.0
           - 1.0
           - 1.0
           - 1.0
-        texture: null
         roundness: 0.2
         border_thickness: 4
         fade: 0.0
@@ -126,6 +126,19 @@ layers:
           - 1.0
           - 1.0
         text: RUSTY SKYLINES
+
+
+      - !Advanced
+        name: sound_button
+        ap_name: button
+        ap_vars:
+          - "str:Audio Jungle"
+          - "40"
+          - "str:on:r call(rust:str:play_sound, str:PlaceBuilding)"
+        x: 960
+        y: 1030
+        scale: 1.0
+
     editing_tool: false
 #  - name: test_buttons
 #    order: 3

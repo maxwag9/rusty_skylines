@@ -1,5 +1,4 @@
 #![allow(dead_code, unused_variables)]
-use crate::world::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
 use glam::{Vec2, Vec3};
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
@@ -66,10 +65,6 @@ impl ChunkCoord {
     #[inline]
     pub fn as_slice(self) -> [i32; 2] {
         [self.x, self.z]
-    }
-    #[inline]
-    pub fn chunk_id(self) -> ChunkId {
-        chunk_coord_to_id(self.x, self.z)
     }
     #[inline]
     pub fn get_chunks_plus(&self) -> Vec<ChunkCoord> {

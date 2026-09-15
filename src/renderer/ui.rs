@@ -12,16 +12,13 @@ use crate::ui::input::Input;
 use crate::ui::ui_editor::Ui;
 use crate::ui::ui_touch_manager::{ElementRef, UiTouchManager};
 use crate::ui::vertex::{
-    PolygonEdgeGpu, PolygonInfoGpu, RuntimeLayer, UiButtonPolygon, UiButtonText, UiElement,
-    UiVertexPoly, UiVertexText,
+    PolygonEdgeGpu, PolygonInfoGpu, RectTextureType, RuntimeLayer, UiButtonPolygon, UiButtonText,
+    UiElement, UiVertexPoly, UiVertexText,
 };
 use sluggrs::Color;
-// use glyphon::{
-//     Cache, FontSystem, Resolution, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer,
-//     Viewport, fontdb,
-// };
 use sluggrs::*;
 use std::fs;
+use std::path::Path;
 use wgpu::*;
 use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions};
 use wgpu_render_manager::renderer::RenderManager;
@@ -314,12 +311,13 @@ impl UiRenderer {
         ui: &mut Ui,
         time: &Time,
         input_state: &Input,
+        device: &Device,
         queue: &Queue,
         window_size: PhysicalSize<f32>,
         settings: &Settings,
     ) {
         let new_uniform = ScreenUniform {
-            size: [window_size.width as f32, window_size.height as f32],
+            size: [window_size.width, window_size.height],
             time: time.total_time as f32,
             enable_dither: 1,
             mouse: input_state.mouse.pos.to_array(),
@@ -365,6 +363,8 @@ impl UiRenderer {
                     &ui.touch_manager.runtimes,
                     &ui.aps,
                     window_size,
+                    device,
+                    queue,
                 ));
 
                 let layer = &mut menu.layers[idx];
@@ -529,6 +529,31 @@ impl UiRenderer {
                     }
                     UiElement::Rect(rect) => {
                         if let Some(bg1) = rect_bg.as_ref() {
+                            if let Some(cached_texture) = rect.cached_texture.as_ref() {
+                                match cached_texture {
+                                    RectTextureType::Shader(path) => {
+                                        self.draw_rect_shader(
+                                            render_manager,
+                                            pipelines,
+                                            &mut pass,
+                                            path,
+                                            bg1,
+                                            rect_idx,
+                                        );
+                                    }
+                                    RectTextureType::Image(view) => {
+                                        self.draw_rect_image(
+                                            render_manager,
+                                            pipelines,
+                                            &mut pass,
+                                            view,
+                                            bg1,
+                                            rect_idx,
+                                        );
+                                    }
+                                }
+                            }
+
                             self.draw_rect(
                                 render_manager,
                                 pipelines,
@@ -1072,7 +1097,84 @@ impl UiRenderer {
         pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
         pass.draw(0..4, this_idx..this_idx + 1);
     }
+    fn draw_rect_shader(
+        &self,
+        render_manager: &mut RenderManager,
+        pipelines: &Pipelines,
+        pass: &mut RenderPass<'_>,
+        shader_path: &Path,
+        rect_bg: &BindGroup,
+        this_idx: u32,
+    ) {
+        let targets = color_target_ui(pipelines, Some(BlendState::ALPHA_BLENDING));
 
+        let options = &PipelineOptions {
+            topology: PrimitiveTopology::TriangleStrip,
+            multisample_state: multisample_state(1),
+            depth_stencil: Some(DepthStencilState {
+                format: UI_DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(UI_COMPARE_FUNCTION),
+                stencil: StencilState::default(),
+                bias: DepthBiasState::default(),
+            }),
+            vertex_layouts: vec![Some(UiVertexPoly::desc())],
+            fragment: FragmentOption::Default { targets },
+            ..Default::default()
+        };
+
+        render_manager.render_with_layouts_and_textures(
+            &[], // TODO: Allow textures to be bound and the shader to use it!!
+            shader_path,
+            &[&self.pipelines.rect_layout],
+            &[rect_bg],
+            options,
+            &[&self.pipelines.uniform_buffer],
+            pass,
+        );
+
+        pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
+        pass.draw(0..4, this_idx..this_idx + 1);
+    }
+    fn draw_rect_image(
+        &self,
+        render_manager: &mut RenderManager,
+        pipelines: &Pipelines,
+        pass: &mut RenderPass<'_>,
+        texture: &TextureView,
+        rect_bg: &BindGroup,
+        this_idx: u32,
+    ) {
+        let targets = color_target_ui(pipelines, Some(BlendState::ALPHA_BLENDING));
+
+        let options = &PipelineOptions {
+            topology: PrimitiveTopology::TriangleStrip,
+            multisample_state: multisample_state(1),
+            depth_stencil: Some(DepthStencilState {
+                format: UI_DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(UI_COMPARE_FUNCTION),
+                stencil: StencilState::default(),
+                bias: DepthBiasState::default(),
+            }),
+            vertex_layouts: vec![Some(UiVertexPoly::desc())],
+            fragment: FragmentOption::Default { targets },
+            ..Default::default()
+        };
+
+        render_manager.render_with_layouts_and_textures(
+            &[texture],
+            &shader_dir().join("ui_rect_image.wgsl"),
+            &[&self.pipelines.rect_layout],
+            &[rect_bg],
+            options,
+            &[&self.pipelines.uniform_buffer],
+            pass,
+        );
+
+        pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
+        pass.draw(0..4, this_idx..this_idx + 1);
+    }
     fn make_text_areas<'a>(
         &self,
         text: &'a UiButtonText,

@@ -26,7 +26,7 @@ global_actions:
 
   - scope:a button:"Resume" trigger:r, menu_active(PauseMenu); if(_result, call(back_to_the_game) ); set(str:just_resumed_from_pause_menu, _result);
   - scope:a button:"Leave Game" trigger:r, menu_active(MainMenu); if(_result, exit_game());
-  - scope:a button:"Exit to Main Menu" trigger:r in:any, if(expr:is_some({current_save}), if(expr:!{just_resumed_from_pause_menu}, call(open_pause_menus)), call(open_main_menus) ); set(str:just_resumed_from_pause_menu, false);
+  - scope:a button:"Exit to Main Menu" trigger:r in:any, ifvareq(cursor_mode, "None", if(expr:is_some({current_save}), if(expr:!{just_resumed_from_pause_menu}, call(open_pause_menus) ), call(open_main_menus) )); set(str:just_resumed_from_pause_menu, false); set(str:cursor_mode, "None")
 
   - on:startup, set(str:show_interaction, [
     "set(str:col, args.0);",

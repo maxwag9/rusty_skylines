@@ -693,12 +693,32 @@ layers:
           - pos: [ 18.0, 56.0 ]
             color: [ 0.18, 0.18, 0.18, 1.0 ]
       - !Advanced
-        name: place_building_test_button
+        name: place_building_button
         ap_name: button
         ap_vars:
-          - "str:Place Building"
-          - "40"
-          - "str:button:\"KeyF\" trigger:repeat call(rust:place_building, str:Aurora Spire)"
-        x: 960
-        y: 130
+          - "str:Buildings"
+          - "25"
+          - "str:on:r set(str:cursor_mode, str:Buildings); set(str:new_building, str:Aurora Spire); " #ifvareq(cursor_mode, Buildings, set(str:self.color.fill, [0.0, 1.0, 0.0, 1.0]))
+        x: 400
+        y: 1040
         scale: 1.0
+#      - !Advanced
+#        name: tp_nut__button
+#        ap_name: button
+#        ap_vars:
+#          - "str:NUT"
+#          - "20"
+#          - "str:on:r set(str:target_pos.z, 100000.0);"
+#        x: 400
+#        y: 940
+#        scale: 1.0
+#      - !Advanced
+#        name: tp_nut__button
+#        ap_name: textbox
+#        ap_vars:
+#          - "str:NUT"
+#          - "20"
+#          - "str:on:hover_exit set(str:target_pos.z, as.text);"
+#        x: 400
+#        y: 940
+#        scale: 1.0

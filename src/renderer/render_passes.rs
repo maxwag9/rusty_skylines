@@ -570,8 +570,115 @@ pub fn render_buildings<'a>(
     );
 
     draw_visible_buildings(pass, terrain, building_renderer);
+
+    if terrain.cursor.preview_building.is_some() {
+        let shadow = make_shadow_option(settings, pipelines);
+
+        // Reference used both to stamp the bit (Pass 1) and to test for it (Pass 2).
+        pass.set_stencil_reference(PREVIEW_STENCIL_BIT);
+
+        // Pass 1: always beats terrain, writes depth, stamps preview bit.
+        render_manager.render(
+            &[],
+            shader_path.as_path(),
+            &PipelineOptions {
+                topology: TriangleList,
+                depth_stencil: Some(preview_establish_depth_stencil()),
+                multisample_state: multisample_state(msaa_samples),
+                vertex_layouts: Vec::from([Some(BuildingVertex::layout())]),
+                cull_mode: Some(Face::Back),
+                fragment: FragmentOption::Default {
+                    targets: targets.clone(),
+                },
+                shadow: shadow.clone(),
+                ..Default::default()
+            },
+            &[&pipelines.buffers.camera],
+            pass,
+        );
+        draw_preview_building(pass, terrain);
+
+        // Pass 2: correct self-occlusion via a real depth test, restricted
+        // to pixels Pass 1 just touched.
+        render_manager.render(
+            &[],
+            shader_path.as_path(),
+            &PipelineOptions {
+                topology: TriangleList,
+                depth_stencil: Some(preview_resolve_depth_stencil(settings)),
+                multisample_state: multisample_state(msaa_samples),
+                vertex_layouts: Vec::from([Some(BuildingVertex::layout())]),
+                cull_mode: Some(Face::Back),
+                fragment: FragmentOption::Default { targets },
+                shadow,
+                ..Default::default()
+            },
+            &[&pipelines.buffers.camera],
+            pass,
+        );
+        draw_preview_building(pass, terrain);
+    }
+}
+/// Bit used by the building preview to mark "a preview fragment already
+/// wrote here this frame". Must not overlap terrain's underwater bit (0x01).
+const PREVIEW_STENCIL_BIT: u32 = 0x02;
+
+/// Pass 1: preview vs. terrain. Always wins, writes depth, stamps the
+/// preview stencil bit. Does not touch terrain's bit (write_mask restricts
+/// the Replace op to bit 1 only).
+fn preview_establish_depth_stencil() -> DepthStencilState {
+    DepthStencilState {
+        format: DEPTH_FORMAT,
+        depth_write_enabled: Some(true),
+        depth_compare: Some(CompareFunction::Always),
+        stencil: StencilState {
+            front: StencilFaceState {
+                compare: CompareFunction::Always,
+                fail_op: StencilOperation::Keep,
+                depth_fail_op: StencilOperation::Keep,
+                pass_op: StencilOperation::Replace,
+            },
+            back: StencilFaceState {
+                compare: CompareFunction::Always,
+                fail_op: StencilOperation::Keep,
+                depth_fail_op: StencilOperation::Keep,
+                pass_op: StencilOperation::Replace,
+            },
+            read_mask: PREVIEW_STENCIL_BIT,
+            write_mask: PREVIEW_STENCIL_BIT,
+        },
+        bias: DepthBiasState::default(),
+    }
 }
 
+/// Pass 2: preview vs. itself. Real depth compare, only active on pixels
+/// Pass 1 actually touched (Equal against the preview bit). Converges to
+/// the true nearest fragment via the normal z-buffer algorithm. Never
+/// writes stencil again — Pass 1 already stamped it correctly.
+fn preview_resolve_depth_stencil(settings: &Settings) -> DepthStencilState {
+    DepthStencilState {
+        format: DEPTH_FORMAT,
+        depth_write_enabled: Some(true),
+        depth_compare: depth_stencil(DepthBiasState::default(), settings).depth_compare,
+        stencil: StencilState {
+            front: StencilFaceState {
+                compare: CompareFunction::Equal,
+                fail_op: StencilOperation::Keep,
+                depth_fail_op: StencilOperation::Keep,
+                pass_op: StencilOperation::Keep,
+            },
+            back: StencilFaceState {
+                compare: CompareFunction::Equal,
+                fail_op: StencilOperation::Keep,
+                depth_fail_op: StencilOperation::Keep,
+                pass_op: StencilOperation::Keep,
+            },
+            read_mask: PREVIEW_STENCIL_BIT,
+            write_mask: 0x00,
+        },
+        bias: DepthBiasState::default(),
+    }
+}
 pub fn render_gizmo<'a>(
     encoder: &'a mut CommandEncoder,
     render_manager: &mut RenderManager,
@@ -967,8 +1074,8 @@ pub fn depth_stencil_with_stencil(
     }
 }
 pub fn draw_visible_roads(pass: &mut RenderPass, road_renderer: &RoadRenderSubsystem) {
-    for chunk_id in &road_renderer.visible_draw_list {
-        if let Some(gpu) = road_renderer.chunk_gpu.get(chunk_id) {
+    for chunk_coord in &road_renderer.visible_draw_list {
+        if let Some(gpu) = road_renderer.chunk_gpu.get(chunk_coord) {
             pass.set_vertex_buffer(0, gpu.vertex.slice(..));
             pass.set_index_buffer(gpu.index.slice(..), IndexFormat::Uint32);
             pass.draw_indexed(0..gpu.index_count, 0, 0..1);
@@ -980,11 +1087,23 @@ pub fn draw_visible_buildings(
     terrain: &Terrain,
     building_renderer: &BuildingRenderer,
 ) {
-    for chunk_id in terrain.visible.iter().map(|v| v.id) {
-        if let Some(gpu) = building_renderer.chunk_gpu.get(&chunk_id) {
+    for chunk_coord in terrain.visible.iter().map(|v| v.chunk_coord) {
+        if let Some(gpu) = building_renderer.chunk_gpu.get(&chunk_coord) {
             pass.set_vertex_buffer(0, gpu.vertex.slice(..));
             pass.set_index_buffer(gpu.index.slice(..), IndexFormat::Uint32);
             pass.draw_indexed(0..gpu.index_count, 0, 0..1);
         }
+    }
+}
+pub fn draw_preview_building(pass: &mut RenderPass, terrain: &Terrain) {
+    if let Some(model) = terrain
+        .cursor
+        .preview_building
+        .as_ref()
+        .and_then(|pb| pb.cached_model.as_ref())
+    {
+        pass.set_vertex_buffer(0, model.vertex.slice(..));
+        pass.set_index_buffer(model.index.slice(..), IndexFormat::Uint32);
+        pass.draw_indexed(0..model.mesh.indices.len() as u32, 0, 0..1);
     }
 }

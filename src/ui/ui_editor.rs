@@ -4,7 +4,7 @@
 
 use crate::data::Settings;
 use crate::helpers::paths::data_dir;
-use crate::renderer::props::Props;
+use crate::renderer::render_core::Renderer;
 use crate::resources::{CommandQueues, Time};
 use crate::simulation::Simulation;
 use crate::ui::action_parser::{ActionEvent, CompiledAction, compile_actions, run_action_with_events, run_actions};
@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
+use wgpu::{Device, Queue};
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
 
@@ -118,7 +119,7 @@ impl GlobalActions {
 }
 
 impl Ui {
-    pub fn new(settings: &Settings, variables: Variables, window_size: PhysicalSize<f32>) -> Self {
+    pub fn new(settings: &Settings, variables: Variables, window_size: PhysicalSize<f32>, device: &Device, queue: &Queue) -> Self {
 
         //println!("Global Actions loaded: {:?}", global_actions);
         let mut loader = Self {
@@ -134,10 +135,10 @@ impl Ui {
             action_events: vec![],
         };
 
-        loader.reload_ui(settings, window_size);
+        loader.reload_ui(settings, window_size, device, queue);
         loader
     }
-    pub fn reload_ui(&mut self, settings: &Settings, window_size: PhysicalSize<f32>) {
+    pub fn reload_ui(&mut self, settings: &Settings, window_size: PhysicalSize<f32>, device: &Device, queue: &Queue) {
         self.menus = HashMap::new();
         let menus_dir = data_dir("ui_data/menus");
         let ap_dir = data_dir("ui_data/menus/advanced_primitives");
@@ -167,16 +168,13 @@ impl Ui {
                 // UiLayerYaml
                 let elements: Vec<UiElement> = l.elements.unwrap_or_default().into_iter()
                     .flat_map(|t| match t.advanced_primitive() {
-                        None => UiElement::from_yaml(t, window_size),
+                        None => UiElement::from_yaml(t, window_size, device, queue),
                         Some(ap) => {
-                            advanced_primitive_refs
-                                .entry(menu_yaml.name.clone()).or_default()
-                                .push((ap.clone(), l.order));
+                            advanced_primitive_refs.entry(menu_yaml.name.clone()).or_default().push((ap.clone(), l.order));
 
-                            UiElement::from_yaml(t, window_size)
+                            UiElement::from_yaml(t, window_size, device, queue)
                         }
-                    })
-                    .collect();
+                    }).collect();
 
                 layers.push(RuntimeLayer {
                     name: l.name,
@@ -211,13 +209,7 @@ impl Ui {
                 continue;
             };
             for (ap, order) in aps {
-                let layer = ap.to_layer(
-                    settings,
-                    &self.variables,
-                    &self.aps,
-                    order + 1,
-                    window_size,
-                );
+                let layer = ap.to_layer(settings, &self.variables, &self.aps, order + 1, window_size, device, queue);
 
                 menu.layers.push(layer);
             }
@@ -273,16 +265,8 @@ impl Ui {
         self.touch_manager.add_screen_resize_event = true;
     }
     pub fn handle_touches(
-        &mut self,
-        dt: f32,
-        props: &mut Props,
-        world: &mut World,
-        window_size: PhysicalSize<f32>,
-        command_queues: &mut CommandQueues,
-        settings: &mut Settings,
-        event_loop: &dyn ActiveEventLoop,
-        game_state: &mut GameState,
-        simulation: &mut Simulation
+        &mut self, dt: f32, world: &mut World, renderer: &mut Renderer, window_size: PhysicalSize<f32>, command_queues: &mut CommandQueues, settings: &mut Settings,
+        event_loop: &dyn ActiveEventLoop, game_state: &mut GameState, simulation: &mut Simulation
     ) {
         self.touch_manager.editor.enabled = settings.editor_mode;
         if !self.touch_manager.options.show_gui {
@@ -290,7 +274,7 @@ impl Ui {
         }
         self.touch_manager.events.values_mut().for_each(|events| { events.clear() });
         if world.input.action_repeat("Reload UI") {
-            self.reload_ui(settings, window_size);
+            self.reload_ui(settings, window_size, &renderer.device, &renderer.queue);
         }
         self.touch_manager.config.snap_enabled = world.input.action_down("UI Snap Modifier");
 
@@ -348,7 +332,7 @@ impl Ui {
                     }
                     // Important for when not hovering and such, super important for always-on functions!
                     //if is_active {
-                    self.touch_manager.push_event(element_ref, ElementEvent::Nothing); // TODO: Huge CPU performance impact! Cuts down UI logic time from 4.3ms to 0.3ms.
+                    self.touch_manager.push_event(element_ref, ElementEvent::Nothing); // TODO: Huge CPU performance impact! Cuts down UI logic time from 4.3ms to 0.3ms.  UPDATE: Less relevant now, much less so
                     //}
                     //
                     // The 'ignoring inactive elements' fix cut down from 8.3ms to 4.3ms. Might need a separate action list for inactive elements, and one for always-on functions.
@@ -361,7 +345,7 @@ impl Ui {
         let result = self.process_touch_events(
             &mut command_queues.ui_command_queue,
             world,
-            props,
+            renderer,
             window_size,
             settings,
             event_loop,
@@ -400,12 +384,12 @@ impl Ui {
             &mut command_queues.ui_command_queue,
             self,
             world,
-            props,
+            renderer,
             window_size,
             settings,
             event_loop,
             game_state,
-            simulation,
+            simulation
         );
     }
 
@@ -449,7 +433,7 @@ impl Ui {
         &mut self,
         ui_command_queue: &mut CommandQueue,
         world: &mut World,
-        props: &mut Props,
+        renderer: &mut Renderer,
         window_size: PhysicalSize<f32>,
         settings: &mut Settings,
         event_loop: &dyn ActiveEventLoop,
@@ -465,7 +449,7 @@ impl Ui {
         // } ).collect::<Vec<_>>());
         let ctx = &mut CommandContext {
             world,
-            props,
+            renderer,
             ui: self,
             window_size,
             settings,

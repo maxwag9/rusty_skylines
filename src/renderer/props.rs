@@ -7,7 +7,7 @@ use crate::ui::input::Input;
 use crate::world::camera::Camera;
 use crate::world::terrain::terrain_subsystem::{CursorMode, Terrain};
 use bytemuck::{Pod, Zeroable};
-use glam::{Quat, Vec3};
+use glam::{Quat, Vec2, Vec3};
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -196,6 +196,7 @@ pub struct PropChunk {
     pub gpu_instance_buffers: HashMap<ArchetypeId, (Buffer, u32)>,
     pub dirty_archetypes: HashSet<ArchetypeId>,
 }
+
 impl PropChunk {
     pub fn new(chunk_coord: ChunkCoord) -> Self {
         Self {
@@ -204,6 +205,23 @@ impl PropChunk {
             gpu_instance_buffers: HashMap::new(),
             dirty_archetypes: HashSet::new(),
         }
+    }
+
+    pub fn remove_instance(&mut self, archetype_id: ArchetypeId, instance_id: PropInstanceId) {
+        let Some(chunk_instances) = self.archetype_instances.get_mut(&archetype_id) else {
+            // // It SHOULD panic, because instances in the instance list 100% have an archetype id Not relevant here, I JUST COPIED this text from the other function to here.
+            return;
+        };
+        chunk_instances.retain(|&pid| pid != instance_id);
+        self.dirty_archetypes.insert(archetype_id);
+    }
+
+    pub fn add_instance(&mut self, archetype_id: ArchetypeId, instance_id: PropInstanceId) {
+        self.archetype_instances
+            .entry(archetype_id)
+            .or_default()
+            .push(instance_id); // Do you want to hear something insane? Here: self.archetype_instances.entry(archetype_id).or_insert(vec![instance_id]);
+        self.dirty_archetypes.insert(archetype_id);
     }
 }
 
@@ -429,10 +447,7 @@ impl Props {
         id
     }
 
-    pub fn remove_instance(&mut self, chunk_coord: ChunkCoord, id: PropInstanceId) -> bool {
-        let Some(chunk) = self.chunks.get_mut(&chunk_coord) else {
-            return false;
-        };
+    pub fn remove_instance(&mut self, id: PropInstanceId) -> bool {
         let Some(instance) = self
             .prop_instances
             .get(id as usize)
@@ -440,6 +455,11 @@ impl Props {
         else {
             return false;
         };
+        let chunk_coord = instance.pos.chunk;
+        let chunk = self
+            .chunks
+            .entry(chunk_coord)
+            .or_insert_with(|| PropChunk::new(chunk_coord));
         if instance.generated {
             debug_assert!(self.generated_prop_count > 0);
             self.generated_prop_count -= 1;
@@ -449,16 +469,11 @@ impl Props {
         }
 
         let archetype_id = instance.archetype_id.unwrap();
-        let Some(chunk_instances) = chunk.archetype_instances.get_mut(&archetype_id) else {
-            // It SHOULD panic, because instances in the instance list 100% have an archetype id
-            return false;
-        };
-        chunk_instances.retain(|&cid| cid != id);
+        chunk.remove_instance(archetype_id, id);
 
         let slot = self.prop_instances.get_mut(id as usize).unwrap();
 
         self.prop_instances_free.push(id);
-        chunk.dirty_archetypes.insert(archetype_id);
         self.dirty_chunks.insert(chunk_coord);
 
         if slot.is_none() {
@@ -470,9 +485,9 @@ impl Props {
 
         true
     }
-    pub fn remove_instances(&mut self, chunk_coord: ChunkCoord, ids: &[PropInstanceId]) {
+    pub fn remove_instances(&mut self, ids: &[PropInstanceId]) {
         for &id in ids.iter() {
-            self.remove_instance(chunk_coord, id);
+            self.remove_instance(id);
         }
     }
     #[inline]
@@ -500,9 +515,13 @@ impl Props {
 
         let prop_instances = &mut self.prop_instances;
         let prop_instances_free = &mut self.prop_instances_free;
+        let mut removed_count = 0usize;
+        let mut touched_archetypes: Vec<ArchetypeId> = Vec::new();
 
         if let Some(chunk) = self.chunks.get_mut(&chunk_coord) {
-            for ids in chunk.archetype_instances.values_mut() {
+            for (&archetype_id, ids) in chunk.archetype_instances.iter_mut() {
+                let before_len = ids.len();
+
                 ids.retain(|&id| {
                     let is_generated = prop_instances
                         .get(id as usize)
@@ -511,16 +530,35 @@ impl Props {
                         .unwrap_or(false);
 
                     if is_generated {
-                        debug_assert!(self.generated_prop_count > 0);
-                        self.generated_prop_count -= 1;
-
                         prop_instances[id as usize] = None;
                         prop_instances_free.push(id);
                     }
 
                     !is_generated
                 });
+
+                let removed_here = before_len - ids.len();
+                if removed_here > 0 {
+                    removed_count += removed_here;
+                    touched_archetypes.push(archetype_id);
+                }
             }
+
+            // Mark every archetype we actually mutated as dirty, so
+            // upload_instances rebuilds (or drops) its GPU buffer instead of
+            // leaving stale instance data resident and rendering phantoms.
+            for archetype_id in &touched_archetypes {
+                chunk.dirty_archetypes.insert(*archetype_id);
+            }
+        }
+
+        if removed_count > 0 {
+            debug_assert!(self.generated_prop_count >= removed_count);
+            self.generated_prop_count -= removed_count;
+            // The chunk was mutated even if none of the new_instances below
+            // happen to reuse a touched archetype — make sure upload_instances
+            // actually visits it this frame regardless.
+            self.dirty_chunks.insert(chunk_coord);
         }
 
         for mut inst in new_instances {
@@ -530,7 +568,7 @@ impl Props {
     }
 
     fn instance_key(
-        chunk: ChunkCoord,
+        chunk: ChunkCoord, // TODO: Use prop chunk coord, not random-ass given chunkcoord
         archetype_id: ArchetypeId,
         id: Option<PropInstanceId>,
     ) -> u64 {
@@ -558,9 +596,10 @@ impl Props {
         let dirty_chunks = mem::take(&mut self.dirty_chunks);
 
         for coord in dirty_chunks {
-            let Some(chunk) = self.chunks.get_mut(&coord) else {
-                continue;
-            };
+            let chunk = self
+                .chunks
+                .entry(coord)
+                .or_insert_with(|| PropChunk::new(coord));
 
             if chunk.dirty_archetypes.is_empty() {
                 continue;
@@ -688,8 +727,21 @@ impl Props {
                                 .get_mut(id as usize)
                                 .and_then(|x| x.as_mut())
                             {
+                                self.dirty_chunks.insert(prop.pos.chunk);
+                                let archetype_id = prop.archetype_id.unwrap();
+                                let chunk = self
+                                    .chunks
+                                    .entry(prop.pos.chunk)
+                                    .or_insert_with(|| PropChunk::new(prop.pos.chunk));
+                                chunk.remove_instance(archetype_id, id);
+
                                 prop.pos = picked_point.pos;
                                 self.dirty_chunks.insert(prop.pos.chunk);
+                                let chunk = self
+                                    .chunks
+                                    .entry(prop.pos.chunk)
+                                    .or_insert_with(|| PropChunk::new(prop.pos.chunk));
+                                chunk.add_instance(archetype_id, id);
                             }
                         }
                     }
@@ -707,6 +759,61 @@ impl Props {
         let archetype_id = self.ensure_archetype(archetype_name);
         prop_instance.archetype_id = Some(archetype_id);
         self.add_instance(prop_instance)
+    }
+    pub fn move_multiple_offset(
+        &mut self,
+        prop_ids: &[PropInstanceId],
+        old_center_pos: WorldPos,
+        old_dir: Vec3,
+        new_center_pos: WorldPos,
+        new_dir: Vec3,
+    ) {
+        let old_xz = Vec2::new(old_dir.x, old_dir.z);
+        let new_xz = Vec2::new(new_dir.x, new_dir.z);
+
+        let delta_angle = if old_xz.length_squared() < 1e-10 || new_xz.length_squared() < 1e-10 {
+            0.0f32
+        } else {
+            let old_angle = old_xz.y.atan2(old_xz.x);
+            let new_angle = new_xz.y.atan2(new_xz.x);
+            new_angle - old_angle
+        };
+
+        let (sin_a, cos_a) = delta_angle.sin_cos();
+
+        for &id in prop_ids {
+            if let Some(prop) = self
+                .prop_instances
+                .get_mut(id as usize)
+                .and_then(|x| x.as_mut())
+            {
+                let offset = old_center_pos.delta_to(prop.pos);
+
+                let rotated_offset = Vec3::new(
+                    offset.x * cos_a - offset.z * sin_a,
+                    offset.y,
+                    offset.x * sin_a + offset.z * cos_a,
+                );
+                self.dirty_chunks.insert(prop.pos.chunk);
+                let archetype_id = prop.archetype_id.unwrap();
+                let chunk = self
+                    .chunks
+                    .entry(prop.pos.chunk)
+                    .or_insert_with(|| PropChunk::new(prop.pos.chunk));
+                chunk.remove_instance(archetype_id, id);
+
+                prop.pos = new_center_pos.add_vec3(rotated_offset);
+
+                prop.rotation_y_rad += delta_angle;
+
+                self.dirty_chunks.insert(prop.pos.chunk);
+                let chunk = self
+                    .chunks
+                    .entry(prop.pos.chunk)
+                    .or_insert_with(|| PropChunk::new(prop.pos.chunk));
+                chunk.add_instance(archetype_id, id);
+            }
+        }
     }
     pub fn ensure_archetype(&mut self, archetype_name: impl Into<String>) -> ArchetypeId {
         let key = &archetype_name.into().to_lowercase();
@@ -737,7 +844,7 @@ impl Props {
         self.visible_manual_prop_count = 0;
 
         for visible_chunk in terrain.visible.iter() {
-            let coord = visible_chunk.coords.chunk_coord;
+            let coord = visible_chunk.chunk_coord;
 
             let Some(chunk) = self.chunks.get(&coord) else {
                 continue;
@@ -823,7 +930,7 @@ impl Props {
         );
         //let mut visible_vertex_count: usize = 0;
         for visible_chunk in terrain.visible.iter() {
-            let coord = visible_chunk.coords.chunk_coord;
+            let coord = visible_chunk.chunk_coord;
 
             let Some(chunk) = self.chunks.get(&coord) else {
                 continue;

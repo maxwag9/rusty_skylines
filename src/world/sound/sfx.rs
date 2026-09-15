@@ -9,36 +9,93 @@ pub enum Waveform {
     Square,
     Saw,
     Noise,
+    Pulse,
 }
 
-#[derive(Default, Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SfxLayer {
     pub waveform: Waveform,
+
+    // Pitch
     pub start_freq: f32,
     pub end_freq: f32,
+    #[serde(default = "one")]
+    pub glide_curve: f32,
+
+    // FM
+    #[serde(default)]
     pub fm_ratio: f32,
+    #[serde(default)]
     pub fm_amount: f32,
+
+    // Pulse width (used by Square + Pulse)
+    #[serde(default = "half")]
+    pub pulse_width: f32, // 0.01 … 0.99
+
+    // Temporal
+    #[serde(default)]
+    pub delay: f32,
+    #[serde(default = "zeropointtwo")]
+    pub duration: f32,
+
+    // Per-layer ADSR
+    #[serde(default = "tiny")]
+    pub attack: f32,
+    #[serde(default = "zeropointone")]
+    pub decay: f32,
+    #[serde(default)]
+    pub sustain: f32,
+    #[serde(default = "zeropointone")]
+    pub release: f32,
+
+    // Filtering (0 = disabled / bypass)
+    #[serde(default)]
+    pub lp_freq: f32, // low-pass cutoff in Hz (0 = off)
+    #[serde(default)]
+    pub hp_freq: f32, // high-pass cutoff in Hz (0 = off)
+
+    // Mixing
+    #[serde(default = "one")]
     pub gain: f32,
+    #[serde(default)]
+    pub pan: f32,
 }
 
-#[derive(Default, Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SfxConfig {
     pub name: String,
     pub layers: Vec<SfxLayer>,
-    #[serde(deserialize_with = "deserialize_duration")]
-    pub duration: Duration,
-    pub attack: f32,
-    pub decay: f32,
-    pub sustain: f32,
-    pub release: f32,
-    pub glide_curve: f32,
+
+    // Global master
+    #[serde(default = "one")]
     pub gain: f32,
+    #[serde(default)]
     pub pan: f32,
+
+    // NEW global settings
+    #[serde(default = "one")]
+    pub pitch_scale: f32, // multiplies every frequency
+    #[serde(default = "one")]
+    pub time_scale: f32, // speeds up / slows down the whole SFX
+
     #[serde(default = "zeropointone")]
     pub deduplication_time: f32,
 }
+
+fn one() -> f32 {
+    1.0
+}
+fn half() -> f32 {
+    0.5
+}
+fn tiny() -> f32 {
+    0.001
+}
 fn zeropointone() -> f32 {
-    0.07
+    0.1
+}
+fn zeropointtwo() -> f32 {
+    0.2
 }
 // impl SfxKind {
 //     pub fn config(self) -> SfxConfig {
@@ -326,6 +383,10 @@ struct SfxLayerState {
     phase: f32,
     mod_phase: f32,
     noise_state: u32,
+    started: bool,
+    // filter memory
+    lp_state: f32,
+    hp_state: f32,
 }
 
 #[derive(Debug)]
@@ -334,10 +395,18 @@ pub struct SfxVoice {
     layer_states: Vec<SfxLayerState>,
     pub elapsed: f32,
     sample_rate: f32,
+    total_duration: f32,
 }
 
 impl SfxVoice {
     pub fn new(config: SfxConfig, sample_rate: f32) -> Self {
+        let scale = config.time_scale.max(0.001);
+        let total_duration = config
+            .layers
+            .iter()
+            .map(|l| (l.delay + l.duration + l.release) / scale)
+            .fold(0.0f32, f32::max);
+
         let layer_states = config
             .layers
             .iter()
@@ -349,6 +418,9 @@ impl SfxVoice {
                     ^ layer.start_freq.to_bits()
                     ^ (i as u32).wrapping_mul(0x85EB_CA6B))
                     | 1,
+                started: false,
+                lp_state: 0.0,
+                hp_state: 0.0,
             })
             .collect();
 
@@ -357,81 +429,163 @@ impl SfxVoice {
             layer_states,
             elapsed: 0.0,
             sample_rate,
+            total_duration,
         }
     }
 
     pub fn is_finished(&self) -> bool {
-        self.elapsed >= self.config.duration.as_secs_f32() + self.config.release
+        self.elapsed >= self.total_duration
     }
 
-    fn envelope(&self) -> f32 {
-        let t = self.elapsed;
-        let a = self.config.attack.max(0.0001);
-        let d = self.config.decay.max(0.0001);
-        let s = self.config.sustain;
-        let sustain_end = self.config.duration.as_secs_f32();
-        let r = self.config.release.max(0.0001);
+    #[inline]
+    fn layer_envelope(layer: &SfxLayer, local_t: f32) -> f32 {
+        let a = layer.attack.max(0.0001);
+        let d = layer.decay.max(0.0001);
+        let s = layer.sustain;
+        let r = layer.release.max(0.0001);
+        let sustain_end = layer.duration;
 
-        if t < a {
-            t / a
-        } else if t < a + d {
-            let dt = (t - a) / d;
+        if local_t < 0.0 {
+            0.0
+        } else if local_t < a {
+            local_t / a
+        } else if local_t < a + d {
+            let dt = (local_t - a) / d;
             1.0 + (s - 1.0) * dt
-        } else if t < sustain_end {
+        } else if local_t < sustain_end {
             s
         } else {
-            let rt = (t - sustain_end) / r;
+            let rt = (local_t - sustain_end) / r;
             (s * (1.0 - rt.clamp(0.0, 1.0))).max(0.0)
         }
     }
 
-    pub(crate) fn next_sample(&mut self) -> f32 {
+    #[inline]
+    fn one_pole_lp(state: &mut f32, x: f32, cutoff: f32, sr: f32) -> f32 {
+        if cutoff <= 0.0 || cutoff >= sr * 0.49 {
+            *state = x;
+            return x;
+        }
+        let rc = 1.0 / (std::f32::consts::TAU * cutoff);
+        let dt = 1.0 / sr;
+        let alpha = dt / (rc + dt);
+        *state += alpha * (x - *state);
+        *state
+    }
+
+    #[inline]
+    fn one_pole_hp(state: &mut f32, x: f32, cutoff: f32, sr: f32) -> f32 {
+        if cutoff <= 0.0 {
+            *state = x;
+            return x;
+        }
+        if cutoff >= sr * 0.49 {
+            return 0.0;
+        }
+        let rc = 1.0 / (std::f32::consts::TAU * cutoff);
+        let dt = 1.0 / sr;
+        let alpha = rc / (rc + dt);
+        let y = alpha * (*state + x - *state); // classic one-pole HP
+        *state = x;
+        y
+    }
+
+    pub(crate) fn next_sample(&mut self) -> (f32, f32) {
         let dt = 1.0 / self.sample_rate;
-        let dur = self.config.duration.as_secs_f32().max(0.0001);
-        let glide_t = (self.elapsed / dur)
-            .clamp(0.0, 1.0)
-            .powf(self.config.glide_curve.max(0.0001));
-        let env = self.envelope();
-        let mut mixed = 0.0f32;
+        let time_scale = self.config.time_scale.max(0.001);
+        let pitch_scale = self.config.pitch_scale.max(0.001);
 
-        for (layer, layer_state) in self.config.layers.iter().zip(self.layer_states.iter_mut()) {
-            let freq = layer.start_freq + (layer.end_freq - layer.start_freq) * glide_t;
+        let mut left = 0.0f32;
+        let mut right = 0.0f32;
+
+        for (layer, state) in self.config.layers.iter().zip(self.layer_states.iter_mut()) {
+            // time is scaled globally
+            let local_t = (self.elapsed * time_scale) - layer.delay;
+
+            if local_t < 0.0 {
+                continue;
+            }
+
+            if !state.started {
+                state.started = true;
+            }
+
+            let env = Self::layer_envelope(layer, local_t);
+            if env <= 0.00001 {
+                continue;
+            }
+
+            // Pitch glide (also scaled)
+            let glide_t = (local_t / layer.duration.max(0.0001))
+                .clamp(0.0, 1.0)
+                .powf(layer.glide_curve.max(0.0001));
+
+            let freq =
+                (layer.start_freq + (layer.end_freq - layer.start_freq) * glide_t) * pitch_scale;
+
+            // FM
             let mod_freq = freq * layer.fm_ratio;
-            layer_state.mod_phase += mod_freq * dt;
-            layer_state.mod_phase = layer_state.mod_phase.fract();
-            let modulator = (layer_state.mod_phase * std::f32::consts::TAU).sin() * layer.fm_amount;
+            state.mod_phase = (state.mod_phase + mod_freq * dt).fract();
+            let modulator = (state.mod_phase * std::f32::consts::TAU).sin() * layer.fm_amount;
 
-            layer_state.phase += (freq + modulator * freq) * dt;
-            layer_state.phase = layer_state.phase.fract();
+            state.phase = (state.phase + (freq + modulator * freq) * dt).fract();
+
+            // Oscillator with pulse width support
+            let pw = layer.pulse_width.clamp(0.01, 0.99);
 
             let osc = match layer.waveform {
-                Waveform::Sine => (layer_state.phase * std::f32::consts::TAU).sin(),
-                Waveform::Triangle => {
-                    4.0 * (layer_state.phase - (layer_state.phase + 0.5).floor()).abs() - 1.0
-                }
-                Waveform::Square => {
-                    if layer_state.phase < 0.5 {
+                Waveform::Sine => (state.phase * std::f32::consts::TAU).sin(),
+                Waveform::Triangle => 4.0 * (state.phase - (state.phase + 0.5).floor()).abs() - 1.0,
+                Waveform::Square | Waveform::Pulse => {
+                    if state.phase < pw {
                         1.0
                     } else {
                         -1.0
                     }
                 }
-                Waveform::Saw => 2.0 * (layer_state.phase - (layer_state.phase + 0.5).floor()),
+                Waveform::Saw => 2.0 * (state.phase - (state.phase + 0.5).floor()),
                 Waveform::Noise => {
-                    let mut x = layer_state.noise_state;
+                    let mut x = state.noise_state;
                     x ^= x << 13;
                     x ^= x >> 17;
                     x ^= x << 5;
-                    layer_state.noise_state = x;
+                    state.noise_state = x;
                     (x as f32 / u32::MAX as f32) * 2.0 - 1.0
                 }
             };
 
-            mixed += osc * layer.gain;
+            // Filters (applied in series: HP then LP)
+            let mut filtered = osc;
+            if layer.hp_freq > 0.0 {
+                filtered = Self::one_pole_hp(
+                    &mut state.hp_state,
+                    filtered,
+                    layer.hp_freq,
+                    self.sample_rate,
+                );
+            }
+            if layer.lp_freq > 0.0 {
+                filtered = Self::one_pole_lp(
+                    &mut state.lp_state,
+                    filtered,
+                    layer.lp_freq,
+                    self.sample_rate,
+                );
+            }
+
+            let sample = filtered * env * layer.gain;
+
+            // constant-power pan
+            let pan = (layer.pan + self.config.pan).clamp(-1.0, 1.0);
+            let angle = (pan + 1.0) * 0.25 * std::f32::consts::PI;
+            left += sample * angle.cos();
+            right += sample * angle.sin();
         }
 
         self.elapsed += dt;
-        mixed * env * self.config.gain
+
+        let master = self.config.gain;
+        (left * master, right * master)
     }
 }
 

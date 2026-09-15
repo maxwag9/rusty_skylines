@@ -1,7 +1,7 @@
 use crate::helpers::positions::WorldPos;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::world::roads::intersections::IntersectionPolygon;
-use crate::world::roads::road_mesh_manager::{CLEARANCE, ChunkId, Edges};
+use crate::world::roads::road_mesh_manager::{CLEARANCE, ChunkCoord, Edges};
 use crate::world::roads::road_structs::{NodeId, StructureType};
 use crate::world::roads::roads::RoadCommand;
 use crate::world::terrain::terrain_subsystem::Terrain;
@@ -118,11 +118,15 @@ pub fn subdivide_quadratic_bezier(
 }
 
 /// Helper to push intersection for a node
-pub fn push_intersection_for_node(cmds: &mut Vec<RoadCommand>, node_id: NodeId, chunk_id: ChunkId) {
+pub fn push_intersection_for_node(
+    cmds: &mut Vec<RoadCommand>,
+    node_id: NodeId,
+    chunk_coord: ChunkCoord,
+) {
     cmds.push(RoadCommand::MakeIntersection {
         node_id,
         intersection_params: Default::default(),
-        chunk_id,
+        chunk_coord,
         recalc_clearance: true,
     });
 }

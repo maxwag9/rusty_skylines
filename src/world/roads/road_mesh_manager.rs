@@ -4,7 +4,7 @@
 //! Produces deterministic, chunked CPU mesh buffers from immutable road topology.
 //! Refactored to be Lane-First: Geometry is derived directly from Lane centerlines.
 
-use crate::helpers::positions::{ChunkCoord, WorldPos, chunk_size};
+pub(crate) use crate::helpers::positions::{ChunkCoord, WorldPos, chunk_size};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::world::roads::intersections::{
     IntersectionMeshResult, IntersectionPolygon, mesh_intersection, road_vertex,
@@ -21,38 +21,8 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use wgpu::{VertexAttribute, VertexFormat};
 
-pub type ChunkId = u64;
-
 pub const CLEARANCE: f32 = 0.08;
 const NODE_ANGULAR_SEGMENTS: usize = 32;
-
-#[inline(always)]
-pub fn pack_chunk_coords(cx: i32, cz: i32) -> u64 {
-    ((cx as u32 as u64) << 32) | (cz as u32 as u64)
-}
-
-#[inline(always)]
-pub fn unpack_chunk_coords(id: u64) -> (i32, i32) {
-    let cx = ((id >> 32) as u32) as i32;
-    let cz = (id as u32) as i32;
-    (cx, cz)
-}
-
-#[inline(always)]
-pub fn chunk_coord_to_id(cx: i32, cz: i32) -> ChunkId {
-    pack_chunk_coords(cx, cz)
-}
-
-#[inline(always)]
-pub fn world_pos_chunk_to_id(world_pos: &WorldPos) -> ChunkId {
-    pack_chunk_coords(world_pos.chunk.x, world_pos.chunk.z)
-}
-
-#[inline(always)]
-pub fn chunk_id_to_coord(id: ChunkId) -> ChunkCoord {
-    let (cx, cz) = unpack_chunk_coords(id);
-    ChunkCoord::new(cx, cz)
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
@@ -155,7 +125,7 @@ fn mesh_segment(
     road_type: &RoadType,
     style: &RoadStyleParams,
     config: &MeshConfig,
-    chunk_filter: Option<ChunkId>,
+    chunk_filter: Option<ChunkCoord>,
     start_result: Option<&IntersectionMeshResult>,
     end_result: Option<&IntersectionMeshResult>,
     vertices: &mut Vec<AdvancedVertex>,
@@ -677,7 +647,7 @@ pub fn build_ribbon_mesh(
     width: f32,
     height: f32,
     material_id: u32,
-    chunk_filter: Option<ChunkId>,
+    chunk_filter: Option<ChunkCoord>,
     uv_config: (f32, f32),
     edges: &Edges,
     vertices: &mut Vec<AdvancedVertex>,
@@ -803,7 +773,7 @@ pub fn build_vertical_face(
     bottom_height: f32,
     top_height: f32,
     material_id: u32,
-    chunk_filter: Option<ChunkId>,
+    chunk_filter: Option<ChunkCoord>,
     uv_config: (f32, f32),
     explicit_normal_sign: Option<f32>,
     start_override: Option<WorldPos>,
@@ -954,7 +924,7 @@ fn emit_tri_for_top(indices: &mut Vec<u32>, i0: u32, i1: u32, i2: u32) {
 pub type RoadEdgeStorage = HashMap<SegmentId, RoadEdges>;
 
 pub struct RoadMeshManager {
-    chunk_cache: HashMap<ChunkId, ChunkMesh>,
+    chunk_cache: HashMap<ChunkCoord, ChunkMesh>,
     pub config: MeshConfig,
     pub road_edge_storage: RoadEdgeStorage,
 }
@@ -968,22 +938,22 @@ impl RoadMeshManager {
         }
     }
 
-    pub fn get_chunk_mesh(&self, chunk_id: ChunkId) -> Option<&ChunkMesh> {
-        self.chunk_cache.get(&chunk_id)
+    pub fn get_chunk_mesh(&self, chunk_coord: ChunkCoord) -> Option<&ChunkMesh> {
+        self.chunk_cache.get(&chunk_coord)
     }
 
-    pub fn _invalidate_chunk(&mut self, chunk_id: ChunkId) {
-        self.chunk_cache.remove(&chunk_id);
+    pub fn _invalidate_chunk(&mut self, chunk_coord: ChunkCoord) {
+        self.chunk_cache.remove(&chunk_coord);
     }
 
     pub fn _clear_cache(&mut self) {
         self.chunk_cache.clear();
     }
 
-    pub fn chunk_needs_update(&self, chunk_id: ChunkId, storage: &RoadStorage) -> bool {
-        match self.chunk_cache.get(&chunk_id) {
+    pub fn chunk_needs_update(&self, chunk_coord: ChunkCoord, storage: &RoadStorage) -> bool {
+        match self.chunk_cache.get(&chunk_coord) {
             None => true,
-            Some(mesh) => mesh.topo_version != compute_topo_version(chunk_id, storage),
+            Some(mesh) => mesh.topo_version != compute_topo_version(chunk_coord, storage),
         }
     }
 
@@ -991,7 +961,7 @@ impl RoadMeshManager {
     pub fn build_mesh(
         &mut self,
         terrain: &Terrain,
-        chunk_id: Option<ChunkId>,
+        chunk_coord: Option<ChunkCoord>,
         is_preview: bool,
         storage: &RoadStorage,
         road_types: &RoadTypes,
@@ -1005,7 +975,7 @@ impl RoadMeshManager {
         let mut intersection_results: HashMap<NodeId, IntersectionMeshResult> = HashMap::new();
 
         // PASS 1: Build intersection meshes and collect boundary data
-        for node_id in storage.iter_node_ids_optionally_chunked(chunk_id) {
+        for node_id in storage.iter_node_ids_optionally_chunked(chunk_coord) {
             let node = storage.node(node_id);
 
             let Some(road_type) = style.road_type(road_types) else {
@@ -1059,9 +1029,9 @@ impl RoadMeshManager {
         }
 
         // === PASS 2: Build segment meshes using intersection boundary data ===
-        let segment_ids: HashSet<SegmentId> = match chunk_id {
-            Some(cid) => {
-                HashSet::from_iter(storage.segment_ids_touching_chunk(chunk_id_to_coord(cid)))
+        let segment_ids: HashSet<SegmentId> = match chunk_coord {
+            Some(chunk_coord) => {
+                HashSet::from_iter(storage.segment_ids_touching_chunk(chunk_coord))
             }
             None => HashSet::from_iter(storage.get_active_segment_ids()),
         };
@@ -1097,7 +1067,7 @@ impl RoadMeshManager {
                 road_type,
                 style,
                 &self.config,
-                chunk_id,
+                chunk_coord,
                 None,
                 None,
                 // start_boundary,
@@ -1121,7 +1091,7 @@ impl RoadMeshManager {
         ChunkMesh {
             vertices,
             indices,
-            topo_version: chunk_id
+            topo_version: chunk_coord
                 .map(|cid| compute_topo_version(cid, storage))
                 .unwrap_or(0),
         }
@@ -1129,22 +1099,22 @@ impl RoadMeshManager {
     pub fn update_chunk_mesh(
         &mut self,
         terrain: &Terrain,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
         road_manager: &RoadManager,
         style: &RoadStyleParams,
         gizmo: &mut Gizmo,
     ) -> &ChunkMesh {
         let mesh = self.build_mesh(
             terrain,
-            Some(chunk_id),
+            Some(chunk_coord),
             false,
             &road_manager.roads,
             &road_manager.road_types,
             style,
             gizmo,
         );
-        self.chunk_cache.insert(chunk_id, mesh);
-        self.chunk_cache.get(&chunk_id).unwrap()
+        self.chunk_cache.insert(chunk_coord, mesh);
+        self.chunk_cache.get(&chunk_coord).unwrap()
     }
 
     /// Convenience wrapper for building preview meshes (no chunking)
@@ -1211,10 +1181,10 @@ fn compute_cap_direction(
     }
 }
 
-pub fn compute_topo_version(chunk_id: ChunkId, storage: &RoadStorage) -> u64 {
+pub fn compute_topo_version(chunk_coord: ChunkCoord, storage: &RoadStorage) -> u64 {
     let mut hasher = DefaultHasher::new();
 
-    let mut segs = storage.segment_ids_touching_chunk(chunk_id_to_coord(chunk_id));
+    let mut segs = storage.segment_ids_touching_chunk(chunk_coord);
     segs.sort_unstable();
 
     for seg_id in segs {
@@ -1227,7 +1197,7 @@ pub fn compute_topo_version(chunk_id: ChunkId, storage: &RoadStorage) -> u64 {
         lane_counts.hash(&mut hasher);
     }
 
-    let mut nodes = storage.nodes_in_chunk(chunk_id).collect::<Vec<NodeId>>();
+    let mut nodes = storage.nodes_in_chunk(chunk_coord).collect::<Vec<NodeId>>();
     nodes.sort_unstable();
 
     for node_id in nodes {

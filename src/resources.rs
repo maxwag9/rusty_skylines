@@ -218,7 +218,13 @@ impl Resources {
             props,
         );
 
-        let mut ui = Ui::new(&settings, variables, window.surface_size().cast::<f32>());
+        let mut ui = Ui::new(
+            &settings,
+            variables,
+            window.surface_size().cast::<f32>(),
+            device,
+            queue,
+        );
         ui.variables.set_bool("editor_mode", settings.editor_mode);
         load_colors(
             rusty_skylines_dir("colors.toml"),

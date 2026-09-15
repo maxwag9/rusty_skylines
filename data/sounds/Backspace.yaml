@@ -1,19 +1,41 @@
 name: Backspace
-
+pitch_scale: 0.92
+time_scale: 1.0
 layers:
   - waveform: Noise
-    start_freq: 700.0
-    end_freq: 450.0
-    fm_ratio: 1.0
-    fm_amount: 0.3
-    gain: 0.45
-
-duration: 0.055
-attack: 0.003
-decay: 0.009
-sustain: 0.0
-release: 0.045
-glide_curve: 1.0
-gain: 0.14
+    start_freq: 780.0
+    end_freq: 380.0
+    glide_curve: 1.5
+    fm_ratio: 0.9
+    fm_amount: 0.35
+    pulse_width: 0.5
+    delay: 0.0
+    duration: 0.048
+    attack: 0.002
+    decay: 0.015
+    sustain: 0.0
+    release: 0.035
+    lp_freq: 3200.0
+    hp_freq: 220.0
+    gain: 0.58
+    pan: 0.0
+  - waveform: Pulse
+    start_freq: 540.0
+    end_freq: 290.0
+    glide_curve: 1.3
+    fm_ratio: 1.4
+    fm_amount: 0.2
+    pulse_width: 0.32
+    delay: 0.0
+    duration: 0.04
+    attack: 0.0
+    decay: 0.012
+    sustain: 0.0
+    release: 0.028
+    lp_freq: 2800.0
+    hp_freq: 150.0
+    gain: 0.32
+    pan: -0.1
+gain: 0.16
 pan: 0.0
 deduplication_time: 0.04

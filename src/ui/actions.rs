@@ -2,9 +2,9 @@
 pub mod drag_hue_point;
 
 use crate::data::{SettingKey, SettingOp, Settings};
-use crate::helpers::implementations::SerializableVec3;
 use crate::helpers::paths::rusty_skylines_dir;
 use crate::renderer::props::Props;
+use crate::renderer::render_core::Renderer;
 use crate::simulation::Simulation;
 use crate::ui::action_parser::{compile_actions, run_action};
 use crate::ui::menu::Menu;
@@ -23,15 +23,15 @@ use crate::ui::vertex::{
     AdvancedPrimitive, ElementKind, UiButtonCircle, UiButtonHandle, UiButtonOutline,
     UiButtonPolygon, UiButtonRect, UiButtonText, UiElement,
 };
-use crate::world::buildings::buildings::{Building, BuildingDesignSource, BuildingStorage};
-use crate::world::buildings::zoning::{Lot, LotEntrance, ZoningType};
+use crate::world::buildings::zoning::ZoningType;
 use crate::world::game_state::{
     GameState, LoadResult, NewSavePackage, SaveInfo, SaveResult, get_available_saves,
     make_safe_save_name,
 };
 use crate::world::roads::road_structs::{BuildMode, LeftLaneCount, RightLaneCount};
+use crate::world::terrain::terrain_subsystem::CursorMode;
 use crate::world::world::World;
-use glam::{Vec2, Vec3};
+use glam::Vec2;
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{HashMap, VecDeque};
 use std::str::FromStr;
@@ -266,7 +266,7 @@ pub enum CommandResult {
 /// Context provided only during command execution (drain phase).
 pub struct CommandContext<'a> {
     pub world: &'a mut World,
-    pub props: &'a mut Props,
+    pub renderer: &'a mut Renderer,
     pub ui: &'a mut Ui,
     pub window_size: PhysicalSize<f32>,
     pub settings: &'a mut Settings,
@@ -1361,7 +1361,7 @@ impl CommandQueue {
                 save_game(
                     ctx.game_state,
                     ctx.world,
-                    ctx.props,
+                    &ctx.renderer.props,
                     ctx.settings,
                     &mut ctx.ui.variables,
                     and_exit,
@@ -1384,7 +1384,7 @@ impl CommandQueue {
                     save_game(
                         ctx.game_state,
                         ctx.world,
-                        ctx.props,
+                        &ctx.renderer.props,
                         ctx.settings,
                         &mut ctx.ui.variables,
                         false,
@@ -1393,7 +1393,7 @@ impl CommandQueue {
                 load_save(
                     ctx.game_state,
                     ctx.world,
-                    ctx.props,
+                    &mut ctx.renderer.props,
                     ctx.settings,
                     &mut ctx.ui.variables,
                     save_name,
@@ -1406,7 +1406,7 @@ impl CommandQueue {
                     ctx.settings,
                     &mut ctx.ui.variables,
                     ctx.world,
-                    ctx.props,
+                    &ctx.renderer.props,
                     ctx.event_loop,
                 );
                 CommandResult::Ok
@@ -1572,14 +1572,14 @@ fn call_rust(ctx: &mut CommandContext, function_name: &str, args: Vec<Value>) {
             save_game(
                 ctx.game_state,
                 ctx.world,
-                ctx.props,
+                &ctx.renderer.props,
                 ctx.settings,
                 &mut ctx.ui.variables,
                 false,
             );
             let create_result = ctx.game_state.create_save(
                 ctx.world,
-                ctx.props,
+                &ctx.renderer.props,
                 ctx.settings,
                 &mut ctx.ui.variables,
                 new_save_package,
@@ -1604,60 +1604,60 @@ fn call_rust(ctx: &mut CommandContext, function_name: &str, args: Vec<Value>) {
                 );
             }
         }
-        "place_building" => {
-            let building_name = args.get(0).and_then(|s| s.as_string());
-            let Some(building_name) = building_name else {
-                println!(
-                    "[Buildings] Argument 0 of {function_name} must be a building_name: String, but it was: '{:?}'.",
-                    args.get(0)
-                );
-                return;
-            };
-            let Some(last_picked) = ctx.world.terrain.last_picked.as_ref() else {
-                return;
-            };
-            let center = last_picked.pos;
-            let half_size = 30.0;
-            let corners = [
-                center.add_vec3(Vec3::new(-half_size, 0.0, -half_size)),
-                center.add_vec3(Vec3::new(half_size, 0.0, -half_size)),
-                center.add_vec3(Vec3::new(half_size, 0.0, half_size)),
-                center.add_vec3(Vec3::new(-half_size, 0.0, half_size)),
-            ];
-            let entrance = LotEntrance {
-                pos: center.add_vec3(Vec3::new(0.0, 0.0, -half_size)),
-                dir: SerializableVec3::from_vec3(Vec3::new(1.0, 0.0, 0.0)),
-            };
-            let lot = Lot {
-                id: 696,
-                bounds: corners.to_vec(),
-                center,
-                entrance,
-                layout: None,
-                zoning_type: Some(ZoningType::Commercial),
-                segment_id: Default::default(),
-                district_id: 0,
-                building_id: None,
-                land_value: 0.0,
-            };
-            let lot_id = ctx.world.zoning.zoning_storage.spawn_lot(lot);
-            let building = Building {
-                id: 0,
-                pos: center,
-                segment_id: Default::default(),
-                lot_id,
-                level: Default::default(),
-                design_source: BuildingDesignSource::Design(building_name.to_string()),
-                edit_id: None,
-                prop_instance_ids: vec![],
-                occupancy: Default::default(),
-            };
-            //println!("{:?}", building);
-            let building_id =
-                BuildingStorage::spawn(&mut ctx.world.buildings, &mut ctx.world.zoning, building);
-            let lot = ctx.world.zoning.zoning_storage.get_mut_lot(lot_id).unwrap();
-            lot.building_id = Some(building_id);
-        }
+        // "place_building" => {
+        //     let building_name = args.get(0).and_then(|s| s.as_string());
+        //     let Some(building_name) = building_name else {
+        //         println!(
+        //             "[Buildings] Argument 0 of {function_name} must be a building_name: String, but it was: '{:?}'.",
+        //             args.get(0)
+        //         );
+        //         return;
+        //     };
+        //     let Some(last_picked) = ctx.world.terrain.last_picked.as_ref() else {
+        //         return;
+        //     };
+        //     // let center = last_picked.pos;
+        //     // let half_size = 30.0;
+        //     // let corners = [
+        //     //     center.add_vec3(Vec3::new(-half_size, 0.0, -half_size)),
+        //     //     center.add_vec3(Vec3::new(half_size, 0.0, -half_size)),
+        //     //     center.add_vec3(Vec3::new(half_size, 0.0, half_size)),
+        //     //     center.add_vec3(Vec3::new(-half_size, 0.0, half_size)),
+        //     // ];
+        //     // let entrance = LotEntrance {
+        //     //     pos: center.add_vec3(Vec3::new(0.0, 0.0, -half_size)),
+        //     //     dir: SerializableVec3::from_vec3(Vec3::new(1.0, 0.0, 0.0)),
+        //     // };
+        //     // let lot = Lot {
+        //     //     id: 696,
+        //     //     bounds: corners.to_vec(),
+        //     //     center,
+        //     //     entrance,
+        //     //     layout: None,
+        //     //     zoning_type: Some(ZoningType::Commercial),
+        //     //     segment_id: Default::default(),
+        //     //     district_id: 0,
+        //     //     building_id: None,
+        //     //     land_value: 0.0,
+        //     // };
+        //     // let lot_id = ctx.world.zoning.zoning_storage.spawn_lot(lot);
+        //     // let building = Building {
+        //     //     id: 0,
+        //     //     pos: center,
+        //     //     segment_id: Default::default(),
+        //     //     lot_id,
+        //     //     level: Default::default(),
+        //     //     design_source: BuildingDesignSource::Design(building_name.to_string()),
+        //     //     edit_id: None,
+        //     //     prop_instance_ids: vec![],
+        //     //     occupancy: Default::default(),
+        //     // };
+        //     // //println!("{:?}", building);
+        //     // let building_id =
+        //     //     BuildingStorage::spawn(&mut ctx.world.buildings, &mut ctx.world.zoning, building);
+        //     // let lot = ctx.world.zoning.zoning_storage.get_mut_lot(lot_id).unwrap();
+        //     // lot.building_id = Some(building_id);
+        // }
         _ => {}
     }
 }
@@ -1726,7 +1726,7 @@ pub fn process_commands(
     command_queue: &mut CommandQueue,
     ui: &mut Ui,
     world: &mut World,
-    props: &mut Props,
+    renderer: &mut Renderer,
     window_size: PhysicalSize<f32>,
     settings: &mut Settings,
     event_loop: &dyn ActiveEventLoop,
@@ -1735,7 +1735,7 @@ pub fn process_commands(
 ) {
     let mut ctx = CommandContext {
         world,
-        props,
+        renderer,
         ui,
         window_size,
         settings,
@@ -1854,13 +1854,42 @@ pub fn set_element_property(
         "target_pos.z" => {
             if let Some(z) = new_val.as_f64() {
                 ctx.world.world_state.camera.target.set_z(z);
+                println!("Set to: {}", z);
                 ctx.ui.variables.set_f64(name, z);
             }
         }
         "cursor_mode" => {
             let mode = new_val.to_string();
-            ctx.world.terrain.cursor.mode = mode.clone().into();
+            ctx.world.terrain.cursor.mode = CursorMode::from(mode.clone());
             ctx.ui.variables.set_string(name, mode);
+        }
+        "new_building" => {
+            let building_name = new_val.to_string();
+            ctx.ui.variables.set_string(name, building_name.clone());
+            let pos = ctx
+                .world
+                .terrain
+                .last_picked
+                .as_ref()
+                .map(|p| p.pos)
+                .unwrap_or(ctx.world.world_state.camera.target);
+            ctx.world.buildings.cancel_preview(
+                &mut ctx.world.terrain.cursor,
+                &mut ctx.world.zoning,
+                &mut ctx.world.terrain.terrain_editor,
+                &mut ctx.renderer.props,
+                &mut ctx.ui.variables,
+            );
+            ctx.world.buildings.start_preview(
+                &mut ctx.world.terrain.cursor,
+                building_name,
+                pos,
+                &mut ctx.world.zoning,
+                &mut ctx.ui.variables,
+                &ctx.world.roads,
+                &ctx.renderer.road_renderer.mesh_manager,
+            );
+            //println!("{:?}", ctx.world.terrain.cursor.preview_building);
         }
         "road_mode" => {
             let road_mode = new_val.to_string();
@@ -2318,6 +2347,7 @@ pub fn set_element_property(
                 }
                 new_val.clone()
             }
+
             _ => {
                 return CommandResult::Error(format!(
                     "set_element_property: unknown property '{}'",

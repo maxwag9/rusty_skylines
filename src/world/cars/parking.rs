@@ -55,9 +55,10 @@ impl ParkingStorage {
         };
 
         self.free_list.push(id);
-        let Some(building) = self.parking_spots[id as usize].take() else {
-            return;
-        };
+        self.parking_spots[id as usize] = None;
+        // let Some(parking_spot) = self.parking_spots[id as usize].take() else {
+        //     return;
+        // };
     }
 
     pub fn parking_spot_count(&self) -> usize {

@@ -32,6 +32,7 @@ use crate::world::camera::Camera;
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::car_subsystem::{CarRenderSubsystem, Cars};
 use crate::world::roads::road_subsystem::{RoadRenderSubsystem, Roads};
+use crate::world::sound::sound::Sounds;
 use crate::world::terrain::terrain_gen::TerrainGenerator;
 use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
 use crate::world::world::World;
@@ -325,6 +326,7 @@ impl Renderer {
             &world.cars,
             &mut world.buildings,
             &mut world.zoning,
+            &mut world.sounds,
         );
     }
 
@@ -373,6 +375,7 @@ impl Renderer {
         cars: &Cars,
         buildings: &mut Buildings,
         zoning: &mut Zoning,
+        sounds: &mut Sounds,
     ) {
         let eye = camera.target;
         let target_pos_render = eye.to_relative_pos(WorldPos::zero());
@@ -387,7 +390,12 @@ impl Renderer {
             &self.road_renderer.mesh_manager,
             input,
             &mut self.gizmo,
-            &ui.variables,
+            &mut ui.variables,
+            &mut self.building_renderer,
+            &mut self.render_manager,
+            &mut self.props,
+            zoning,
+            sounds,
         );
         zoning.update(
             camera,
@@ -396,8 +404,9 @@ impl Renderer {
             roads,
             &self.road_renderer.mesh_manager,
             input,
-            &mut self.gizmo,
             &ui.variables,
+            &mut self.props,
+            &mut self.gizmo,
         );
         self.props.place_props(terrain, input, &self.device);
         time.timer.checkpoint("UI Render Update", false);
@@ -405,6 +414,7 @@ impl Renderer {
             ui,
             time,
             input,
+            &self.device,
             &self.queue,
             PhysicalSize::new(self.config.width, self.config.height).cast::<f32>(),
             settings,
@@ -443,8 +453,7 @@ impl Renderer {
         );
         self.gizmo.update_orbit_gizmo(
             ui,
-            camera.target,
-            camera.orbit_radius,
+            camera,
             time.astronomy.sun_dir,
             time.astronomy.moon_dir,
             false,
@@ -660,7 +669,11 @@ impl Renderer {
                     timeout: Some(Duration::from_secs(1)),
                 })
                 .ok();
-
+            let next_path = next_screenshot_path();
+            ui.variables.set_string(
+                "current_console_line",
+                format!("Saved Screenshot as: {:#?}", next_path.file_name().unwrap()),
+            );
             if let Ok(data) = buffer_slice.get_mapped_range() {
                 self.screenshot_sender
                     .send(ScreenshotJob {
@@ -669,7 +682,7 @@ impl Renderer {
                         height,
                         padded_bytes_per_row,
                         unpadded_bytes_per_row,
-                        path: next_screenshot_path(),
+                        path: next_path,
                     })
                     .unwrap();
             }

@@ -26,9 +26,7 @@ use crate::world::roads::intersections::{
     IntersectionBuildParams, build_intersection_at_node, gather_arms,
 };
 use crate::world::roads::road_editor::offset_polyline;
-use crate::world::roads::road_mesh_manager::{
-    ChunkId, RoadMeshManager, chunk_coord_to_id, world_pos_chunk_to_id,
-};
+use crate::world::roads::road_mesh_manager::RoadMeshManager;
 use crate::world::roads::road_structs::*;
 use crate::world::roads::road_subsystem::Roads;
 use crate::world::sound::sound::Sounds;
@@ -385,28 +383,6 @@ impl Node {
             .iter_mut()
             .find(|arm| arm.segment_id == segment_id)
     }
-    pub fn _version(&self) -> u64 {
-        let mut h: u64 = 0xcbf29ce484222325; // FNV offset basis
-
-        #[inline(always)]
-        fn mix(h: &mut u64, v: u64) {
-            *h ^= v;
-            *h = h.wrapping_mul(0x100000001b3);
-        }
-
-        mix(&mut h, self.pos.local.x.to_bits() as u64);
-        mix(&mut h, self.pos.local.y.to_bits() as u64);
-        mix(&mut h, self.pos.local.z.to_bits() as u64);
-
-        mix(&mut h, self.chunk_id() as u64);
-        mix(&mut h, self.next_control_id as u64);
-
-        mix(&mut h, self.attached_controls.len() as u64);
-        mix(&mut h, self.incoming_lanes.len() as u64);
-        mix(&mut h, self.outgoing_lanes.len() as u64);
-
-        h
-    }
 
     #[inline]
     pub fn pos(&self) -> WorldPos {
@@ -414,8 +390,8 @@ impl Node {
     }
 
     #[inline]
-    pub fn chunk_id(&self) -> ChunkId {
-        chunk_coord_to_id(self.pos.chunk.x, self.pos.chunk.z)
+    pub fn chunk_coord(&self) -> ChunkCoord {
+        self.pos.chunk
     }
 
     /// Every node is an intersection by design.
@@ -1573,18 +1549,18 @@ impl RoadStorage {
             .collect()
     }
 
-    pub fn nodes_in_chunk(&self, chunk_id: ChunkId) -> impl Iterator<Item = NodeId> + '_ {
+    pub fn nodes_in_chunk(&self, chunk_coord: ChunkCoord) -> impl Iterator<Item = NodeId> + '_ {
         self.nodes
             .iter()
             .enumerate()
             .filter_map(move |(idx, node)| {
                 let node = node.as_ref()?;
-                (node.chunk_id() == chunk_id).then(|| NodeId::new(idx as u32))
+                (node.chunk_coord() == chunk_coord).then(|| NodeId::new(idx as u32))
             })
     }
     pub fn iter_node_ids_optionally_chunked(
         &self,
-        chunk_id: Option<ChunkId>,
+        chunk_coord: Option<ChunkCoord>,
     ) -> impl Iterator<Item = NodeId> + '_ {
         self.nodes
             .iter()
@@ -1592,7 +1568,7 @@ impl RoadStorage {
             .filter_map(move |(idx, node)| {
                 let node = node.as_ref()?;
 
-                if chunk_id.is_none_or(|cid| node.chunk_id() == cid) {
+                if chunk_coord.is_none_or(|cid| node.chunk_coord() == cid) {
                     Some(NodeId::new(idx as u32))
                 } else {
                     None
@@ -2155,193 +2131,6 @@ pub fn project_point_to_lane_xz(
     Some((projection.t, projection.distance * projection.distance))
 }
 
-/// Project a point onto a line segment (XZ plane).
-/// Returns (t_clamped, distance_squared).
-#[inline]
-pub fn project_point_to_segment_xz(
-    point: WorldPos,
-    seg_start: WorldPos,
-    seg_end: WorldPos,
-) -> (f64, f64) {
-    // Compute everything relative to seg_start for precision
-    let d = seg_end.to_relative_pos(seg_start);
-    let p = point.to_relative_pos(seg_start);
-
-    let dx = d.x as f64;
-    let dz = d.z as f64;
-    let len_sq = dx * dx + dz * dz;
-
-    if len_sq < 1e-10 {
-        // Degenerate segment
-        return (0.0, p.x as f64 * p.x as f64 + p.z as f64 * p.z as f64);
-    }
-
-    // Project point onto line
-    let t = (p.x as f64 * dx + p.z as f64 * dz) / len_sq;
-    let t_clamped = t.clamp(0.0, 1.0);
-
-    // Compute the closest point on segment (relative to seg_start)
-    let cx = t_clamped * dx;
-    let cz = t_clamped * dz;
-
-    let dist_sq = (p.x as f64 - cx) * (p.x as f64 - cx) + (p.z as f64 - cz) * (p.z as f64 - cz);
-
-    (t_clamped, dist_sq)
-}
-
-/// Per-lane runtime state managed by chunk simulation.
-#[derive(Debug, Clone, Default)]
-pub struct LaneRuntimeState {
-    /// Estimated occupancy fraction [0, 1].
-    pub occupancy_estimate: f32,
-    /// True if lane is temporarily blocked.
-    pub blocked: bool,
-    /// Dynamic cost modifier added to lane.dynamic_cost.
-    pub dynamic_cost_modifier: f32,
-}
-
-/// Per-chunk road simulation state.
-/// Owned by chunk simulation code, not by RoadManager.
-#[derive(Debug, Clone)]
-pub struct RoadChunkState {
-    chunk_id: ChunkId,
-    /// Lane states stored in deterministic order (by LaneId).
-    lane_states: Vec<(LaneId, LaneRuntimeState)>,
-    /// Last simulation update time in seconds.
-    pub last_update_time_seconds: f64,
-    /// Deferred tick interval for this chunk.
-    pub deferred_tick_seconds: f32,
-    /// Per-chunk PRNG seed for deterministic simulation.
-    pub prng_seed: u64,
-}
-
-impl RoadChunkState {
-    /// Creates a new chunk state for the given lanes.
-    pub fn new(chunk_id: u64, lanes: &[LaneId], prng_seed: u64) -> Self {
-        let mut lane_states: Vec<_> = lanes
-            .iter()
-            .map(|&id| (id, LaneRuntimeState::default()))
-            .collect();
-        // Sort by lane ID for deterministic iteration
-        lane_states.sort_by_key(|(id, _)| id.raw());
-
-        Self {
-            chunk_id,
-            lane_states,
-            last_update_time_seconds: 0.0,
-            deferred_tick_seconds: 2.0,
-            prng_seed,
-        }
-    }
-
-    /// Returns the chunk ID this state belongs to.
-    #[inline]
-    pub fn chunk_id(&self) -> u64 {
-        self.chunk_id
-    }
-
-    /// Returns the runtime state for a lane, if tracked.
-    pub fn lane_state(&self, id: LaneId) -> Option<&LaneRuntimeState> {
-        self.lane_states
-            .binary_search_by_key(&id.raw(), |(lid, _)| lid.raw())
-            .ok()
-            .map(|idx| &self.lane_states[idx].1)
-    }
-
-    /// Returns mutable runtime state for a lane, if tracked.
-    pub fn lane_state_mut(&mut self, id: LaneId) -> Option<&mut LaneRuntimeState> {
-        self.lane_states
-            .binary_search_by_key(&id.raw(), |(lid, _)| lid.raw())
-            .ok()
-            .map(|idx| &mut self.lane_states[idx].1)
-    }
-
-    /// Iterates over all lane states in deterministic order.
-    pub fn iter_lane_states(&self) -> impl Iterator<Item = (LaneId, &LaneRuntimeState)> {
-        self.lane_states.iter().map(|(id, state)| (*id, state))
-    }
-
-    /// Iterates mutably over all lane states in deterministic order.
-    pub fn iter_lane_states_mut(
-        &mut self,
-    ) -> impl Iterator<Item = (LaneId, &mut LaneRuntimeState)> {
-        self.lane_states.iter_mut().map(|(id, state)| (*id, state))
-    }
-
-    /// Adds a lane to tracking (used when lanes are added to chunk).
-    pub fn add_lane(&mut self, id: LaneId) {
-        let idx = self
-            .lane_states
-            .binary_search_by_key(&id.raw(), |(lid, _)| lid.raw())
-            .unwrap_or_else(|i| i);
-        self.lane_states
-            .insert(idx, (id, LaneRuntimeState::default()));
-    }
-
-    /// Marks a lane as removed from active tracking (keeps entry for replay).
-    pub fn mark_lane_deleted(&mut self, id: LaneId) {
-        if let Some(state) = self.lane_state_mut(id) {
-            state.blocked = true;
-        }
-    }
-
-    /// Returns the number of tracked lanes.
-    #[inline]
-    pub fn lane_count(&self) -> usize {
-        self.lane_states.len()
-    }
-}
-
-// ============================================================================
-// Boundary Summary
-// ============================================================================
-
-/// Summary of road state at chunk boundaries for cross-chunk coordination.
-#[derive(Debug, Clone, Default)]
-pub struct ChunkBoundarySummary {
-    /// Lanes that cross into this chunk from other chunks.
-    pub incoming_cross_chunk_lanes: Vec<LaneId>,
-    /// Lanes that exit this chunk into other chunks.
-    pub outgoing_cross_chunk_lanes: Vec<LaneId>,
-    /// Aggregated flow rates at boundary (lane_id, vehicles_per_second).
-    pub boundary_flow_rates: Vec<(LaneId, f32)>,
-}
-
-impl ChunkBoundarySummary {
-    /// Creates a boundary summary for a chunk.
-    pub fn compute(storage: &RoadStorage, chunk_id: ChunkId) -> Self {
-        let mut incoming = Vec::new();
-        let mut outgoing = Vec::new();
-
-        for (id, lane) in storage.iter_lanes() {
-            let from = storage.node(lane.from_node());
-            let to = storage.node(lane.to_node());
-            let from_chunk = from.chunk_id();
-            let to_chunk = to.chunk_id();
-
-            if from_chunk != chunk_id && to_chunk == chunk_id {
-                incoming.push(id);
-            } else if from_chunk == chunk_id && to_chunk != chunk_id {
-                outgoing.push(id);
-            }
-        }
-
-        // Sort for determinism
-        incoming.sort_by_key(|id| id.raw());
-        outgoing.sort_by_key(|id| id.raw());
-
-        Self {
-            incoming_cross_chunk_lanes: incoming,
-            outgoing_cross_chunk_lanes: outgoing,
-            boundary_flow_rates: Vec::new(),
-        }
-    }
-}
-
-// ============================================================================
-// Command System
-// ============================================================================
-
 /// Commands for deterministic road topology modification.
 ///
 /// Commands are applied atomically and can be serialized for replay.
@@ -2369,7 +2158,7 @@ pub enum RoadCommand {
         start: NodeId,
         end: NodeId,
         structure: StructureType,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
         road_type_id: RoadTypeId,
     },
     /// Add a new lane to a segment.
@@ -2383,7 +2172,7 @@ pub enum RoadCommand {
         speed_limit: f32,
         capacity: u32,
         vehicle_mask: u32,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
     },
     /// Add a new lane to a segment.
     AddNodeLane {
@@ -2393,7 +2182,7 @@ pub enum RoadCommand {
         geometry: LaneGeometry,
         speed_limit: f32,
         vehicle_mask: u32,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
     },
     AddRaw {
         nodes: Vec<(NodeId, Node)>,
@@ -2403,88 +2192,88 @@ pub enum RoadCommand {
     },
     ClearNodeLanes {
         node_id: NodeId,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
     },
     /// delete a node.
     DeleteNode {
         node_id: NodeId,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
     },
     /// delete a segment and its lanes.
     DeleteSegment {
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
         segment_id: SegmentId,
         remove_orphan_nodes: bool,
     },
     /// delete a lane.
     DeleteLane {
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
         lane_id: LaneId,
         delete_orphans: bool,
     },
     /// Attach a traffic control to a node.
     AttachControl {
         node_id: NodeId,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
         control: TrafficControl,
     },
     /// delete a traffic control.
     DeleteControl {
         node_id: NodeId,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
         control_id: ControlId,
     },
     /// Enable a traffic control.
     EnableControl {
         node_id: NodeId,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
         control_id: ControlId,
     },
     /// Procedurally rebuild node lanes using *current* incoming/outgoing segment lanes.
     MakeIntersection {
         node_id: NodeId,
         intersection_params: IntersectionBuildParams,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
         recalc_clearance: bool,
     },
     /// Begin segment upgrade (deletes old segment).
     UpgradeSegmentBegin {
         old_segment: SegmentId,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
     },
     /// End segment upgrade (records new segment IDs for replay).
     UpgradeSegmentEnd {
         new_segments: Vec<SegmentId>,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
     },
     ReplaceNode {
         old_node_id: NodeId,
         new_node: Node,
-        chunk_id: ChunkId,
+        chunk_coord: ChunkCoord,
     },
 }
 impl RoadCommand {
     /// Returns the chunk ID affected by this command, if one is explicitly stored.
     /// For `AddNode`, the chunk is derived from `world_pos` and must be computed separately.
-    pub fn chunk_id(&self) -> ChunkId {
+    pub fn chunk_coord(&self) -> ChunkCoord {
         match self {
-            RoadCommand::AddNode { world_pos, .. } => world_pos_chunk_to_id(world_pos),
-            RoadCommand::AddSegment { chunk_id, .. } => *chunk_id,
-            RoadCommand::AddLane { chunk_id, .. } => *chunk_id,
-            RoadCommand::AddNodeLane { chunk_id, .. } => *chunk_id,
-            RoadCommand::AddRaw { .. } => 0,
-            RoadCommand::ClearNodeLanes { chunk_id, .. } => *chunk_id,
-            RoadCommand::DeleteNode { chunk_id, .. } => *chunk_id,
-            RoadCommand::DeleteSegment { chunk_id, .. } => *chunk_id,
-            RoadCommand::DeleteLane { chunk_id, .. } => *chunk_id,
-            RoadCommand::AttachControl { chunk_id, .. } => *chunk_id,
-            RoadCommand::DeleteControl { chunk_id, .. } => *chunk_id,
-            RoadCommand::EnableControl { chunk_id, .. } => *chunk_id,
-            RoadCommand::MakeIntersection { chunk_id, .. } => *chunk_id,
-            RoadCommand::UpgradeSegmentBegin { chunk_id, .. } => *chunk_id,
-            RoadCommand::UpgradeSegmentEnd { chunk_id, .. } => *chunk_id,
-            RoadCommand::ReplaceNode { chunk_id, .. } => *chunk_id,
-            RoadCommand::AddNodeFull { node, .. } => node.chunk_id(),
+            RoadCommand::AddNode { world_pos, .. } => world_pos.chunk,
+            RoadCommand::AddSegment { chunk_coord, .. } => *chunk_coord,
+            RoadCommand::AddLane { chunk_coord, .. } => *chunk_coord,
+            RoadCommand::AddNodeLane { chunk_coord, .. } => *chunk_coord,
+            RoadCommand::AddRaw { .. } => ChunkCoord::zero(),
+            RoadCommand::ClearNodeLanes { chunk_coord, .. } => *chunk_coord,
+            RoadCommand::DeleteNode { chunk_coord, .. } => *chunk_coord,
+            RoadCommand::DeleteSegment { chunk_coord, .. } => *chunk_coord,
+            RoadCommand::DeleteLane { chunk_coord, .. } => *chunk_coord,
+            RoadCommand::AttachControl { chunk_coord, .. } => *chunk_coord,
+            RoadCommand::DeleteControl { chunk_coord, .. } => *chunk_coord,
+            RoadCommand::EnableControl { chunk_coord, .. } => *chunk_coord,
+            RoadCommand::MakeIntersection { chunk_coord, .. } => *chunk_coord,
+            RoadCommand::UpgradeSegmentBegin { chunk_coord, .. } => *chunk_coord,
+            RoadCommand::UpgradeSegmentEnd { chunk_coord, .. } => *chunk_coord,
+            RoadCommand::ReplaceNode { chunk_coord, .. } => *chunk_coord,
+            RoadCommand::AddNodeFull { node, .. } => node.chunk_coord(),
         }
     }
 }
@@ -2493,15 +2282,15 @@ impl RoadCommand {
 #[derive(Debug, Clone)]
 pub enum CommandResult {
     /// Node was created with this ID.
-    NodeCreated(ChunkId, NodeId),
+    NodeCreated(ChunkCoord, NodeId),
     /// Segment was created with this ID.
-    SegmentCreated(ChunkId, SegmentId),
+    SegmentCreated(ChunkCoord, SegmentId),
     /// Lane was created with this ID.
-    LaneCreated(ChunkId, LaneId),
+    LaneCreated(ChunkCoord, LaneId),
     /// NodeLane was created with this ID.
-    NodeLaneCreated(ChunkId, NodeLaneId),
+    NodeLaneCreated(ChunkCoord, NodeLaneId),
     /// Control was attached with this ID.
-    ControlAttached(ChunkId, ControlId),
+    ControlAttached(ChunkCoord, ControlId),
     /// Command applied with no new IDs.
     Ok,
     /// Command failed (invalid reference).
@@ -2689,15 +2478,15 @@ pub fn apply_road_command(
             if !is_preview {
                 cars.add_spawning_node(*id);
             }
-            let chunk_id = world_pos_chunk_to_id(world_pos);
-            CommandResult::NodeCreated(chunk_id, *id)
+            let chunk_coord = world_pos.chunk;
+            CommandResult::NodeCreated(chunk_coord, *id)
         }
         RoadCommand::AddSegment {
             id,
             start,
             end,
             structure,
-            chunk_id,
+            chunk_coord,
             road_type_id,
         } => {
             if start.raw() as usize >= storage.node_count()
@@ -2706,7 +2495,7 @@ pub fn apply_road_command(
                 return CommandResult::InvalidReference;
             }
             storage.add_segment(*id, *start, *end, structure.clone(), *road_type_id);
-            CommandResult::SegmentCreated(*chunk_id, *id)
+            CommandResult::SegmentCreated(*chunk_coord, *id)
         }
         RoadCommand::AddLane {
             id,
@@ -2718,7 +2507,7 @@ pub fn apply_road_command(
             speed_limit,
             capacity,
             vehicle_mask,
-            chunk_id,
+            chunk_coord,
         } => {
             if from.raw() as usize >= storage.node_count()
                 || to.raw() as usize >= storage.node_count()
@@ -2737,7 +2526,7 @@ pub fn apply_road_command(
                 *capacity,
                 *vehicle_mask,
             );
-            CommandResult::LaneCreated(*chunk_id, *id)
+            CommandResult::LaneCreated(*chunk_coord, *id)
         }
         RoadCommand::AddNodeLane {
             node_id,
@@ -2746,7 +2535,7 @@ pub fn apply_road_command(
             geometry,
             speed_limit,
             vehicle_mask,
-            chunk_id,
+            chunk_coord,
         } => {
             let id = storage.add_node_lane(
                 *node_id,
@@ -2756,7 +2545,7 @@ pub fn apply_road_command(
                 *speed_limit,
                 *vehicle_mask,
             );
-            CommandResult::NodeLaneCreated(*chunk_id, id)
+            CommandResult::NodeLaneCreated(*chunk_coord, id)
         }
         RoadCommand::AddRaw {
             nodes,
@@ -2772,12 +2561,18 @@ pub fn apply_road_command(
             );
             CommandResult::Ok
         }
-        RoadCommand::ClearNodeLanes { node_id, chunk_id } => {
+        RoadCommand::ClearNodeLanes {
+            node_id,
+            chunk_coord,
+        } => {
             let node = storage.node_mut(*node_id);
             node.node_lanes.clear();
             CommandResult::Ok
         }
-        RoadCommand::DeleteNode { node_id, chunk_id } => {
+        RoadCommand::DeleteNode {
+            node_id,
+            chunk_coord,
+        } => {
             if node_id.raw() as usize >= storage.node_count() {
                 return CommandResult::InvalidReference;
             }
@@ -2789,7 +2584,7 @@ pub fn apply_road_command(
         }
         RoadCommand::DeleteSegment {
             segment_id,
-            chunk_id,
+            chunk_coord,
             remove_orphan_nodes,
         } => {
             if segment_id.raw() as usize >= storage.segment_count() {
@@ -2800,7 +2595,7 @@ pub fn apply_road_command(
         }
         RoadCommand::DeleteLane {
             lane_id,
-            chunk_id,
+            chunk_coord,
             delete_orphans,
         } => {
             if lane_id.raw() as usize >= storage.lane_count() {
@@ -2811,19 +2606,19 @@ pub fn apply_road_command(
         }
         RoadCommand::AttachControl {
             node_id,
-            chunk_id,
+            chunk_coord,
             control,
         } => {
             if node_id.raw() as usize >= storage.node_count() {
                 return CommandResult::InvalidReference;
             }
             let id = storage.attach_control(*node_id, control.clone());
-            CommandResult::ControlAttached(*chunk_id, id)
+            CommandResult::ControlAttached(*chunk_coord, id)
         }
         RoadCommand::DeleteControl {
             node_id,
             control_id,
-            chunk_id,
+            chunk_coord,
         } => {
             if node_id.raw() as usize >= storage.node_count() {
                 return CommandResult::InvalidReference;
@@ -2834,7 +2629,7 @@ pub fn apply_road_command(
         RoadCommand::EnableControl {
             node_id,
             control_id,
-            chunk_id,
+            chunk_coord,
         } => {
             if node_id.raw() as usize >= storage.node_count() {
                 return CommandResult::InvalidReference;
@@ -2845,7 +2640,7 @@ pub fn apply_road_command(
         RoadCommand::MakeIntersection {
             node_id,
             intersection_params,
-            chunk_id,
+            chunk_coord,
             recalc_clearance: clear,
         } => {
             if node_id.raw() as usize >= storage.node_count() {
@@ -2873,14 +2668,14 @@ pub fn apply_road_command(
         }
         RoadCommand::UpgradeSegmentBegin {
             old_segment,
-            chunk_id,
+            chunk_coord,
         } => {
             storage.delete_segment(*old_segment, road_types, gizmo, false);
             CommandResult::Ok
         }
-        RoadCommand::UpgradeSegmentEnd { chunk_id, .. } => CommandResult::Ok,
+        RoadCommand::UpgradeSegmentEnd { chunk_coord, .. } => CommandResult::Ok,
         RoadCommand::ReplaceNode {
-            chunk_id,
+            chunk_coord,
             old_node_id,
             new_node,
         } => {
@@ -2902,15 +2697,14 @@ pub fn apply_road_command(
 
 /// Extracts all chunk IDs affected by real (non-preview) commands,
 /// so the render subsystem knows which chunks to rebuild meshes for.
-pub fn collect_affected_chunks(commands: &[RoadEditorCommand]) -> Vec<ChunkId> {
+pub fn collect_affected_chunks(commands: &[RoadEditorCommand]) -> Vec<ChunkCoord> {
     let mut chunks = Vec::new();
     for cmd in commands {
         if let RoadEditorCommand::Road(road_cmd) = cmd {
-            let chunk_id = road_cmd.chunk_id();
-            chunks.push(chunk_id);
+            let chunk_coord = road_cmd.chunk_coord();
+            chunks.push(chunk_coord);
         }
     }
-    chunks.sort();
     chunks.dedup();
     chunks
 }
@@ -2941,7 +2735,7 @@ pub fn apply_command(
     match command {
         RoadEditorCommand::Road(road_command) => {
             // store the chunk ID here if an operation succeeds
-            let mut affected_chunk: Option<ChunkId> = None;
+            let mut affected_chunk: Option<ChunkCoord> = None;
             let result = match road_command {
                 RoadCommand::AddNode { id, world_pos } => {
                     //println!("{:?} {}", id, is_preview);
@@ -2950,16 +2744,16 @@ pub fn apply_command(
                     if !is_preview {
                         car_subsystem.add_spawning_node(id);
                     }
-                    let chunk_id = world_pos_chunk_to_id(&world_pos);
-                    affected_chunk = Some(chunk_id);
-                    CommandResult::NodeCreated(chunk_id, id)
+                    let chunk_coord = world_pos.chunk;
+                    affected_chunk = Some(chunk_coord);
+                    CommandResult::NodeCreated(chunk_coord, id)
                 }
                 RoadCommand::AddSegment {
                     id,
                     start,
                     end,
                     structure,
-                    chunk_id,
+                    chunk_coord,
                     road_type_id,
                 } => {
                     if start.raw() as usize >= storage.node_count()
@@ -2969,8 +2763,8 @@ pub fn apply_command(
                     }
 
                     storage.add_segment(id, start, end, structure, road_type_id);
-                    affected_chunk = Some(chunk_id);
-                    CommandResult::SegmentCreated(chunk_id, id)
+                    affected_chunk = Some(chunk_coord);
+                    CommandResult::SegmentCreated(chunk_coord, id)
                 }
                 RoadCommand::AddLane {
                     id,
@@ -2982,7 +2776,7 @@ pub fn apply_command(
                     speed_limit,
                     capacity,
                     vehicle_mask,
-                    chunk_id,
+                    chunk_coord,
                 } => {
                     if from.raw() as usize >= storage.node_count()
                         || to.raw() as usize >= storage.node_count()
@@ -3001,8 +2795,8 @@ pub fn apply_command(
                         capacity,
                         vehicle_mask,
                     );
-                    affected_chunk = Some(chunk_id);
-                    CommandResult::LaneCreated(chunk_id, id)
+                    affected_chunk = Some(chunk_coord);
+                    CommandResult::LaneCreated(chunk_coord, id)
                 }
                 RoadCommand::AddNodeLane {
                     node_id,
@@ -3011,7 +2805,7 @@ pub fn apply_command(
                     geometry,
                     speed_limit,
                     vehicle_mask,
-                    chunk_id,
+                    chunk_coord,
                 } => {
                     let id = storage.add_node_lane(
                         node_id,
@@ -3021,8 +2815,8 @@ pub fn apply_command(
                         speed_limit,
                         vehicle_mask,
                     );
-                    affected_chunk = Some(chunk_id);
-                    CommandResult::NodeLaneCreated(chunk_id, id)
+                    affected_chunk = Some(chunk_coord);
+                    CommandResult::NodeLaneCreated(chunk_coord, id)
                 }
                 RoadCommand::AddRaw {
                     nodes,
@@ -3033,66 +2827,72 @@ pub fn apply_command(
                     storage.add_raw(nodes, segments, lanes, nodes_needing_regen);
                     CommandResult::Ok
                 }
-                RoadCommand::ClearNodeLanes { node_id, chunk_id } => {
+                RoadCommand::ClearNodeLanes {
+                    node_id,
+                    chunk_coord,
+                } => {
                     let node = storage.node_mut(node_id);
                     node.node_lanes.clear();
-                    affected_chunk = Some(chunk_id);
+                    affected_chunk = Some(chunk_coord);
                     CommandResult::Ok
                 }
-                RoadCommand::DeleteNode { node_id, chunk_id } => {
+                RoadCommand::DeleteNode {
+                    node_id,
+                    chunk_coord,
+                } => {
                     storage.delete_node(node_id, road_types, gizmo);
-                    affected_chunk = Some(chunk_id);
+                    affected_chunk = Some(chunk_coord);
                     CommandResult::Ok
                 }
                 RoadCommand::DeleteSegment {
                     segment_id,
-                    chunk_id,
+                    chunk_coord,
                     remove_orphan_nodes,
                 } => {
                     storage.delete_segment(segment_id, road_types, gizmo, remove_orphan_nodes);
-                    affected_chunk = Some(chunk_id);
+                    affected_chunk = Some(chunk_coord);
                     CommandResult::Ok
                 }
                 RoadCommand::DeleteLane {
                     lane_id,
-                    chunk_id,
+                    chunk_coord,
                     delete_orphans,
                 } => {
                     storage.delete_lane(lane_id, road_types, gizmo, delete_orphans);
-                    affected_chunk = Some(chunk_id);
+                    affected_chunk = Some(chunk_coord);
                     CommandResult::Ok
                 }
                 RoadCommand::AttachControl {
                     node_id,
-                    chunk_id,
+                    chunk_coord,
                     control,
                 } => {
                     let id = storage.attach_control(node_id, control.clone());
-                    affected_chunk = Some(chunk_id);
-                    CommandResult::ControlAttached(chunk_id, id)
+                    affected_chunk = Some(chunk_coord);
+                    CommandResult::ControlAttached(chunk_coord, id)
                 }
                 RoadCommand::DeleteControl {
                     node_id,
                     control_id,
-                    chunk_id,
+                    chunk_coord,
                 } => {
                     storage.delete_control(node_id, control_id);
-                    affected_chunk = Some(chunk_id);
+                    affected_chunk = Some(chunk_coord);
                     CommandResult::Ok
                 }
                 RoadCommand::EnableControl {
                     node_id,
                     control_id,
-                    chunk_id,
+                    chunk_coord,
                 } => {
                     storage.enable_control(node_id, control_id);
-                    affected_chunk = Some(chunk_id);
+                    affected_chunk = Some(chunk_coord);
                     CommandResult::Ok
                 }
                 RoadCommand::MakeIntersection {
                     node_id,
                     intersection_params: params,
-                    chunk_id,
+                    chunk_coord,
                     recalc_clearance: clear,
                 } => {
                     let arms = gather_arms(storage, road_types, node_id, gizmo);
@@ -3106,33 +2906,33 @@ pub fn apply_command(
                     let arms = gather_arms(storage, road_types, node_id, gizmo);
 
                     storage.node_mut(node_id).arms = arms;
-                    affected_chunk = Some(chunk_id);
+                    affected_chunk = Some(chunk_coord);
                     CommandResult::Ok
                 }
                 RoadCommand::UpgradeSegmentBegin {
                     old_segment,
-                    chunk_id,
+                    chunk_coord,
                 } => {
                     storage.delete_segment(old_segment, road_types, gizmo, false);
-                    affected_chunk = Some(chunk_id);
+                    affected_chunk = Some(chunk_coord);
                     CommandResult::Ok
                 }
-                RoadCommand::UpgradeSegmentEnd { chunk_id, .. } => {
-                    affected_chunk = Some(chunk_id);
+                RoadCommand::UpgradeSegmentEnd { chunk_coord, .. } => {
+                    affected_chunk = Some(chunk_coord);
                     CommandResult::Ok
                 }
                 RoadCommand::ReplaceNode {
-                    chunk_id,
+                    chunk_coord,
                     old_node_id,
                     new_node,
                 } => {
                     let node = storage.node_mut(old_node_id);
                     let _ = replace(node, new_node);
-                    affected_chunk = Some(chunk_id);
+                    affected_chunk = Some(chunk_coord);
                     CommandResult::Ok
                 }
                 RoadCommand::AddNodeFull { id, node } => {
-                    affected_chunk = Some(node.chunk_id());
+                    affected_chunk = Some(node.chunk_coord());
                     storage.nodes[id.index()] = Some(node);
                     CommandResult::Ok
                 }
@@ -3140,10 +2940,10 @@ pub fn apply_command(
 
             // Only update the mesh if this is not a preview and the command succeeded (chunk ID was set)
             if !is_preview {
-                if let Some(chunk_id) = affected_chunk {
+                if let Some(chunk_coord) = affected_chunk {
                     road_mesh_manager.update_chunk_mesh(
                         terrain,
-                        chunk_id,
+                        chunk_coord,
                         road_manager,
                         road_style_params,
                         gizmo,
@@ -3303,7 +3103,7 @@ fn generate_segment_preview(
         start: start_node_id,
         end: end_node_id,
         structure: road_type.structure(),
-        chunk_id: 0,
+        chunk_coord: preview.start.chunk,
         road_type_id: road_style_params.road_type_id(),
     });
 
@@ -3330,7 +3130,7 @@ fn generate_segment_preview(
             speed_limit: speed,
             capacity,
             vehicle_mask: mask,
-            chunk_id: 0,
+            chunk_coord: preview.start.chunk,
         });
     }
 
@@ -3371,7 +3171,7 @@ fn generate_segment_preview_segment(
         start: start_node_id,
         end: end_node_id,
         structure: ref_segment.structure(),
-        chunk_id: 0,
+        chunk_coord: start.chunk,
         road_type_id: ref_segment.road_type_id,
     });
 
@@ -3395,7 +3195,7 @@ fn generate_segment_preview_segment(
             speed_limit: lane.speed_limit(),
             capacity: lane.capacity(),
             vehicle_mask: lane.vehicle_mask(),
-            chunk_id: 0,
+            chunk_coord: start.chunk,
         });
     }
 
@@ -3427,7 +3227,7 @@ fn generate_node_with_stub_preview(
         start: main_node_id,
         end: main_node_id,
         structure: road_type.structure(),
-        chunk_id: 0,
+        chunk_coord: position.chunk,
         road_type_id: road_style_params.road_type_id(),
     });
 
@@ -3454,7 +3254,7 @@ fn generate_node_with_stub_preview(
             speed_limit: speed,
             capacity,
             vehicle_mask: mask,
-            chunk_id: 0,
+            chunk_coord: position.chunk,
         });
     }
 }

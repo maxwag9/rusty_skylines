@@ -1,26 +1,31 @@
 use crate::helpers::implementations::SerializableVec3;
 use crate::helpers::positions::{ChunkCoord, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
+use crate::renderer::props::Props;
 use crate::resources::Time;
 use crate::simulation::Ticker;
 use crate::ui::input::Input;
 use crate::ui::parser::Value;
 use crate::ui::variables::Variables;
+use crate::world::buildings::building_mesher::{
+    Color, DrivewayMaterial, RoofMaterial, WallMaterial,
+};
 use crate::world::buildings::buildings::{
     Building, BuildingComplaint, BuildingDesignSource, BuildingId, BuildingOccupancy,
-    BuildingParams, BuildingParamsLevelsOld, BuildingStorage, BuildingUsage, Buildings, Color,
-    DrivewayMaterial, GarageParams, MiscBuildingParams, RevisionedSmallVec, RoofMaterial, RoofType,
-    WallMaterial,
+    BuildingParams, BuildingStorage, BuildingUsage, Buildings, GarageParams, MiscBuildingParams,
+    RevisionedSmallVec, RoofType,
 };
+use crate::world::buildings::lot_fitting::{
+    LOT_FRONT_OFFSET, LOT_MIN_DEPTH, LOT_PREFERRED_FRONTAGE, LotFit, LotPoint, collect_road_points,
+    fit_lot_to_neighbors, gather_closest_lot_point,
+};
+use crate::world::buildings::lot_layout::{LotFrame, LotPlan};
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::{Car, CarId, CarMode, CarStorage, SimTime};
 use crate::world::cars::car_subsystem::make_random_car;
-use crate::world::cars::parking::{PARK_L, PARK_W, ParkingSpotId, ParkingStorage};
+use crate::world::cars::parking::{ParkingSpotId, ParkingStorage};
 use crate::world::cars::partitions::Destination;
-use crate::world::roads::road_mesh_manager::{
-    ChunkId, Edges, RoadEdgeStorage, RoadEdges, RoadMeshManager, chunk_id_to_coord,
-    world_pos_chunk_to_id,
-};
+use crate::world::roads::road_mesh_manager::{Edges, RoadEdgeStorage, RoadEdges, RoadMeshManager};
 use crate::world::roads::road_structs::{LaneId, SegmentId};
 use crate::world::roads::road_subsystem::Roads;
 use crate::world::roads::roads::RoadStorage;
@@ -191,7 +196,7 @@ impl District {
                         //     }
                         // }
                     };
-                    let floor_area = lot.get_floor_area();
+                    let floor_area = lot.floor_area_or_zero();
                     let Some(current_level) = building.current_level_params(&buildings.catalog)
                     else {
                         error!("Building had no Building Params");
@@ -920,6 +925,7 @@ fn generate_building(terrain: &Terrain, lot: &Lot) -> Option<Building> {
         edit_id: None,
         prop_instance_ids: vec![],
         occupancy: Default::default(),
+        misc: Default::default(),
     })
 }
 
@@ -1003,20 +1009,7 @@ impl PlacePos {
         }
     }
 }
-pub enum LotPointType {
-    Sidewalk,
-    Lane(LaneId),
-}
-pub struct LotPoint {
-    pub pos: WorldPos,
-    pub tangent: Vec3,
-    pub lateral: Vec3,
-    pub left_point: Option<(WorldPos, Vec3, Vec3, f64)>,
-    pub right_point: Option<(WorldPos, Vec3, Vec3, f64)>,
-    pub dist: f64,
-    pub segment_id: SegmentId,
-    pub point_type: LotPointType,
-}
+
 #[derive(Clone, Default)]
 pub struct Zoning {
     pub ticker: Ticker,
@@ -1040,8 +1033,9 @@ impl Zoning {
         roads: &Roads,
         road_mesh_manager: &RoadMeshManager,
         input: &mut Input,
-        gizmo: &mut Gizmo,
         variables: &Variables,
+        props: &mut Props,
+        gizmo: &mut Gizmo,
     ) {
         self.zoning_storage.update_target(camera.target.chunk);
         if terrain.cursor.mode != CursorMode::Area && terrain.cursor.mode != CursorMode::Zoning {
@@ -1094,13 +1088,12 @@ impl Zoning {
             return;
         };
 
-        let mut closest_point: Option<LotPoint> = None;
-        let mut closest_distance = 100.0;
+        let mut closest_point = gather_closest_lot_point(roads, road_mesh_manager, picked.pos);
 
         for segment_id in roads
             .road_manager
             .roads
-            .segment_ids_touching_chunks(&picked.chunk.coords.chunk_coord.get_chunks_3x3())
+            .segment_ids_touching_chunks(&picked.chunk.chunk_coord.get_chunks_3x3())
         {
             let Some(road_edges) = road_mesh_manager.road_edge_storage.get(&segment_id) else {
                 continue;
@@ -1117,82 +1110,26 @@ impl Zoning {
                 }
             }
 
-            // Prefer sidewalks if they exist
-            if !road_edges.right_sidewalk_edge.is_empty() {
-                let edges = &road_edges.right_sidewalk_edge;
-
-                collect_lot_point(
-                    edges,
-                    &picked,
-                    &mut closest_distance,
-                    &mut closest_point,
-                    segment_id,
-                );
-            }
-
-            if !road_edges.left_sidewalk_edge.is_empty() {
-                let edges = &road_edges.left_sidewalk_edge;
-
-                collect_lot_point(
-                    edges,
-                    &picked,
-                    &mut closest_distance,
-                    &mut closest_point,
-                    segment_id,
-                );
-            } else {
-                // No sidewalks, use lane edges manually
-                let lane_ids = roads.road_manager.roads.segment(segment_id).lanes();
-
-                for lane_id in lane_ids {
-                    let Some(lane_edges) = road_edges.lane_edges.get(lane_id) else {
-                        continue;
-                    };
-                    for point in &lane_edges.right_points {
+            if road_edges.right_sidewalk_edge.is_empty() || road_edges.left_sidewalk_edge.is_empty()
+            {
+                for edges in road_edges.lane_edges.values() {
+                    for point in &edges.right_points {
                         if point.distance_squared(picked.pos) < SNAP_RADIUS * SNAP_RADIUS {
                             gizmo.circle(*point, 0.4, [0.8, 0.3, 1.0, 1.0], 0.1, 0.0);
                         }
                     }
-
-                    collect_lot_point(
-                        lane_edges,
-                        &picked,
-                        &mut closest_distance,
-                        &mut closest_point,
-                        segment_id,
-                    )
                 }
             }
         }
 
-        let lot_snap_point = if let Some(snap_point) = closest_point {
+        let lot_snap_point = closest_point.take().and_then(|snap_point| {
             if snap_point.dist < SNAP_RADIUS {
                 gizmo.circle(snap_point.pos, 1.0, [0.8, 0.3, 1.0, 1.0], 0.15, 0.0);
                 Some(snap_point)
             } else {
-                if let Some(road_edges) = road_mesh_manager
-                    .road_edge_storage
-                    .get(&snap_point.segment_id)
-                {
-                    for point in road_edges
-                        .lane_edges
-                        .values()
-                        .map(|edges| &edges.right_points)
-                        .flatten()
-                        .chain(road_edges.right_sidewalk_edge.right_points.iter())
-                        .chain(road_edges.left_sidewalk_edge.right_points.iter())
-                    {
-                        if point.distance_squared(picked.pos) < SNAP_RADIUS * SNAP_RADIUS {
-                            gizmo.circle(*point, 0.4, [0.8, 0.3, 1.0, 1.0], 0.1, 0.0);
-                        }
-                    }
-                }
-
                 None
             }
-        } else {
-            None
-        };
+        });
 
         match terrain.cursor.mode.clone() {
             CursorMode::Zoning => {
@@ -1206,7 +1143,9 @@ impl Zoning {
                     lot_snap_point,
                     &picked,
                     new_zone_type,
+                    props,
                     gizmo,
+                    None,
                 );
             }
             CursorMode::Area => {
@@ -1266,6 +1205,7 @@ impl Zoning {
             .collect();
 
         let rng = &mut ThreadRng::default();
+
         for callback in callbacks {
             let mut immigration_changes: Option<(Vec<Person>, Vec<Person>)> = None;
 
@@ -1547,10 +1487,10 @@ impl Zoning {
         road_mesh_manager: &RoadMeshManager,
         lot_points: &[WorldPos],
     ) -> bool {
-        // If the lot has fewer than 3 points, it's degenerate → no intersection possible
-        if lot_points.len() < 3 {
+        if lot_points.len() < 4 {
             return false;
         }
+
         let segment_ids = lot_points
             .iter()
             .map(|point| {
@@ -1561,23 +1501,26 @@ impl Zoning {
             })
             .flatten()
             .collect::<Vec<SegmentId>>();
+
         for segment_id in segment_ids.iter() {
             let Some(edges) = road_mesh_manager.road_edge_storage.get(segment_id) else {
                 continue;
             };
+
             let road_points = collect_road_points(edges);
+
             for point in road_points {
                 if point_in_polygon_xz(*point, lot_points) {
-                    //gizmo.cross(*point, 20.0, [1.0, 0.2, 0.6, 1.0], 0.5, 0.0);
                     return true;
                 }
             }
         }
+
         false
     }
+
     fn lot_intersects_any_lot(&self, points: &[WorldPos], ignore_lot_id: Option<LotId>) -> bool {
-        // If the lot has fewer than 3 points, it's degenerate → no intersection possible
-        if points.len() < 3 {
+        if points.len() < 4 {
             return false;
         }
 
@@ -1586,38 +1529,30 @@ impl Zoning {
                 continue;
             }
 
-            if existing_lot.bounds.len() < 3 {
+            if existing_lot.bounds.len() < 4 {
                 continue;
             }
 
-            // Quick bounding box check (optional but recommended for performance)
-            // if !bbox_intersects(&points.bounds, &existing_lot.bounds) {
-            //     continue;
-            // }
-
-            // Check if any edge of the new lot intersects any edge of the existing lot
             match self.lot_intersects_lot(points, existing_lot.bounds.as_slice()) {
                 None => continue,
-                Some(intersection_type) => {
-                    //println!("{:?}", intersection_type);
-                    return true;
-                }
+                Some(_) => return true,
             }
         }
+
         false
     }
+
     fn lot_intersects_lot(
         &self,
         points_a: &[WorldPos],
         points_b: &[WorldPos],
     ) -> Option<SegmentIntersectionType> {
-        if points_a.len() < 3 || points_b.len() < 3 {
+        if points_a.len() < 4 || points_b.len() < 4 {
             return None;
         }
 
-        const CLEARANCE: f64 = -0.1;
+        const CLEARANCE: f64 = 0.05;
 
-        // 1. Check edge-to-edge intersections (including closing the polygons)
         for edge_a in points_a.windows(2) {
             let a = edge_a[0];
             let b = edge_a[1];
@@ -1630,37 +1565,16 @@ impl Zoning {
                     return Some(SegmentIntersectionType::OtherEdges);
                 }
             }
-
-            // Check against the closing edge of lot_b
-            if let (Some(&first), Some(&last)) = (points_b.first(), points_b.last()) {
-                if segment_xz_intersect(a, b, last, first, CLEARANCE).is_some() {
-                    return Some(SegmentIntersectionType::ClosingEdgeOfB);
-                }
-            }
         }
 
-        // 2. Check closing edge of lot_a against all edges of lot_b
-        if let (Some(&first_a), Some(&last_a)) = (points_a.first(), points_a.last()) {
-            for edge_b in points_b.windows(2) {
-                let c = edge_b[0];
-                let d = edge_b[1];
-
-                if segment_xz_intersect(last_a, first_a, c, d, CLEARANCE).is_some() {
-                    return Some(SegmentIntersectionType::ClosingEdgeOfA);
-                }
-            }
+        if points_a[0].in_polygon(points_b) || points_b[0].in_polygon(points_a) {
+            return Some(SegmentIntersectionType::PointInsidePolygon);
         }
-
-        // 3. Optional: Check if one lot is completely inside the other
-        //     (important for preventing nested lots or one lot swallowing another)      BUGGY!!!!!! Stays collided forever
-        // if point_inside_polygon(points_a[0], points_b, true) || point_inside_polygon(points_a[0], points_a, true) {
-        //     return Some(SegmentIntersectionType::PointInsidePolygon)
-        // }
 
         None
     }
 
-    fn run_lot_zoning(
+    pub fn run_lot_zoning(
         &mut self,
         terrain: &mut Terrain,
         buildings: &mut Buildings,
@@ -1671,118 +1585,246 @@ impl Zoning {
         lot_snap_point: Option<LotPoint>,
         picked: &PickedPoint,
         new_zoning_type: ZoningType,
+        props: &mut Props,
         gizmo: &mut Gizmo,
-    ) {
-        //println!("{:?}", variables.get_f64("lot_width"));
-        let lot_width = variables.get_f64("lot_width").unwrap_or(15.0) as f32;
-        let lot_length = variables.get_f64("lot_length").unwrap_or(20.0) as f32;
-        let rng = &mut ThreadRng::default();
-        // let lot_width = rng.random_range(10.0..20.0);
-        // let lot_length = rng.random_range(15.0..26.0);
-        let mut inside_lot_id: Option<LotId> = None;
+        preview_lot_id: Option<LotId>,
+    ) -> bool {
+        let mut inside_lot_id = None;
+
         for lot in self.zoning_storage.iter_lots() {
             if point_in_polygon_xz(picked.pos, lot.bounds.as_slice()) {
                 inside_lot_id = Some(lot.id);
                 break;
             }
         }
-        if let Some(snap_point) = lot_snap_point
-            && inside_lot_id.is_none()
-        {
-            gizmo.circle(snap_point.pos, 0.3, [0.1, 0.3, 0.8, 1.0], 0.1, 0.0);
+        if let Some(lot_id) = inside_lot_id {
+            if inside_lot_id == preview_lot_id {
+                let fit = self.zoning_storage.get_lot(lot_id).and_then(|lot| {
+                    let target = lot.entrance.pos;
 
-            let half_width = lot_width * 0.5;
-            let origin = snap_point.pos.add_vec3(snap_point.lateral * 0.5);
-            // Road edge corners
-            let front_left = origin.sub_vec3(snap_point.tangent * half_width);
+                    let snap = lot_snap_point.clone().or_else(|| {
+                        let snapped = gather_closest_lot_point(roads, road_mesh_manager, target)?;
 
-            let front_right = origin.add_vec3(snap_point.tangent * half_width);
-            // Back corners away from road
-            let back_left = front_left.add_vec3(snap_point.lateral * lot_length);
+                        (snapped.dist <= SNAP_RADIUS).then_some(snapped)
+                    })?;
 
-            let back_right = front_right.add_vec3(snap_point.lateral * lot_length);
+                    fit_lot_to_neighbors(
+                        &self.zoning_storage,
+                        road_mesh_manager,
+                        &snap,
+                        Some(lot_id),
+                    )
+                });
 
-            let mut preview = vec![front_left, back_left, back_right, front_right, front_left];
-            for point in preview.iter_mut() {
-                point.local.y = terrain.get_height_at(*point, true);
-            }
-            let intersects_lot = self.lot_intersects_any_lot(preview.as_slice(), None);
-            let intersects_roads =
-                self.lot_intersects_any_road(gizmo, roads, road_mesh_manager, preview.as_slice());
-            //println!("{} {}", intersects_lot, intersects_roads);
-            let invalid = intersects_lot || intersects_roads;
+                let valid = if let Some(fit) = &fit {
+                    let mut preview = fit.bounds.clone();
 
-            match invalid {
-                true => {
-                    // Oh, no it does intersect!
-                    // Preview draw
-                    gizmo.polyline(
-                        preview.as_slice(),
-                        [0.8, 0.1, 0.1, 1.0],
-                        8.0,
-                        false,
-                        0.25,
-                        0.0,
-                    );
-                }
-                false => {
-                    // DOESN'T INTERSECT LETS GO
-                    // Preview draw
-                    gizmo.polyline(
-                        preview.as_slice(),
-                        [0.1, 0.8, 0.1, 1.0],
-                        8.0,
-                        false,
-                        0.2,
-                        0.0,
-                    );
-                    if input.action_repeat("Place Zoning Point") {
-                        let lot_center = WorldPos::centroid(&preview);
-                        let lot = Lot {
-                            id: 6945220,
-                            bounds: preview,
-                            center: Default::default(),
-                            entrance: LotEntrance::new(snap_point.pos, snap_point.lateral),
-                            layout: None,
-                            zoning_type: Some(new_zoning_type),
-                            segment_id: Some(snap_point.segment_id),
-                            district_id: 6378186,
-                            building_id: None,
-                            land_value: self.zoning_storage.sample_land_value(lot_center.chunk),
-                        };
-
-                        self.zoning_storage.spawn_lot(lot);
+                    for point in &mut preview {
+                        point.local.y = terrain.get_height_at(*point, true);
                     }
+
+                    let intersects_lot =
+                        self.lot_intersects_any_lot(preview.as_slice(), Some(lot_id));
+
+                    let intersects_roads = self.lot_intersects_any_road(
+                        gizmo,
+                        roads,
+                        road_mesh_manager,
+                        preview.as_slice(),
+                    );
+
+                    let invalid = intersects_lot || intersects_roads;
+
+                    gizmo.polyline(
+                        preview.as_slice(),
+                        if invalid {
+                            [0.8, 0.1, 0.1, 1.0]
+                        } else {
+                            [0.1, 0.8, 0.1, 1.0]
+                        },
+                        8.0,
+                        false,
+                        if invalid { 0.25 } else { 0.2 },
+                        0.0,
+                    );
+
+                    !invalid
+                } else {
+                    if let Some(lot) = self.zoning_storage.get_lot(lot_id) {
+                        gizmo.polyline(
+                            lot.bounds.as_slice(),
+                            [0.8, 0.1, 0.1, 1.0],
+                            8.0,
+                            false,
+                            0.25,
+                            0.0,
+                        );
+                    }
+
+                    false
+                };
+
+                for lot in self.zoning_storage.iter_lots() {
+                    if lot.id == lot_id {
+                        draw_area(
+                            lot.bounds.as_slice(),
+                            lot.zoning_type,
+                            variables,
+                            gizmo,
+                            Some([1.2, 1.2, 1.2, 1.0]),
+                            Some(new_zoning_type),
+                        );
+                    } else {
+                        draw_area(
+                            lot.bounds.as_slice(),
+                            lot.zoning_type,
+                            variables,
+                            gizmo,
+                            Some([1.0, 1.0, 1.0, 0.3]),
+                            None,
+                        );
+                    }
+
+                    gizmo.polyline(
+                        lot.bounds.as_slice(),
+                        [0.1, 0.3, 0.7, 0.8],
+                        10.0,
+                        false,
+                        0.10,
+                        0.0,
+                    );
                 }
+
+                return valid;
             }
         }
+
         let removing_lot = input.action_down("Remove Lot");
         let finished_removing_lot = input.action_released("Remove Lot");
-        for lot in self.zoning_storage.iter_mut_lots() {
-            if inside_lot_id == Some(lot.id) {
-                if removing_lot {
-                    draw_area(
-                        lot.bounds.as_slice(),
-                        lot.zoning_type,
-                        variables,
-                        gizmo,
-                        Some([3.0, 0.2, 0.2, 1.0]),
-                        Some(new_zoning_type),
+
+        if let Some(lot_id) = inside_lot_id {
+            let mut fit: Option<LotFit> = None;
+
+            if let Some(lot) = self.zoning_storage.get_lot(lot_id) {
+                let target = lot.entrance.pos;
+
+                let snap = lot_snap_point.clone().or_else(|| {
+                    let snapped = gather_closest_lot_point(roads, road_mesh_manager, target)?;
+
+                    if snapped.dist > SNAP_RADIUS {
+                        return None;
+                    }
+
+                    Some(snapped)
+                });
+
+                if let Some(snap) = snap {
+                    fit = fit_lot_to_neighbors(
+                        &self.zoning_storage,
+                        road_mesh_manager,
+                        &snap,
+                        Some(lot_id),
                     );
+                }
+            }
+
+            for lot in self.zoning_storage.iter_mut_lots() {
+                if inside_lot_id == Some(lot.id) {
+                    if removing_lot {
+                        draw_area(
+                            lot.bounds.as_slice(),
+                            lot.zoning_type,
+                            variables,
+                            gizmo,
+                            Some([3.0, 0.2, 0.2, 1.0]),
+                            Some(new_zoning_type),
+                        );
+                    } else {
+                        if let Some(fit) = &fit {
+                            gizmo.polyline(
+                                fit.bounds.as_slice(),
+                                [0.1, 0.8, 0.1, 1.0],
+                                8.0,
+                                false,
+                                0.2,
+                                0.0,
+                            );
+                        } else {
+                            gizmo.polyline(
+                                lot.bounds.as_slice(),
+                                [0.8, 0.1, 0.1, 1.0],
+                                8.0,
+                                false,
+                                0.25,
+                                0.0,
+                            );
+                        }
+
+                        draw_area(
+                            lot.bounds.as_slice(),
+                            lot.zoning_type,
+                            variables,
+                            gizmo,
+                            Some([1.2, 1.2, 1.2, 1.0]),
+                            Some(new_zoning_type),
+                        );
+
+                        if input.action_pressed_once("Place Zoning Point") {
+                            if let Some(fit) = fit.clone() {
+                                lot.bounds = fit.bounds;
+                                lot.center =
+                                    WorldPos::centroid(&lot.bounds[..lot.bounds.len() - 1]);
+                                lot.entrance =
+                                    LotEntrance::new(fit.snap_point.pos, fit.snap_point.lateral);
+                                lot.segment_id = Some(fit.snap_point.segment_id);
+                                lot.zoning_type = Some(new_zoning_type);
+                            }
+                        }
+                    }
                 } else {
                     draw_area(
                         lot.bounds.as_slice(),
                         lot.zoning_type,
                         variables,
                         gizmo,
-                        Some([1.2, 1.2, 1.2, 1.0]),
-                        Some(new_zoning_type),
+                        Some([1.0, 1.0, 1.0, 0.3]),
+                        None,
                     );
-                    if input.action_pressed_once("Place Zoning Point") {
-                        lot.zoning_type = Some(new_zoning_type);
-                    }
                 }
-            } else {
+
+                gizmo.polyline(
+                    lot.bounds.as_slice(),
+                    [0.1, 0.3, 0.7, 0.8],
+                    10.0,
+                    false,
+                    0.10,
+                    0.0,
+                );
+            }
+
+            if removing_lot {
+                if let Some(building_id) = self
+                    .zoning_storage
+                    .get_lot(lot_id)
+                    .and_then(|lot| lot.building_id)
+                {
+                    BuildingStorage::despawn(
+                        buildings,
+                        self,
+                        &mut terrain.terrain_editor,
+                        props,
+                        building_id,
+                    );
+                }
+
+                self.zoning_storage.despawn_lot(lot_id);
+            }
+
+            return true;
+        }
+
+        let Some(snap_point) = lot_snap_point else {
+            for lot in self.zoning_storage.iter_lots() {
                 draw_area(
                     lot.bounds.as_slice(),
                     lot.zoning_type,
@@ -1791,7 +1833,134 @@ impl Zoning {
                     Some([1.0, 1.0, 1.0, 0.3]),
                     None,
                 );
+
+                gizmo.polyline(
+                    lot.bounds.as_slice(),
+                    [0.1, 0.3, 0.7, 0.8],
+                    10.0,
+                    false,
+                    0.10,
+                    0.0,
+                );
             }
+
+            return false;
+        };
+
+        gizmo.circle(snap_point.pos, 0.3, [0.1, 0.3, 0.8, 1.0], 0.1, 0.0);
+
+        let fit = fit_lot_to_neighbors(&self.zoning_storage, road_mesh_manager, &snap_point, None);
+
+        if let Some(fit) = &fit {
+            let mut preview = fit.bounds.clone();
+
+            for point in &mut preview {
+                point.local.y = terrain.get_height_at(*point, true);
+            }
+
+            let intersects_lot = self.lot_intersects_any_lot(preview.as_slice(), None);
+
+            let intersects_roads =
+                self.lot_intersects_any_road(gizmo, roads, road_mesh_manager, preview.as_slice());
+
+            let invalid = intersects_lot || intersects_roads;
+
+            if invalid {
+                gizmo.polyline(
+                    preview.as_slice(),
+                    [0.8, 0.1, 0.1, 1.0],
+                    8.0,
+                    false,
+                    0.25,
+                    0.0,
+                );
+            } else {
+                gizmo.polyline(
+                    preview.as_slice(),
+                    [0.1, 0.8, 0.1, 1.0],
+                    8.0,
+                    false,
+                    0.2,
+                    0.0,
+                );
+
+                if input.action_repeat("Place Zoning Point") {
+                    let lot_center = WorldPos::centroid(&preview[..preview.len() - 1]);
+
+                    let lot = Lot {
+                        id: 6945220,
+                        bounds: preview,
+                        bounds_version: 0,
+                        center: lot_center,
+                        entrance: LotEntrance::new(fit.snap_point.pos, fit.snap_point.lateral),
+                        layout: None,
+                        zoning_type: Some(new_zoning_type),
+                        segment_id: Some(fit.snap_point.segment_id),
+                        district_id: 6378186,
+                        building_id: None,
+                        land_value: self.zoning_storage.sample_land_value(lot_center.chunk),
+                    };
+
+                    self.zoning_storage.spawn_lot(lot);
+                }
+            }
+
+            for lot in self.zoning_storage.iter_lots() {
+                draw_area(
+                    lot.bounds.as_slice(),
+                    lot.zoning_type,
+                    variables,
+                    gizmo,
+                    Some([1.0, 1.0, 1.0, 0.3]),
+                    None,
+                );
+
+                gizmo.polyline(
+                    lot.bounds.as_slice(),
+                    [0.1, 0.3, 0.7, 0.8],
+                    10.0,
+                    false,
+                    0.10,
+                    0.0,
+                );
+            }
+
+            return !invalid;
+        }
+
+        let width = LOT_PREFERRED_FRONTAGE as f32;
+        let origin = snap_point
+            .pos
+            .add_vec3(snap_point.lateral * LOT_FRONT_OFFSET as f32);
+
+        let half_width = width * 0.5;
+
+        let front_left = origin.sub_vec3(snap_point.tangent * half_width);
+
+        let front_right = origin.add_vec3(snap_point.tangent * half_width);
+
+        let back_left = front_left.add_vec3(snap_point.lateral * LOT_MIN_DEPTH as f32);
+
+        let back_right = front_right.add_vec3(snap_point.lateral * LOT_MIN_DEPTH as f32);
+
+        gizmo.polyline(
+            &[front_left, front_right, back_right, back_left],
+            [0.8, 0.1, 0.1, 1.0],
+            8.0,
+            true,
+            0.25,
+            0.0,
+        );
+
+        for lot in self.zoning_storage.iter_lots() {
+            draw_area(
+                lot.bounds.as_slice(),
+                lot.zoning_type,
+                variables,
+                gizmo,
+                Some([1.0, 1.0, 1.0, 0.3]),
+                None,
+            );
 
             gizmo.polyline(
                 lot.bounds.as_slice(),
@@ -1802,25 +1971,9 @@ impl Zoning {
                 0.0,
             );
         }
-        if let Some(lot_id) = inside_lot_id
-            && removing_lot
-        {
-            if let Some(building_id) = self
-                .zoning_storage
-                .get_lot(lot_id)
-                .map(|lot| lot.building_id)
-            {
-                BuildingStorage::despawn(buildings, self, &mut terrain.terrain_editor, building_id);
-            }
 
-            self.zoning_storage.despawn_lot(lot_id);
-        }
-
-        // if input.action_pressed_once("Place Zoning Point") {
-        //
-        // }
+        false
     }
-
     fn run_area_zoning(
         &mut self,
         terrain: &Terrain,
@@ -2090,101 +2243,6 @@ impl Zoning {
     }
 }
 
-pub fn collect_road_points(edges: &RoadEdges) -> Vec<&WorldPos> {
-    let points: Vec<&WorldPos> = match (
-        edges.left_sidewalk_edge.is_empty(),
-        edges.right_sidewalk_edge.is_empty(),
-    ) {
-        (true, _) => edges
-            .right_sidewalk_edge
-            .right_points
-            .iter()
-            .chain(
-                edges
-                    .lane_edges
-                    .values()
-                    .flat_map(|e| e.right_points.iter()),
-            )
-            .collect(),
-
-        (_, true) => edges
-            .left_sidewalk_edge
-            .left_points
-            .iter()
-            .chain(
-                edges
-                    .lane_edges
-                    .values()
-                    .flat_map(|e| e.right_points.iter()),
-            )
-            .collect(),
-
-        (false, false) => edges
-            .right_sidewalk_edge
-            .right_points
-            .iter()
-            .chain(edges.left_sidewalk_edge.right_points.iter())
-            .collect(),
-    };
-    points
-}
-
-pub fn collect_lot_point(
-    edges: &Edges,
-    picked: &PickedPoint,
-    closest_distance: &mut f64,
-    closest_point: &mut Option<LotPoint>,
-    segment_id: SegmentId,
-) {
-    //println!("points: {:?} tangents: {:?} laterals: {:?}", edges.right_points.len(), edges.right_tangents.len(), edges.right_laterals.len());
-    for (idx, ((point, tangent), lateral)) in edges
-        .right_points
-        .iter()
-        .zip(edges.right_tangents.iter())
-        .zip(edges.right_laterals.iter())
-        .enumerate()
-    {
-        let dist = picked.pos.distance_to(*point);
-        //println!("{}", dist);
-        if dist < *closest_distance {
-            *closest_distance = dist;
-
-            let left_point = if idx > 0 {
-                Some((
-                    edges.right_points[idx - 1],
-                    edges.right_tangents[idx - 1],
-                    edges.right_laterals[idx - 1],
-                    picked.pos.distance_to(edges.right_points[idx - 1]),
-                ))
-            } else {
-                None
-            };
-
-            let right_point = if idx + 1 < edges.right_points.len() {
-                Some((
-                    edges.right_points[idx + 1],
-                    edges.right_tangents[idx + 1],
-                    edges.right_laterals[idx + 1],
-                    picked.pos.distance_to(edges.right_points[idx + 1]),
-                ))
-            } else {
-                None
-            };
-
-            *closest_point = Some(LotPoint {
-                pos: *point,
-                tangent: *tangent,
-                lateral: *lateral,
-                left_point,
-                right_point,
-                dist,
-                segment_id,
-                point_type: LotPointType::Sidewalk,
-            });
-        }
-    }
-}
-
 pub type DistrictId = u32;
 pub type LotId = u32;
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
@@ -2235,6 +2293,7 @@ impl Tile {
 pub struct Lot {
     pub id: LotId,
     pub bounds: Vec<WorldPos>,
+    pub bounds_version: u32,
     pub center: WorldPos,
     pub entrance: LotEntrance, // From this point into the lot
     pub layout: Option<LotLayout>,
@@ -2252,6 +2311,7 @@ impl Clone for Lot {
         Self {
             id: self.id,
             bounds: self.bounds.clone(),
+            bounds_version: self.bounds_version,
             center: self.center,
             entrance: self.entrance.clone(),
             layout: None, // Expensive and useless to clone
@@ -2265,216 +2325,43 @@ impl Clone for Lot {
 }
 impl Lot {
     #[inline]
-    pub fn chunk_id(&self) -> ChunkId {
-        world_pos_chunk_to_id(&self.center)
+    pub fn chunk_coord(&self) -> ChunkCoord {
+        self.center.chunk
     }
 
     pub fn generate_layout(&self, parking_storage: &mut ParkingStorage) -> LotLayout {
-        let mut parking_spots = Vec::new();
-        let mut tiles = HashMap::new();
-        let mut driveway_entrances = Vec::new();
-
         let mut rng = ChaCha8Rng::seed_from_u64(self.id as u64);
+        let frame = LotFrame::from_lot(self);
+        let plan = LotPlan::generate(&frame, &mut rng);
 
-        let origin = self.entrance.pos;
-        let direction = self.entrance.dir;
+        let mut tiles = plan.rasterize(self);
+        let driveway_entrances = plan.driveway_entrances(&frame);
+        let parking_spots = plan.generate_parking(self, &frame, &tiles, parking_storage);
 
-        let forward = Vec2::new(direction.x, direction.z).normalize_or_zero();
-        let right = Vec2::new(forward.y, -forward.x);
-
-        let mut min_x = i16::MAX;
-        let mut max_x = i16::MIN;
-        let mut min_z = i16::MAX;
-        let mut max_z = i16::MIN;
-
-        for p in &self.bounds {
-            let local = origin.delta_xz(*p, right, forward);
-            let gx = local.x.floor() as i16;
-            let gz = local.y.floor() as i16;
-
-            min_x = min_x.min(gx);
-            max_x = max_x.max(gx);
-            min_z = min_z.min(gz);
-            max_z = max_z.max(gz);
-        }
-
-        let width = max_x - min_x + 1;
-        let depth = max_z - min_z + 1;
-        // for p in &self.bounds {
-        //     let local = origin.delta_xz(*p, right, forward);
-        //     println!("{:?} -> {:?}", p, local);
-        // }
-        //println!("{} {} {} {} {} {} {:?}", width, depth, min_x, max_x, min_z, max_x, self.bounds);
-        // if width < 8 || depth < 10 {
-        //     return LotLayout {
-        //         tiles: HashMap::new(),
-        //         driveway_entrances: Vec::new(),
-        //         unoccupied_parking_spots: Vec::new(),
-        //         occupied_parking_spots: Vec::new(),
-        //     };
-        // }
-        let house_w = ((width as f32) * rng.random_range(0.38..0.52)).round() as i16;
-        let house_d = ((depth as f32) * rng.random_range(0.32..0.45)).round() as i16;
-
-        let garage_w = rng.random_range(2..=3);
-        let garage_d = rng.random_range(2..=4);
-        let driveway_w = rng.random_range(2..=3);
-
-        let house_w = house_w.clamp(4, (width - 2).max(4));
-        let house_d = house_d.clamp(4, (depth - 3).max(4));
-
-        let center_x = (min_x + max_x) / 2;
-        let house_offset = rng.random_range(-1..=1);
-
-        let house_x0 = (center_x - house_w / 2 + house_offset).clamp(min_x + 1, max_x - house_w);
-
-        let house_x1 = house_x0 + house_w - 1;
-        let house_z1 = max_z - 1;
-
-        let front_setback = rng.random_range(0..=2);
-        let house_z0 = (house_z1 - house_d + 1 - front_setback).clamp(min_z + 2, max_z - house_d);
-
-        let garage_on_right = rng.random_bool(0.7) && house_x1 + 1 + garage_w <= max_x;
-
-        let garage_x0 = if garage_on_right {
-            house_x1 + 1
-        } else {
-            (house_x0 - 1 - garage_w).max(min_x)
-        };
-
-        let garage_x1 = garage_x0 + garage_w - 1;
-
-        let garage_z0 = house_z0 + rng.random_range(0..=1);
-        let garage_z1 = (garage_z0 + garage_d - 1).min(house_z1);
-
-        let driveway_center_x = garage_x0 + garage_w / 2;
-        let driveway_x0 = driveway_center_x - driveway_w / 2;
-        let driveway_x1 = driveway_x0 + driveway_w - 1;
-
-        // Key part: compute driveway entrance point(s)
-        let entrance_z = min_z + 1;
-        let entrance_x = driveway_center_x;
-
-        let entrance_tile_pos = origin
-            .add_vec2(right * (entrance_x as f32 + 0.5) + forward * (entrance_z as f32 + 0.5));
-
-        let inward_dir = Vec3::new(forward.x, 0.0, forward.y);
-
-        driveway_entrances.push(LotEntrance::new(entrance_tile_pos, inward_dir));
-
-        let balcony_enabled = rng.random_bool(0.45);
-        let balcony_z = house_z1;
-
-        let balcony_x0 = (house_x0 + rng.random_range(0..=1)).clamp(house_x0, house_x1);
-
-        let balcony_x1 = (house_x1 - rng.random_range(0..=1)).clamp(house_x0, house_x1);
-
-        for x in min_x..=max_x {
-            for z in min_z..=max_z {
-                let tile_pos =
-                    origin.add_vec2(right * (x as f32 + 0.5) + forward * (z as f32 + 0.5));
-
-                if !point_in_polygon_xz(tile_pos, &self.bounds) {
-                    continue;
-                }
-
-                let tile = if z <= min_z + 1 && x >= driveway_x0 && x <= driveway_x1 {
-                    Tile::Square(TileType::LotEntrance)
-                } else if x >= garage_x0 && x <= garage_x1 && z >= garage_z0 && z <= garage_z1 {
-                    Tile::Square(TileType::Garage)
-                } else if x >= house_x0 && x <= house_x1 && z >= house_z0 && z <= house_z1 {
-                    if balcony_enabled
-                        && z == balcony_z
-                        && x >= balcony_x0
-                        && x <= balcony_x1
-                        && width >= 10
-                    {
-                        Tile::Square(TileType::HouseBalcony)
-                    } else if z == house_z0 && x >= driveway_x0 && x <= driveway_x1 {
-                        Tile::Square(TileType::HouseEntrance)
-                    } else {
-                        Tile::Square(TileType::House)
-                    }
-                } else if x >= driveway_x0 && x <= driveway_x1 && z >= min_z + 1 && z <= house_z0 {
-                    Tile::Square(TileType::Driveway)
-                } else {
-                    let hash = (self.id as u64)
-                        ^ ((x as i64 as u64).wrapping_mul(0x9E3779B97F4A7C15))
-                        ^ ((z as i64 as u64).wrapping_mul(0xC2B2AE3D27D4EB4F));
-
-                    if hash % 100 == 0 {
-                        Tile::Square(TileType::Tree)
-                    } else {
-                        Tile::Square(TileType::Garden)
-                    }
-                };
-
-                tiles.insert(TilePos::new(x, z), tile);
-            }
-        }
-
-        let mut z = min_z + 1;
-
-        while z <= house_z0 - PARK_L + 1 {
-            let mut x = driveway_x0;
-
-            while x + PARK_W - 1 <= driveway_x1 {
-                let mut valid = true;
-                let mut parking_tiles = [TilePos::new(0, 0); 8];
-                let mut parking_tile_count = 0;
-
-                'check: for dx in 0..PARK_W {
-                    for dz in 0..PARK_L {
-                        let tile_pos = TilePos::new(x + dx, z + dz);
-                        match tiles.get(&tile_pos) {
-                            Some(Tile::Square(TileType::Driveway))
-                            | Some(Tile::Square(TileType::LotEntrance)) => {
-                                parking_tiles[parking_tile_count] = tile_pos;
-                                parking_tile_count += 1;
-                            }
-                            _ => {
-                                valid = false;
-                                break 'check;
-                            }
-                        }
-                    }
-                }
-
-                if valid {
-                    let center = origin.add_vec2(
-                        right * (x as f32 + PARK_W as f32 * 0.5)
-                            + forward * (z as f32 + PARK_L as f32 * 0.5),
-                    );
-
-                    let lot_info = Some(ParkingSpotLotInfo {
-                        lot_id: self.id,
-                        tiles: parking_tiles,
-                    });
-
-                    let id = parking_storage.spawn(ParkingSpot::new(
-                        center,
-                        Vec3::new(forward.x, 0.0, forward.y), // Game is Y-up, so this is the correct way!
-                        lot_info,
-                    ));
-
-                    parking_spots.push(id);
-
-                    x += PARK_W;
-                } else {
-                    x += 1;
-                }
-            }
-
-            z += PARK_L;
-        }
-
-        LotLayout {
+        let mut layout = LotLayout {
             tiles,
+            area: 0.0,
+            floor_area: 0.0,
             driveway_entrances,
             unoccupied_parking_spots: parking_spots,
-            occupied_parking_spots: vec![],
+            occupied_parking_spots: Vec::new(),
+        };
+        layout.compute_areas();
+        layout
+    }
+
+    pub fn remove_layout(&mut self, parking_storage: &mut ParkingStorage) {
+        if let Some(layout) = self.layout.take() {
+            for parking_spot_id in layout
+                .occupied_parking_spots
+                .into_iter()
+                .chain(layout.unoccupied_parking_spots.into_iter())
+            {
+                parking_storage.despawn(parking_spot_id)
+            }
         }
     }
+
     /// Designed for once per second.
     pub fn get_car_spawn(
         zoning: &Zoning,
@@ -2490,7 +2377,7 @@ impl Lot {
 
         let tenants = building
             .current_level_params(&buildings.catalog)?
-            .max_people(lot.get_floor_area()); // TODO: Beware the building params Optionality!
+            .max_people(lot.floor_area_or_zero()); // TODO: Beware the building params Optionality!
         if tenants == 0 {
             return None;
         }
@@ -2588,20 +2475,8 @@ impl Lot {
         Some((lot.entrance.clone(), car_trip_type)) // TODO: huh? entrance
     }
 
-    pub fn get_floor_area(&self) -> f64 {
-        let tiles = if let Some(layout) = &self.layout {
-            &layout.tiles
-        } else {
-            return 0.0;
-        };
-        tiles
-            .values()
-            .filter_map(|tile| match tile {
-                Tile::Square(TileType::House) => Some(1.0),
-                Tile::Polygon(TileType::House, points) => Some(WorldPos::area(points.as_slice())),
-                _ => None,
-            })
-            .sum()
+    pub fn floor_area_or_zero(&self) -> f64 {
+        self.layout.as_ref().map(|l| l.floor_area).unwrap_or(0.0)
     }
 }
 #[derive(Serialize, Deserialize, Clone, Copy, Eq, PartialEq, Hash, Debug)]
@@ -2645,6 +2520,8 @@ impl TilePos {
 #[revisioned(revision = 1)]
 pub struct LotLayout {
     pub tiles: HashMap<TilePos, Tile>,
+    pub area: f64,
+    pub floor_area: f64,
     pub driveway_entrances: Vec<LotEntrance>,
     pub unoccupied_parking_spots: Vec<ParkingSpotId>,
     pub occupied_parking_spots: Vec<ParkingSpotId>,
@@ -2677,6 +2554,19 @@ impl LotLayout {
         let right = Vec2::new(forward.y, -forward.x);
 
         origin.add_vec2(right * (tile_pos.x as f32 + 0.5) + forward * (tile_pos.z as f32 + 0.5))
+    }
+
+    pub fn compute_areas(&mut self) {
+        self.area = self.tiles.len() as f64 * self.tiles.len() as f64;
+        self.floor_area = self
+            .tiles
+            .values()
+            .filter_map(|tile| match tile {
+                Tile::Square(TileType::House) => Some(1.0),
+                Tile::Polygon(TileType::House, points) => Some(WorldPos::area(points.as_slice())),
+                _ => None,
+            })
+            .sum()
     }
 }
 
@@ -2727,7 +2617,7 @@ pub struct ZoningStorage {
     lots: Vec<Option<Lot>>,
     district_free_list: Vec<DistrictId>,
     lot_free_list: Vec<LotId>,
-    lot_chunk_storage: HashMap<ChunkId, Vec<LotId>>,
+    lot_chunk_storage: HashMap<ChunkCoord, Vec<LotId>>,
     center_chunk: ChunkCoord,
 }
 
@@ -3000,8 +2890,50 @@ impl ZoningStorage {
 
         None
     }
+    pub fn update_lot_geometry(
+        &mut self,
+        id: LotId,
+        entrance: LotEntrance,
+        bounds: Vec<WorldPos>,
+        center: WorldPos,
+    ) {
+        let old_chunk = match self.get_lot(id) {
+            Some(lot) => lot.chunk_coord(),
+            None => return,
+        };
+
+        let new_chunk = center.chunk;
+
+        if let Some(lot) = self.get_mut_lot(id) {
+            lot.entrance = entrance;
+            // if lot.bounds != bounds {
+            //     lot.bounds_version = lot.bounds_version.saturating_add(1)
+            // };
+            lot.bounds = bounds;
+            lot.center = center;
+        } else {
+            return;
+        }
+
+        if old_chunk == new_chunk {
+            return;
+        }
+
+        if let Some(chunk_lots) = self.lot_chunk_storage.get_mut(&old_chunk) {
+            chunk_lots.retain(|&lot_id| lot_id != id);
+
+            if chunk_lots.is_empty() {
+                self.lot_chunk_storage.remove(&old_chunk);
+            }
+        }
+
+        self.lot_chunk_storage
+            .entry(new_chunk)
+            .or_default()
+            .push(id);
+    }
     pub fn sample_land_value(&self, center: ChunkCoord) -> f32 {
-        let lot_ids = self.lots_in_chunk_plus(center.chunk_id());
+        let lot_ids = self.lots_in_chunk_plus(center);
         if lot_ids.is_empty() {
             return 0.0;
         }
@@ -3063,24 +2995,24 @@ impl ZoningStorage {
         let frac = (h as f64 / u64::MAX as f64) as f32;
         frac * max
     }
-    pub fn lots_in_chunk(&self, chunk_id: ChunkId) -> Vec<LotId> {
+    pub fn lots_in_chunk(&self, chunk_coord: ChunkCoord) -> Vec<LotId> {
         self.lot_chunk_storage
-            .get(&chunk_id)
+            .get(&chunk_coord)
             .cloned()
             .unwrap_or_default()
     }
-    pub fn lots_in_chunk_plus(&self, chunk_id: ChunkId) -> Vec<LotId> {
-        let c = chunk_id_to_coord(chunk_id);
-        let chunk_coords = c.get_chunks_plus();
+    pub fn lots_in_chunk_plus(&self, chunk_coord: ChunkCoord) -> Vec<LotId> {
+        let chunk_coords = chunk_coord.get_chunks_plus();
 
         self.lots_in_chunks(chunk_coords)
     }
     pub fn lots_in_chunks(&self, chunk_coords: Vec<ChunkCoord>) -> Vec<LotId> {
         chunk_coords
             .into_iter()
-            .flat_map(|c_id| {
+            .flat_map(|chunk_coord| {
+                // CHUNK weird word. CH is weird.
                 self.lot_chunk_storage
-                    .get(&c_id.chunk_id())
+                    .get(&chunk_coord)
                     .into_iter()
                     .flatten()
                     .copied()
@@ -3203,7 +3135,7 @@ impl ZoningStorage {
         let lot_id = if let Some(reused_id) = self.lot_free_list.pop() {
             lot.id = reused_id;
             self.lot_chunk_storage
-                .entry(lot.chunk_id())
+                .entry(lot.chunk_coord())
                 .or_default()
                 .push(lot.id);
             self.lots[reused_id as usize] = Some(lot);
@@ -3212,7 +3144,7 @@ impl ZoningStorage {
             let new_id = self.lots.len() as u32;
             lot.id = new_id;
             self.lot_chunk_storage
-                .entry(lot.chunk_id())
+                .entry(lot.chunk_coord())
                 .or_default()
                 .push(lot.id);
             self.lots.push(Some(lot));
@@ -3284,6 +3216,7 @@ impl ZoningStorage {
     }
 
     pub fn despawn_lot(&mut self, id: LotId) {
+        let mut despawn_district = None;
         if let Some(Some(lot)) = self.lots.get(id as usize) {
             // Remove from district
             if let Some(Some(district)) = self.districts.get_mut(lot.district_id as usize) {
@@ -3291,20 +3224,26 @@ impl ZoningStorage {
                     .lot_ids
                     .retain(|district_lot_id| district_lot_id != &lot.id);
                 district.remove_points(&lot.bounds);
+                if district.lot_ids.is_empty() {
+                    despawn_district = Some(district.id);
+                }
             }
 
             // Remove from chunk storage
-            if let Some(chunk_lots) = self.lot_chunk_storage.get_mut(&lot.chunk_id()) {
+            if let Some(chunk_lots) = self.lot_chunk_storage.get_mut(&lot.chunk_coord()) {
                 chunk_lots.retain(|lot_id| lot_id != &id);
 
                 if chunk_lots.is_empty() {
-                    self.lot_chunk_storage.remove(&lot.chunk_id());
+                    self.lot_chunk_storage.remove(&lot.chunk_coord());
                 }
             }
 
             // Free slot
             self.lots[id as usize] = None;
             self.lot_free_list.push(id);
+        }
+        if let Some(district_id) = despawn_district {
+            self.despawn_district(district_id)
         }
     }
 
@@ -3416,43 +3355,73 @@ enum SegmentIntersectionType {
 /// Returns (t along a→b, u along c→d), both ∈ [0, 1].
 /// Uses only WorldPos::dx / dz — no raw world coordinates.
 /// `tolerance`: minimum distance from endpoints in world units.
+fn shrink_segment(a: WorldPos, b: WorldPos, clearance: f64) -> Option<(WorldPos, WorldPos)> {
+    if clearance <= 0.0 {
+        return Some((a, b));
+    }
+
+    let len = a.distance_to(b);
+
+    if len <= clearance * 2.0 + 1e-6 {
+        return None;
+    }
+
+    let t = clearance / len;
+
+    Some((a.lerp(b, t), a.lerp(b, 1.0 - t)))
+}
+
 fn segment_xz_intersect(
     a: WorldPos,
     b: WorldPos,
     c: WorldPos,
     d: WorldPos,
-    tolerance: f64,
+    clearance: f64,
 ) -> Option<(f64, f64)> {
+    let (a, b) = shrink_segment(a, b, clearance)?;
+    let (c, d) = shrink_segment(c, d, clearance)?;
+
     let r_x = a.dx(b);
     let r_z = a.dz(b);
     let s_x = c.dx(d);
     let s_z = c.dz(d);
 
     let denom = r_x * s_z - r_z * s_x;
-    if denom.abs() < 1e-5 {
-        return None;
-    }
 
     let ac_x = a.dx(c);
     let ac_z = a.dz(c);
 
+    if denom.abs() < 1e-9 {
+        let r_len2 = r_x * r_x + r_z * r_z;
+
+        if r_len2 < 1e-12 {
+            return None;
+        }
+
+        let cross = ac_x * r_z - ac_z * r_x;
+
+        if cross.abs() > 1e-6 * r_len2.sqrt() {
+            return None;
+        }
+
+        let t0 = (ac_x * r_x + ac_z * r_z) / r_len2;
+        let ad_x = a.dx(d);
+        let ad_z = a.dz(d);
+        let t1 = (ad_x * r_x + ad_z * r_z) / r_len2;
+
+        let (lo, hi) = if t0 <= t1 { (t0, t1) } else { (t1, t0) };
+
+        if hi < 0.0 || lo > 1.0 {
+            return None;
+        }
+
+        return Some((lo.clamp(0.0, 1.0), hi.clamp(0.0, 1.0)));
+    }
+
     let t = (ac_x * s_z - ac_z * s_x) / denom;
     let u = (ac_x * r_z - ac_z * r_x) / denom;
 
-    // --- convert world tolerance → parametric epsilon ---
-    let eps = if tolerance == 0.0 {
-        0.0
-    } else {
-        let len_r = (r_x * r_x + r_z * r_z).sqrt().max(1e-6);
-        let len_s = (s_x * s_x + s_z * s_z).sqrt().max(1e-6);
-
-        let eps_r = tolerance / len_r;
-        let eps_s = tolerance / len_s;
-
-        eps_r.min(eps_s) // conservative, like your second function
-    };
-
-    if t > eps && t < 1.0 - eps && u > eps && u < 1.0 - eps {
+    if t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0 {
         Some((t, u))
     } else {
         None

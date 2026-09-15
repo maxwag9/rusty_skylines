@@ -7,7 +7,6 @@ layers:
         id: Menu Background
         actions:
           - on:startup, set(str:selected_save.0, none:None)
-
         x: 960
         y: 540
         w: 1920
@@ -46,9 +45,9 @@ layers:
         h: 1000
         rotation: 0.0
         color:
-          - 0.01
-          - 0.01
-          - 0.01
+          - 0.002
+          - 0.002
+          - 0.002
           - 0.98
         border_color:
           - 1.0

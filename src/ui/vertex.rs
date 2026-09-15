@@ -1,4 +1,5 @@
 use crate::data::Settings;
+use crate::helpers::paths::data_dir;
 use crate::helpers::positions::WorldPos;
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::renderer::ui_text_rendering::Anchor;
@@ -14,8 +15,11 @@ use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use sluggrs::cosmic_text::Metrics;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fmt;
 use std::mem::size_of;
+use std::path::PathBuf;
+use tracing::error;
 use wgpu::{vertex_attr_array, *};
 use winit::dpi::PhysicalSize;
 
@@ -347,6 +351,8 @@ impl AdvancedPrimitive {
         advanced_primitives: &HashMap<String, UiLayerYaml>,
         order: u32,
         window_size: PhysicalSize<f32>,
+        device: &Device,
+        queue: &Queue,
     ) -> RuntimeLayer {
         let x_scale = window_size.width / 1920.0;
         let y_scale = window_size.height / 1080.0;
@@ -367,7 +373,7 @@ impl AdvancedPrimitive {
                 .clone()
                 .unwrap_or_default()
                 .into_iter()
-                .filter_map(|e| UiElement::from_yaml(e, window_size))
+                .filter_map(|e| UiElement::from_yaml(e, window_size, device, queue))
                 .map(|mut el| {
                     //el.scale_by(x_scale, y_scale, );// WTF??!?!?!
                     el.translate(x, y);
@@ -463,6 +469,105 @@ impl ResizeBehaviour {
         }
     }
 }
+
+#[derive(Debug, Clone)]
+pub enum RectTextureType {
+    Shader(PathBuf),
+    Image(TextureView),
+}
+
+impl RectTextureType {
+    pub fn from_str(kind: &str, path: &str, device: &Device, queue: &Queue) -> Option<Self> {
+        match kind.to_lowercase().as_str() {
+            "shader" => {
+                let path = data_dir(path);
+
+                if !path.is_file() || path.extension() != Some(OsStr::new("wgsl")) {
+                    return None;
+                }
+
+                Some(Self::Shader(path))
+            }
+
+            "image" => {
+                let path = data_dir(path);
+                //println!("Image path: {:?}", path);
+                if !path.is_file() {
+                    error!("Image path isn't file: {}", path.display());
+                    return None;
+                }
+
+                let image = match image::open(&path) {
+                    Ok(image) => image.to_rgba8(),
+                    Err(err) => {
+                        error!("Could not load image: {}", err.to_string());
+                        return None;
+                    }
+                };
+                let dimensions = image.dimensions();
+
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("Rect Image Texture"),
+                    size: wgpu::Extent3d {
+                        width: dimensions.0,
+                        height: dimensions.1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &image,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(4 * dimensions.0),
+                        rows_per_image: Some(dimensions.1),
+                    },
+                    wgpu::Extent3d {
+                        width: dimensions.0,
+                        height: dimensions.1,
+                        depth_or_array_layers: 1,
+                    },
+                );
+
+                let view = texture.create_view(&TextureViewDescriptor::default());
+
+                Some(Self::Image(view))
+            }
+
+            _ => None,
+        }
+    }
+}
+fn get_rect_texture(
+    texture_string: Option<String>,
+    device: &Device,
+    queue: &Queue,
+) -> Option<RectTextureType> {
+    let Some(texture_string) = texture_string.as_ref() else {
+        return None;
+    };
+    match texture_string.split_once(':') {
+        None => None,
+        Some((texture_type, path)) => {
+            //println!("Trying texture: '{texture_type}', '{path}'");
+            RectTextureType::from_str(texture_type, path, device, queue)
+        }
+    }
+    // 1. Path to shader relative to data folder  2. Path to an actual texture image relative to the data folder    // -3. Procedural texture (NO NOT YET)-
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct UiButtonRectYaml {
     #[serde(
@@ -533,6 +638,7 @@ pub struct UiButtonRect {
     pub color: [f32; 4], // tint for texture
     pub border_color: [f32; 4],
     pub texture: Option<String>,
+    pub cached_texture: Option<RectTextureType>,
     pub roundness: f32, // corner radius
     pub border_thickness: f32,
     pub fade: f32,
@@ -545,7 +651,7 @@ pub struct UiButtonRect {
 }
 
 impl UiButtonRect {
-    pub fn from_yaml(e: UiButtonRectYaml) -> Self {
+    pub fn from_yaml(e: UiButtonRectYaml, device: &Device, queue: &Queue) -> Self {
         let yaml_element = Some(e.clone());
 
         UiButtonRect {
@@ -564,7 +670,8 @@ impl UiButtonRect {
             rotation: e.rotation,
             color: e.color,
             border_color: e.border_color,
-            texture: e.texture,
+            texture: e.texture.clone(),
+            cached_texture: get_rect_texture(e.texture, device, queue),
             roundness: e.roundness,
             border_thickness: e.border_thickness,
             fade: e.fade,
@@ -649,7 +756,12 @@ pub enum UiElement {
 }
 
 impl UiElement {
-    pub fn from_yaml(element: UiElementYaml, window_size: PhysicalSize<f32>) -> Option<UiElement> {
+    pub fn from_yaml(
+        element: UiElementYaml,
+        window_size: PhysicalSize<f32>,
+        device: &Device,
+        queue: &Queue,
+    ) -> Option<UiElement> {
         let mut element = match element {
             UiElementYaml::Circle(e) => UiElement::Circle(UiButtonCircle::from_yaml(e)),
             UiElementYaml::Handle(e) => UiElement::Handle(UiButtonHandle::from_yaml(e)),
@@ -658,7 +770,7 @@ impl UiElement {
             }
             UiElementYaml::Text(e) => UiElement::Text(UiButtonText::from_yaml(e)),
             UiElementYaml::Outline(e) => UiElement::Outline(UiButtonOutline::from_yaml(e)),
-            UiElementYaml::Rect(e) => UiElement::Rect(UiButtonRect::from_yaml(e)),
+            UiElementYaml::Rect(e) => UiElement::Rect(UiButtonRect::from_yaml(e, device, queue)),
             UiElementYaml::Advanced(ap) => UiElement::Advanced(AdvancedPrimitive::from_yaml(&ap)),
         };
 
@@ -2840,6 +2952,7 @@ impl Default for UiButtonRect {
             color: [1.0, 1.0, 1.0, 1.0],
             border_color: [1.0, 1.0, 1.0, 1.0],
             texture: None,
+            cached_texture: None,
             roundness: 0.0,
             border_thickness: 0.0,
             fade: 0.0,

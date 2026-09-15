@@ -196,15 +196,18 @@ impl ApplicationHandler for App {
                 if input.action_repeat("Toggle Reversed Depth Z") {
                     settings.reversed_depth_z = !settings.reversed_depth_z;
                 }
-                // Toggle editor mode
-                // if input.action_repeat("Toggle editor mode") {
-                //     settings.editor_mode = !settings.editor_mode;
-                //     ui.variables.set_bool("editor_mode", settings.editor_mode);
-                //     settings.show_world = !settings.editor_mode;
-                //     ui.variables.set_bool("show_world", settings.show_world);
-                //     settings.show_gui = true;
-                //     ui.variables.set_bool("show_gui", settings.show_gui);
+                // if input.action_repeat("Change Camera Mode") {
+                //     camera.toggle_mode();
                 // }
+                // Toggle editor mode
+                if input.action_repeat("Toggle editor mode") {
+                    settings.editor_mode = !settings.editor_mode;
+                    ui.variables.set_bool("editor_mode", settings.editor_mode);
+                    settings.show_world = !settings.editor_mode;
+                    ui.variables.set_bool("show_world", settings.show_world);
+                    settings.show_gui = true;
+                    ui.variables.set_bool("show_gui", settings.show_gui);
+                }
                 // Toggle override_mode
                 if input.action_repeat("Toggle override mode") {
                     settings.override_mode = !settings.override_mode;
@@ -426,7 +429,8 @@ impl ApplicationHandler for App {
 
                 resources.world.time.timer.checkpoint("Tick", false);
                 run_ticked(resources);
-
+                resources.world.time.timer.checkpoint("Tick", true);
+                resources.world.time.timer.checkpoint("Sim", false);
                 resources.settings.new_settings_changes();
 
                 let mut steps = 0u32;
@@ -452,7 +456,7 @@ impl ApplicationHandler for App {
                         steps += 1;
                     }
                 }
-                resources.world.time.timer.checkpoint("Tick", true);
+                resources.world.time.timer.checkpoint("Sim", true);
 
                 // Update achieved speed (windowed measurement)
                 resources.world.time.update_achieved_speed(steps);

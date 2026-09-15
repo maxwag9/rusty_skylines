@@ -5,6 +5,7 @@ use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
 use sluggrs::FontSystem;
 use std::collections::HashMap;
+use wgpu::{Device, Queue};
 //use glyphon::FontSystem;
 use winit::dpi::PhysicalSize;
 
@@ -64,6 +65,8 @@ impl Menu {
         runtime: &UiRuntimes,
         aps: &HashMap<String, UiLayerYaml>,
         window_size: PhysicalSize<f32>,
+        device: &Device,
+        queue: &Queue,
     ) -> Vec<RuntimeLayer> {
         let mut ap_layers = vec![];
         let (before, rest) = self.layers.split_at_mut(layer_index);
@@ -95,6 +98,8 @@ impl Menu {
                                 aps,
                                 layer.order + 1,
                                 window_size,
+                                device,
+                                queue,
                             );
                             ap_layers.push(layer);
                         }

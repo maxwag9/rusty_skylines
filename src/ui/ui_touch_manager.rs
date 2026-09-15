@@ -22,8 +22,6 @@ use crate::ui::vertex::{
     ElementKind, UiButtonCircle, UiButtonHandle, UiButtonPolygon, UiButtonRect, UiButtonText,
     UiElement,
 };
-use rayon::iter::IntoParallelRefIterator;
-use rayon::iter::ParallelIterator;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;

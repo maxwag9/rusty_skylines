@@ -1,22 +1,32 @@
 pub(crate) use crate::helpers::implementations::RevisionedSmallVec;
+use crate::helpers::implementations::SerializableVec3;
 use crate::helpers::paths::buildings_dir;
 use crate::helpers::positions::{ChunkCoord, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
-use crate::renderer::props::PropInstanceId;
+use crate::renderer::props::{PropInstanceId, Props};
 use crate::ui::input::Input;
 use crate::ui::parser::Value;
 use crate::ui::variables::Variables;
-use crate::world::buildings::zoning::{LotId, Zoning, ZoningType};
+use crate::world::buildings::building_mesher::{
+    BuildingMeshBuilder, BuildingMeshManager, DrivewayMaterial, RoofMaterial, WallMaterial,
+};
+use crate::world::buildings::building_renderer::BuildingRenderer;
+use crate::world::buildings::lot_fitting::{
+    BUILDING_SNAP_RADIUS, LotPoint, close_polygon, fit_lot_to_neighbors, gather_closest_lot_point,
+};
+use crate::world::buildings::zoning::{Lot, LotEntrance, LotId, Zoning, ZoningType};
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::{ChunkDistance, SimTime};
 use crate::world::cars::partitions::{PartitionId, PartitionManager};
 use crate::world::roads::road_mesh_manager::RoadMeshManager;
 use crate::world::roads::road_structs::SegmentId;
 use crate::world::roads::road_subsystem::Roads;
+use crate::world::sound::sound::Sounds;
 use crate::world::statisticals::demands::{JobOccupancy, ZoningDemand};
 use crate::world::statisticals::demography::{Groups, LifeStage, Person, WORKHORSE_AGE_RANGE};
 use crate::world::terrain::terrain_editing::{EditId, TerrainEditor};
-use crate::world::terrain::terrain_subsystem::Terrain;
+use crate::world::terrain::terrain_subsystem::{Cursor, CursorMode, PreviewBuilding, Terrain};
+use glam::{Vec2, Vec3};
 use rand::RngExt;
 use rand::rngs::ThreadRng;
 use rand_distr::num_traits::Zero;
@@ -27,10 +37,10 @@ use smallvec::SmallVec;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::ops::{Deref, DerefMut};
+use std::mem::take;
 use std::slice::{Iter, IterMut};
 use tracing::error;
-use wgpu_render_manager::generator::TextureKey;
+use wgpu_render_manager::renderer::RenderManager;
 
 #[derive(Debug, Copy, Clone, Default, Hash, Deserialize)]
 #[revisioned(revision = 1)]
@@ -60,7 +70,6 @@ impl BuildingUsage {
             ZoningType::Commercial => BuildingUsage::Commercial,
             ZoningType::Industrial => BuildingUsage::Industrial,
             ZoningType::Office => BuildingUsage::Office,
-            _ => BuildingUsage::Residential,
         }
     }
 }
@@ -75,45 +84,6 @@ impl Display for BuildingUsage {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-#[revisioned(revision = 1)]
-pub struct Color(pub [f32; 4]);
-impl<'de> Deserialize<'de> for Color {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum ColorData {
-            Rgb([f32; 3]),
-            Rgba([f32; 4]),
-        }
-
-        match ColorData::deserialize(deserializer)? {
-            ColorData::Rgb([r, g, b]) => Ok(Self([r, g, b, 1.0])),
-            ColorData::Rgba(v) => Ok(Self(v)),
-        }
-    }
-}
-impl Color {
-    fn white() -> Color {
-        Color([1.0, 1.0, 1.0, 1.0])
-    }
-}
-
-impl Deref for Color {
-    type Target = [f32; 4];
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for Color {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
 pub type BuildingId = u32;
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -148,19 +118,12 @@ impl Hash for RoofType {
         }
     }
 }
-#[derive(Debug, Clone, Default, Hash, Deserialize)]
-#[revisioned(revision = 1)]
-pub enum RoofMaterial {
-    #[default]
-    Shingles,
-    Metal,
-    Custom(TextureKey),
-}
+
 #[derive(Debug, Clone, Default, Hash, Deserialize)]
 #[revisioned(revision = 1)]
 pub struct MiscBuildingParams {
     #[serde(default)]
-    pub window_material_accent: WallMaterial,
+    pub window_material_accent: crate::world::buildings::building_mesher::WallMaterial,
     #[serde(default)]
     pub solar_modules: bool,
     #[serde(default)]
@@ -171,35 +134,7 @@ pub struct MiscBuildingParams {
 #[derive(Debug, Clone, Default, Hash, Deserialize)]
 #[revisioned(revision = 1)]
 pub struct BasementParams {}
-#[derive(Debug, Clone, Hash, Deserialize)]
-#[revisioned(revision = 1)]
-pub enum WallMaterial {
-    Paint(Color),
-    Custom(TextureKey),
-}
-impl Default for WallMaterial {
-    fn default() -> Self {
-        WallMaterial::Paint(Color::white())
-    }
-}
-#[derive(Debug, Clone, Hash, Deserialize)]
-#[revisioned(revision = 1)]
-pub enum DrivewayMaterial {
-    Bricks,
-    Custom(TextureKey),
-}
-impl Default for DrivewayMaterial {
-    fn default() -> Self {
-        Self::Bricks
-    }
-}
-impl Hash for Color {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self[0].to_bits().hash(state);
-        self[1].to_bits().hash(state);
-        self[2].to_bits().hash(state);
-    }
-}
+
 #[derive(Debug, Clone, Default, Hash, Deserialize)]
 #[revisioned(revision = 1)]
 pub enum GardenLook {
@@ -305,9 +240,9 @@ impl BuildingParams {
 
         let area_per_person = match self.miscellaneous.usage {
             BuildingUsage::Residential => 40.0,
-            BuildingUsage::Commercial => 10.0,
-            BuildingUsage::Industrial => 10.0,
-            BuildingUsage::Office => 15.0,
+            BuildingUsage::Commercial => 20.0,
+            BuildingUsage::Industrial => 20.0,
+            BuildingUsage::Office => 30.0,
         };
 
         (total_area / area_per_person) as u32
@@ -570,7 +505,12 @@ impl Default for BuildingDesignSource {
         }
     }
 }
-
+#[revisioned(revision = 1)]
+#[derive(Debug, Clone, Default)]
+pub struct BuildingMisc {
+    pub is_preview: bool,
+    pub mesh: Option<BuildingMeshBuilder>,
+}
 #[revisioned(revision = 1)]
 #[derive(Debug, Clone, Default)]
 pub struct Building {
@@ -584,26 +524,9 @@ pub struct Building {
     pub edit_id: Option<EditId>,
     pub prop_instance_ids: Vec<PropInstanceId>,
     pub occupancy: BuildingOccupancy,
+    pub misc: BuildingMisc,
 }
 impl Building {
-    fn convert_building_params(
-        &mut self,
-        _revision: u16,
-        value: BuildingParamsLevelsOld,
-    ) -> Result<(), revision::Error> {
-        let old_levels = [
-            value.level0,
-            value.level1,
-            value.level2,
-            value.level3,
-            value.level4,
-            value.level5,
-        ];
-        self.design_source = BuildingDesignSource::BuildingParams {
-            levels: RevisionedSmallVec(SmallVec::from(old_levels)),
-        };
-        Ok(())
-    }
     pub fn current_level_params<'a>(
         &'a self,
         buildings_catalog: &'a BuildingsCatalog,
@@ -628,6 +551,223 @@ pub struct Buildings {
 }
 
 impl Buildings {
+    pub fn start_preview(
+        &mut self,
+        cursor: &mut Cursor,
+        building_name: String,
+        pos: WorldPos,
+        zoning: &mut Zoning,
+        variables: &mut Variables,
+        roads: &Roads,
+        road_mesh_manager: &RoadMeshManager,
+    ) {
+        let snap = gather_closest_lot_point(roads, road_mesh_manager, pos)
+            .filter(|point| point.dist <= BUILDING_SNAP_RADIUS);
+
+        let fit = snap.as_ref().and_then(|snap| {
+            fit_lot_to_neighbors(&zoning.zoning_storage, road_mesh_manager, snap, None)
+        });
+
+        let (bounds, center, entrance, dir, segment_id) = if let Some(fit) = fit {
+            let center = WorldPos::centroid(&fit.bounds[..fit.bounds.len() - 1]);
+            let entrance = LotEntrance::new(fit.snap_point.pos, fit.snap_point.lateral);
+            let dir = fit.snap_point.tangent;
+
+            (
+                fit.bounds,
+                center,
+                entrance,
+                dir,
+                Some(fit.snap_point.segment_id),
+            )
+        } else {
+            let center = pos;
+            let half_size = 30.0;
+
+            let mut corners = vec![
+                center.add_vec3(Vec3::new(-half_size, 0.0, -half_size)),
+                center.add_vec3(Vec3::new(half_size, 0.0, -half_size)),
+                center.add_vec3(Vec3::new(half_size, 0.0, half_size)),
+                center.add_vec3(Vec3::new(-half_size, 0.0, half_size)),
+            ];
+
+            close_polygon(&mut corners);
+
+            let entrance = LotEntrance {
+                pos: center.add_vec3(Vec3::new(0.0, 0.0, -half_size)),
+                dir: SerializableVec3::from_vec3(Vec3::new(1.0, 0.0, 0.0)),
+            };
+
+            (corners, center, entrance, Vec3::new(1.0, 0.0, 0.0), None)
+        };
+
+        let lot = Lot {
+            id: 696,
+            bounds,
+            bounds_version: 0,
+            center,
+            entrance: entrance.clone(),
+            layout: None,
+            zoning_type: Some(ZoningType::Commercial),
+            segment_id: Default::default(),
+            district_id: 0,
+            building_id: None,
+            land_value: 0.0,
+        };
+        let lot_id = zoning.zoning_storage.spawn_lot(lot);
+        let building = Building {
+            id: 0,
+            pos: center,
+            segment_id: Default::default(),
+            lot_id,
+            level: Default::default(),
+            design_source: BuildingDesignSource::Design(building_name.clone()),
+            edit_id: None,
+            prop_instance_ids: vec![],
+            occupancy: Default::default(),
+            misc: BuildingMisc {
+                is_preview: true,
+                mesh: None,
+            },
+        };
+        let building_id = BuildingStorage::spawn(self, zoning, building);
+        let lot = zoning.zoning_storage.get_mut_lot(lot_id).unwrap();
+        lot.building_id = Some(building_id);
+
+        let preview = PreviewBuilding {
+            name: building_name,
+            cached_model: None,
+            new_pos: center,
+            new_dir: dir,
+            lot_id,
+            building_id,
+        };
+        cursor.preview_building = Some(preview);
+        cursor.mode = CursorMode::Buildings;
+        variables.set_string("cursor_mode", "Buildings");
+    }
+
+    pub fn cancel_preview(
+        &mut self,
+        cursor: &mut Cursor,
+        zoning: &mut Zoning,
+        terrain_editor: &mut TerrainEditor,
+        props: &mut Props,
+        variables: &mut Variables,
+    ) {
+        if let Some(pb) = cursor.preview_building.take() {
+            zoning.zoning_storage.despawn_lot(pb.lot_id);
+            BuildingStorage::despawn(self, zoning, terrain_editor, props, pb.building_id);
+            cursor.mode = CursorMode::None;
+            variables.set_string("cursor_mode", "None");
+        }
+    }
+    pub fn update_preview(
+        &mut self,
+        pb: &mut PreviewBuilding,
+        pos: WorldPos,
+        zoning: &mut Zoning,
+        road_mesh_manager: &RoadMeshManager,
+        snap: Option<LotPoint>,
+    ) {
+        let fit = snap.as_ref().and_then(|snap| {
+            fit_lot_to_neighbors(
+                &zoning.zoning_storage,
+                road_mesh_manager,
+                snap,
+                Some(pb.lot_id),
+            )
+        });
+
+        if let Some(fit) = fit {
+            let center = WorldPos::centroid(&fit.bounds[..fit.bounds.len() - 1]);
+
+            zoning.zoning_storage.update_lot_geometry(
+                pb.lot_id,
+                LotEntrance::new(fit.snap_point.pos, fit.snap_point.lateral),
+                fit.bounds,
+                center,
+            );
+
+            pb.new_dir = fit.snap_point.tangent;
+
+            if let Some(building) = self.storage.get_mut(pb.building_id) {
+                building.pos = center;
+            }
+
+            pb.new_pos = center;
+            return;
+        }
+
+        let center = pos;
+        let half_size = 30.0;
+
+        const BASE_FORWARD: Vec3 = Vec3::new(0.0, 0.0, -1.0);
+
+        let dir_xz = Vec2::new(pb.new_dir.x, pb.new_dir.z);
+
+        let (sin_a, cos_a) = if dir_xz.length_squared() < 1e-10 {
+            (0.0f32, 1.0f32)
+        } else {
+            let base_angle = BASE_FORWARD.z.atan2(BASE_FORWARD.x);
+            let target_angle = dir_xz.y.atan2(dir_xz.x);
+            (target_angle - base_angle).sin_cos()
+        };
+
+        let rotate_xz = |v: Vec3| -> Vec3 {
+            Vec3::new(v.x * cos_a - v.z * sin_a, v.y, v.x * sin_a + v.z * cos_a)
+        };
+
+        let mut corners = vec![
+            center.add_vec3(rotate_xz(Vec3::new(-half_size, 0.0, -half_size))),
+            center.add_vec3(rotate_xz(Vec3::new(half_size, 0.0, -half_size))),
+            center.add_vec3(rotate_xz(Vec3::new(half_size, 0.0, half_size))),
+            center.add_vec3(rotate_xz(Vec3::new(-half_size, 0.0, half_size))),
+        ];
+
+        close_polygon(&mut corners);
+
+        let entrance = LotEntrance {
+            pos: center.add_vec3(rotate_xz(Vec3::new(0.0, 0.0, -half_size))),
+            dir: SerializableVec3::from_vec3(rotate_xz(Vec3::new(1.0, 0.0, 0.0))),
+        };
+
+        zoning
+            .zoning_storage
+            .update_lot_geometry(pb.lot_id, entrance, corners, center);
+
+        if let Some(building) = self.storage.get_mut(pb.building_id) {
+            building.pos = center;
+        }
+
+        pb.new_pos = center;
+    }
+    pub fn finish_preview(
+        &mut self,
+        cursor: &mut Cursor,
+        zoning: &mut Zoning,
+        terrain_editor: &mut TerrainEditor,
+        props: &mut Props,
+        variables: &mut Variables,
+        sounds: &mut Sounds,
+        building_mesh_manager: &mut BuildingMeshManager,
+    ) {
+        if let Some(mut pb) = cursor.preview_building.take() {
+            if let Some(building) = self.storage.get_mut(pb.building_id) {
+                building.misc.is_preview = false;
+                if let Some(model) = pb.cached_model.take() {
+                    building.misc.mesh = Some(model.mesh);
+                }
+                building_mesh_manager.invalidate_chunk(building.pos.chunk);
+            }
+        }
+        cursor.mode = CursorMode::None;
+        variables.set_string("cursor_mode", "None");
+        sounds.queue_sfx("PlaceBuilding");
+    }
+}
+
+impl Buildings {
     pub fn new() -> Buildings {
         Self {
             storage: BuildingStorage::new(),
@@ -635,16 +775,135 @@ impl Buildings {
             catalog: BuildingsCatalog::new(),
         }
     }
+
     pub fn update(
         &mut self,
         camera: &Camera,
-        terrain: &Terrain,
-        roads: &Roads,
+        terrain: &mut Terrain,
+        roads: &mut Roads,
         road_mesh_manager: &RoadMeshManager,
         input: &mut Input,
         gizmo: &mut Gizmo,
-        variables: &Variables,
+        variables: &mut Variables,
+        building_renderer: &mut BuildingRenderer,
+        render_manager: &mut RenderManager,
+        props: &mut Props,
+        zoning: &mut Zoning,
+        sounds: &mut Sounds,
     ) {
+        if terrain.cursor.mode != CursorMode::Buildings {
+            self.cancel_preview(
+                &mut terrain.cursor,
+                zoning,
+                &mut terrain.terrain_editor,
+                props,
+                variables,
+            );
+            return;
+        }
+
+        if input.action_pressed_once("Cancel Building") {
+            self.cancel_preview(
+                &mut terrain.cursor,
+                zoning,
+                &mut terrain.terrain_editor,
+                props,
+                variables,
+            );
+            return;
+        }
+
+        let place_requested = input.action_pressed_once("Place Building");
+
+        if let Some(mut pb) = terrain.cursor.preview_building.take() {
+            let pos = terrain.last_picked.as_ref().map(|p| p.pos);
+
+            let snap = pos.and_then(|pos| {
+                let point = gather_closest_lot_point(roads, road_mesh_manager, pos)?;
+
+                (point.dist <= BUILDING_SNAP_RADIUS).then_some(point)
+            });
+
+            self.rotate_preview(input, &mut pb, snap.is_some());
+
+            let zoning_snap_point = snap.clone();
+
+            if let Some(pos) = pos {
+                self.update_preview(&mut pb, pos, zoning, road_mesh_manager, snap);
+            }
+
+            let preview_valid = if let Some(picked) = terrain.last_picked.clone() {
+                zoning.run_lot_zoning(
+                    terrain,
+                    self,
+                    roads,
+                    road_mesh_manager,
+                    input,
+                    variables,
+                    zoning_snap_point,
+                    &picked,
+                    ZoningType::Commercial,
+                    props,
+                    gizmo,
+                    Some(pb.lot_id),
+                )
+            } else {
+                false
+            };
+
+            building_renderer.render_preview(
+                render_manager,
+                terrain,
+                props,
+                &mut roads.parking,
+                self,
+                zoning,
+                gizmo,
+                &mut pb,
+            );
+
+            terrain.cursor.preview_building = Some(pb);
+
+            if place_requested && preview_valid {
+                self.finish_preview(
+                    &mut terrain.cursor,
+                    zoning,
+                    &mut terrain.terrain_editor,
+                    props,
+                    variables,
+                    sounds,
+                    &mut building_renderer.mesh_manager,
+                );
+            }
+        }
+    }
+
+    fn rotate_preview(&self, input: &mut Input, pb: &mut PreviewBuilding, snapped: bool) {
+        if snapped {
+            return;
+        }
+
+        const SENSITIVITY: f32 = 0.02;
+        let delta_angle = if input.mouse.buttons.right.pressed {
+            -input.mouse.delta.x * SENSITIVITY
+        } else if input.action_repeat("Rotate building +10°") {
+            10.0_f32.to_radians()
+        } else if input.action_repeat("Rotate building -10°") {
+            -10.0_f32.to_radians()
+        } else {
+            return;
+        };
+
+        if delta_angle == 0.0 {
+            return;
+        }
+
+        let (sin_a, cos_a) = delta_angle.sin_cos();
+
+        let new_x = pb.new_dir.x * cos_a - pb.new_dir.z * sin_a;
+        let new_z = pb.new_dir.x * sin_a + pb.new_dir.z * cos_a;
+
+        pb.new_dir = Vec3::new(new_x, pb.new_dir.y, new_z).normalize_or_zero();
     }
 }
 
@@ -754,6 +1013,7 @@ impl BuildingStorage {
         buildings: &mut Buildings,
         zoning: &mut Zoning,
         terrain_editor: &mut TerrainEditor,
+        props: &mut Props,
         id: I,
     ) where
         I: Into<Option<BuildingId>>,
@@ -785,6 +1045,14 @@ impl BuildingStorage {
             .and_then(|b| b.edit_id)
         {
             terrain_editor.remove_edit(edit_id);
+        }
+        if let Some(prop_ids) = buildings.storage.buildings[id as usize]
+            .as_mut()
+            .map(|b| take(&mut b.prop_instance_ids))
+        {
+            for prop_id in prop_ids {
+                props.remove_instance(prop_id);
+            }
         }
 
         PartitionManager::remove_building(buildings, id);
@@ -823,7 +1091,7 @@ impl BuildingStorage {
                 person,
                 &mut rng,
             ) else {
-                break;
+                continue; // Continue or break?
             };
 
             if let Some(workplace) = buildings.storage.get_mut(workplace_id) {
@@ -1268,6 +1536,9 @@ fn calculate_unique_params(total_buildings: usize, max_unique: usize) -> usize {
 
 impl Hash for Building {
     fn hash<H: Hasher>(&self, state: &mut H) {
+        if self.misc.is_preview {
+            return;
+        }
         self.id.hash(state);
         self.pos.hash(state);
         self.segment_id.hash(state);

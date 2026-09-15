@@ -1,12 +1,12 @@
 use crate::helpers::positions::WorldPos;
 use crate::renderer::gizmo::gizmo::Gizmo;
+use crate::renderer::props::Props;
 use crate::resources::Resources;
 use crate::ui::input::Input;
 use crate::ui::variables::Variables;
 use crate::world::buildings::buildings::{BuildingStorage, Buildings};
-use crate::world::buildings::zoning::{
-    LotId, Zoning, collect_road_points, draw_area, point_in_polygon_xz,
-};
+use crate::world::buildings::lot_fitting::collect_road_points;
+use crate::world::buildings::zoning::{LotId, Zoning, draw_area, point_in_polygon_xz};
 use crate::world::cars::car_render::interpolate_cars;
 use crate::world::roads::road_mesh_manager::RoadMeshManager;
 use crate::world::roads::road_structs::{NodeId, RoadEditorCommand, SegmentId};
@@ -47,9 +47,11 @@ pub fn run_ticked(resources: &mut Resources) {
     //     gizmo.square(center, half_chunk_size, [1.0, 0.0, 0.0, 1.0], 0.0, 0.0);
     // }
     if resources.simulation.running() {
+        time.timer.checkpoint("Terrain", false);
         terrain.update(
             gizmo, camera, aspect, settings, input, time, roads, props, variables,
         );
+        time.timer.checkpoint("Terrain", true);
     }
     handle_destruction(
         gizmo,
@@ -61,6 +63,7 @@ pub fn run_ticked(resources: &mut Resources) {
         roads,
         road_mesh_manager,
         city_state,
+        props,
     );
     roads.update(
         terrain, cars, city_state, input, time, settings, gizmo, sounds,
@@ -77,6 +80,7 @@ fn handle_destruction(
     roads: &mut Roads,
     road_mesh_manager: &RoadMeshManager,
     city_state: &mut CityState,
+    props: &mut Props,
 ) {
     if !matches!(terrain.cursor.mode, CursorMode::Destruction) {
         return;
@@ -89,7 +93,7 @@ fn handle_destruction(
     let mut inside_lot_id: Option<LotId> = None;
     for lot in zoning
         .zoning_storage
-        .lots_in_chunk_plus(picked.chunk.coords.chunk_coord.chunk_id())
+        .lots_in_chunk_plus(picked.chunk.chunk_coord)
         .iter()
         .flat_map(|lot_id| zoning.zoning_storage.get_lot(*lot_id))
     {
@@ -123,6 +127,7 @@ fn handle_destruction(
                     buildings,
                     zoning,
                     &mut terrain.terrain_editor,
+                    props,
                     lot.building_id,
                 );
             }
@@ -134,7 +139,7 @@ fn handle_destruction(
         let segment_ids = roads
             .road_manager
             .roads
-            .segment_ids_touching_chunk(picked.chunk.coords.chunk_coord);
+            .segment_ids_touching_chunk(picked.chunk.chunk_coord);
 
         for segment_id in segment_ids {
             let segment = roads.road_manager.roads.segment(segment_id);
@@ -305,8 +310,8 @@ pub fn run_ui(resources: &mut Resources, event_loop: &dyn ActiveEventLoop) {
     input.now = time.total_time;
     resources.ui.handle_touches(
         dt,
-        &mut resources.render_core.props,
         &mut resources.world,
+        &mut resources.render_core,
         resources.window.surface_size().cast::<f32>(),
         &mut resources.command_queues,
         &mut resources.settings,
