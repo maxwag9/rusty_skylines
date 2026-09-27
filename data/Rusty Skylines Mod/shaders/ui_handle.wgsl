@@ -23,7 +23,7 @@ struct HandleParams {
     sub_handle_misc: vec4<f32>,   // (len_ratio_circumf, width_ratio_radius, roundness, _)
     misc: vec4<f32>,
     depth: f32,
-    _pad0: vec3<f32>
+
 };
 @group(1) @binding(0)
 var<storage, read> handles: array<HandleParams>;

@@ -1,5 +1,7 @@
 use crate::data::Settings;
-use crate::helpers::paths::{data_dir, shader_dir};
+use crate::helpers::modpack::ModManager;
+use crate::helpers::paths::data_dir;
+use crate::helpers::stupid_color_from_rgba;
 use crate::renderer::pipelines::{COLOR_FORMAT, Pipelines};
 use crate::renderer::render_core::{create_color_attachment_clear, create_color_attachment_load};
 use crate::renderer::render_passes::{color_target, color_target_ui};
@@ -15,15 +17,15 @@ use crate::ui::vertex::{
     PolygonEdgeGpu, PolygonInfoGpu, RectTextureType, RuntimeLayer, UiButtonPolygon, UiButtonText,
     UiElement, UiVertexPoly, UiVertexText,
 };
-use sluggrs::Color;
-use sluggrs::*;
+use sluggrs_skylines::*;
 use std::fs;
 use std::path::Path;
+use tracing::error;
 use wgpu::*;
 use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions};
 use wgpu_render_manager::renderer::RenderManager;
-use wgpu_text::glyph_brush::ab_glyph::FontArc;
 use winit::dpi::PhysicalSize;
+
 const UI_COMPARE_FUNCTION: CompareFunction = CompareFunction::Always; // TODO: I have to make layer order more explicit and stuff and handle colliding layer orders and APs! Less function is correct. Back is 1.0 front is 0.0 depth.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -158,9 +160,7 @@ impl Default for PolygonOutlineParams {
 pub struct TextParams {
     pub pos: [f32; 2],
     pub pt: f32,
-    pub border_width: f32,
     pub color: [f32; 4],
-    pub border_color: [f32; 4],
     pub id_hash: f32,
     pub misc: [f32; 4], // [active, touched_time, is_down, id_hash]
     pub text: String,
@@ -170,6 +170,7 @@ pub struct TextParams {
     pub caret: usize,
     pub anchor: Anchor,
     pub depth: f32,
+    pub decorations: Vec<TextDecoration>,
 }
 
 impl Default for TextParams {
@@ -177,9 +178,7 @@ impl Default for TextParams {
         Self {
             pos: [0.0, 0.0],
             pt: 14.0,
-            border_width: 5.0,
             color: [1.0, 1.0, 1.0, 1.0],
-            border_color: [0.0, 0.0, 0.0, 1.0],
             id_hash: 0.0,
             misc: [0.0; 4], // active, touched_time, is_touched, id_hash
 
@@ -190,6 +189,7 @@ impl Default for TextParams {
             caret: 0,
             anchor: Anchor::default(),
             depth: 0.0,
+            decorations: vec![],
         }
     }
 }
@@ -197,14 +197,13 @@ impl Default for TextParams {
 pub struct UiRenderer {
     pub pipelines: UiPipelines,
 
-    pub font_system: sluggrs::FontSystem,
-    pub swash_cache: sluggrs::SwashCache,
-    pub text_atlas: sluggrs::TextAtlas,
-    pub text_renderer: sluggrs::TextRenderer,
-    pub viewport: sluggrs::Viewport,
+    pub font_system: FontSystem,
+    pub swash_cache: SwashCache,
+    pub text_atlas: TextAtlas,
+    pub text_renderer: TextRenderer,
+    pub viewport: Viewport,
 
     pub device: Device,
-    pub font_arc: FontArc,
 }
 
 impl UiRenderer {
@@ -268,11 +267,9 @@ impl UiRenderer {
                 .ok_or_else(|| anyhow::anyhow!("Failed to retrieve system font face"))?;
 
             match &face.source {
-                sluggrs::cosmic_text::fontdb::Source::Binary(data) => {
-                    data.as_ref().as_ref().to_vec()
-                }
-                sluggrs::cosmic_text::fontdb::Source::File(path) => fs::read(path)?,
-                sluggrs::cosmic_text::fontdb::Source::SharedFile(path, _) => fs::read(path)?,
+                cosmic_text::fontdb::Source::Binary(data) => data.as_ref().as_ref().to_vec(),
+                cosmic_text::fontdb::Source::File(path) => fs::read(path)?,
+                cosmic_text::fontdb::Source::SharedFile(path, _) => fs::read(path)?,
             }
         } else {
             let dir = data_dir("ui_data/ttf");
@@ -286,8 +283,6 @@ impl UiRenderer {
             fs::read(font_path)?
         };
 
-        let font_arc = FontArc::try_from_vec(font_data.clone()).expect("Failed to load font data");
-
         if !use_system_font {
             font_system.db_mut().load_font_data(font_data.clone());
         }
@@ -300,7 +295,6 @@ impl UiRenderer {
             text_atlas,
             text_renderer,
             viewport,
-            font_arc,
 
             device: device.clone(),
         })
@@ -315,6 +309,7 @@ impl UiRenderer {
         queue: &Queue,
         window_size: PhysicalSize<f32>,
         settings: &Settings,
+        mod_manager: &ModManager,
     ) {
         let new_uniform = ScreenUniform {
             size: [window_size.width, window_size.height],
@@ -365,6 +360,7 @@ impl UiRenderer {
                     window_size,
                     device,
                     queue,
+                    mod_manager,
                 ));
 
                 let layer = &mut menu.layers[idx];
@@ -418,15 +414,111 @@ impl UiRenderer {
     pub fn render(
         &mut self,
         render_manager: &mut RenderManager,
+        mod_manager: &ModManager,
         encoder: &mut CommandEncoder,
         queue: &Queue,
         ui: &mut Ui,
         pipelines: &Pipelines,
         settings: &Settings,
     ) {
-        self.draw_background(render_manager, encoder, pipelines, settings);
+        self.draw_background(render_manager, mod_manager, encoder, pipelines, settings);
+
+        if !ui.touch_manager.options.show_gui {
+            return;
+        }
+        let Some(triangles) = mod_manager.resource_path("shaders/ui_triangles.wgsl") else {
+            error!(
+                "[Renderer] Missing shader 'shaders/ui_triangles.wgsl', UI won't render at all until the UI shader issues are resolved."
+            );
+            return;
+        };
+        let Some(circle_glow_shader) = mod_manager.resource_path("shaders/ui_circle_glow.wgsl")
+        else {
+            error!(
+                "[Renderer] Missing shader 'shaders/ui_circle_glow.wgsl', UI won't render at all until the UI shader issues are resolved."
+            );
+            return;
+        };
+        let Some(circle_shader) = mod_manager.resource_path("shaders/ui_circle.wgsl") else {
+            error!(
+                "[Renderer] Missing shader 'shaders/ui_circle.wgsl', UI won't render at all until the UI shader issues are resolved."
+            );
+            return;
+        };
+        let Some(rect_glow_shader) = mod_manager.resource_path("shaders/ui_rect_glow.wgsl") else {
+            error!(
+                "[Renderer] Missing shader 'shaders/ui_rect_glow.wgsl', UI won't render at all until the UI shader issues are resolved."
+            );
+            return;
+        };
+        let Some(rect_blur_shader) = mod_manager.resource_path("shaders/ui_rect_blur.wgsl") else {
+            error!(
+                "[Renderer] Missing shader 'shaders/ui_rect_blur.wgsl', UI won't render at all until the UI shader issues are resolved."
+            );
+            return;
+        };
+        let Some(rect_shader) = mod_manager.resource_path("shaders/ui_rect.wgsl") else {
+            error!(
+                "[Renderer] Missing shader 'shaders/ui_rect.wgsl', UI won't render at all until the UI shader issues are resolved."
+            );
+            return;
+        };
+        let Some(handle_shader) = mod_manager.resource_path("shaders/ui_handle.wgsl") else {
+            error!(
+                "[Renderer] Missing shader 'shaders/ui_handle.wgsl', UI won't render at all until the UI shader issues are resolved."
+            );
+            return;
+        };
+        let Some(polygon_shader) = mod_manager.resource_path("shaders/ui_polygon.wgsl") else {
+            error!(
+                "[Renderer] Missing shader 'shaders/ui_polygon.wgsl', UI won't render at all until the UI shader issues are resolved."
+            );
+            return;
+        };
+        let Some(outline_shader) = mod_manager.resource_path("shaders/ui_shape_outline.wgsl")
+        else {
+            error!(
+                "[Renderer] Missing shader 'shaders/ui_shape_outline.wgsl', UI won't render at all until the UI shader issues are resolved."
+            );
+            return;
+        };
+        let Some(rect_image_shader) = mod_manager.resource_path("shaders/ui_rect_image.wgsl")
+        else {
+            error!(
+                "[Renderer] Missing shader 'shaders/ui_rect_image.wgsl', UI won't render at all until the UI shader issues are resolved."
+            );
+            return;
+        };
+        ui.update_dynamic_texts(settings);
+
+        let mut layers_to_render: Vec<&RuntimeLayer> = Vec::new();
+        for (_, menu) in ui.menus.iter().filter(|(_, m)| m.active) {
+            for layer in menu.layers.iter().filter(|l| l.active) {
+                layers_to_render.push(layer);
+            }
+        }
+        layers_to_render.sort_by_key(|l| l.order);
+
+        let mut pending_text: Vec<(TextArea<'_>, f32)> = Vec::new();
+
+        for layer in &layers_to_render {
+            for (element_idx, element) in layer.elements.iter().enumerate() {
+                if !element.is_active() {
+                    continue;
+                }
+
+                if let UiElement::Text(t) = element {
+                    if let Some(texts) = self.make_text_areas(t, layer.order as usize, element_idx)
+                    {
+                        pending_text.extend(texts);
+                    }
+                }
+            }
+        }
+        self.prepare_text_batch(encoder, queue, &mut pending_text);
 
         let color_attachment = create_color_attachment_clear(&pipelines.resolved.ui);
+
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("Main Pass (UI Elements)"),
             color_attachments: &[Some(color_attachment)],
@@ -442,22 +534,6 @@ impl UiRenderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-
-        if !ui.touch_manager.options.show_gui {
-            return;
-        }
-
-        ui.update_dynamic_texts(settings);
-
-        let mut layers_to_render: Vec<&RuntimeLayer> = Vec::new();
-        for (_, menu) in ui.menus.iter().filter(|(_, m)| m.active) {
-            for layer in menu.layers.iter().filter(|l| l.active) {
-                layers_to_render.push(layer);
-            }
-        }
-        layers_to_render.sort_by_key(|l| l.order);
-
-        let mut pending_text: Vec<(TextArea<'_>, f32)> = Vec::new();
 
         for layer in layers_to_render {
             let circle_bg = self.circle_bind_group(layer);
@@ -479,14 +555,29 @@ impl UiRenderer {
                 match element {
                     UiElement::Circle(c) => {
                         if let Some(bg1) = circle_bg.as_ref() {
-                            self.draw_circle(render_manager, pipelines, &mut pass, bg1, circle_idx);
+                            self.draw_circle(
+                                render_manager,
+                                pipelines,
+                                &mut pass,
+                                bg1,
+                                circle_idx,
+                                circle_glow_shader,
+                                circle_shader,
+                            );
                         }
 
                         circle_idx += 1;
                     }
                     UiElement::Handle(h) => {
                         if let Some(bg1) = handle_bg.as_ref() {
-                            self.draw_handle(render_manager, pipelines, &mut pass, bg1, handle_idx);
+                            self.draw_handle(
+                                render_manager,
+                                pipelines,
+                                &mut pass,
+                                bg1,
+                                handle_idx,
+                                handle_shader,
+                            );
                         }
 
                         handle_idx += 1;
@@ -504,6 +595,7 @@ impl UiRenderer {
                                 vbo,
                                 start,
                                 count,
+                                polygon_shader,
                             );
                         }
                     }
@@ -515,31 +607,35 @@ impl UiRenderer {
                                 &mut pass,
                                 bg1,
                                 outline_idx,
+                                outline_shader,
                             );
                         }
 
                         outline_idx += 1;
                     }
-                    UiElement::Text(t) => {
-                        if let Some(texts) =
-                            self.make_text_areas(t, layer.order as usize, element_idx)
-                        {
-                            pending_text.extend(texts);
-                        }
-                    }
+                    UiElement::Text(t) => {}
                     UiElement::Rect(rect) => {
                         if let Some(bg1) = rect_bg.as_ref() {
                             if let Some(cached_texture) = rect.cached_texture.as_ref() {
                                 match cached_texture {
                                     RectTextureType::Shader(path) => {
-                                        self.draw_rect_shader(
-                                            render_manager,
-                                            pipelines,
-                                            &mut pass,
-                                            path,
-                                            bg1,
-                                            rect_idx,
-                                        );
+                                        if let Some(path) = mod_manager.resource_path(path.as_str())
+                                        {
+                                            self.draw_rect_shader(
+                                                render_manager,
+                                                pipelines,
+                                                &mut pass,
+                                                path,
+                                                bg1,
+                                                rect_idx,
+                                            );
+                                        } else {
+                                            error!(
+                                                "[Renderer] Missing shader '{path}' for Rect Shader from UI element: {}, UI Layer: {}",
+                                                rect.id, layer.name
+                                            );
+                                            return;
+                                        };
                                     }
                                     RectTextureType::Image(view) => {
                                         self.draw_rect_image(
@@ -549,6 +645,7 @@ impl UiRenderer {
                                             view,
                                             bg1,
                                             rect_idx,
+                                            rect_image_shader,
                                         );
                                     }
                                 }
@@ -561,6 +658,9 @@ impl UiRenderer {
                                 bg1,
                                 rect_idx,
                                 rect.blur > 0.0,
+                                rect_glow_shader,
+                                rect_blur_shader,
+                                rect_shader,
                             );
                         }
 
@@ -588,7 +688,7 @@ impl UiRenderer {
 
                 render_manager.render(
                     &[],
-                    &shader_dir().join("ui_triangles.wgsl"),
+                    triangles,
                     options,
                     &[&self.pipelines.uniform_buffer],
                     &mut pass,
@@ -598,7 +698,12 @@ impl UiRenderer {
             }
         }
 
-        self.flush_text_batch(&mut pass, queue, &mut pending_text);
+        if let Err(e) = self
+            .text_renderer
+            .render(&self.text_atlas, &self.viewport, &mut pass)
+        {
+            error!("Failed to render UI text: {}", e);
+        }
     }
 
     pub fn write_storage_buffer(
@@ -650,22 +755,10 @@ impl UiRenderer {
 }
 
 impl UiRenderer {
-    fn f32_to_u8(v: f32) -> u8 {
-        (v.clamp(0.0, 1.0) * 255.0).round() as u8
-    }
-
-    fn color_from_rgba(color: [f32; 4]) -> Color {
-        Color::rgba(
-            Self::f32_to_u8(color[0]),
-            Self::f32_to_u8(color[1]),
-            Self::f32_to_u8(color[2]),
-            Self::f32_to_u8(color[3]),
-        )
-    }
-
     fn draw_background(
         &self,
         render_manager: &mut RenderManager,
+        mod_manager: &ModManager,
         encoder: &mut CommandEncoder,
         pipelines: &Pipelines,
         settings: &Settings,
@@ -688,8 +781,11 @@ impl UiRenderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-
-        let background_shader = &shader_dir().join("ui_background.wgsl");
+        let Some(background_shader) = mod_manager.resource_path("shaders/ui_background.wgsl")
+        else {
+            error!("[Renderer] Missing shader 'shaders/ui_background.wgsl'");
+            return;
+        };
         let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
         let options = &PipelineOptions {
             topology: PrimitiveTopology::TriangleList,
@@ -818,6 +914,8 @@ impl UiRenderer {
         pass: &mut RenderPass<'_>,
         circle_bg: &BindGroup,
         this_idx: u32,
+        circle_glow_shader: &Path,
+        circle_shader: &Path,
     ) {
         let targets = color_target_ui(pipelines, Some(self.pipelines.additive_blend));
         let options = &PipelineOptions {
@@ -836,7 +934,7 @@ impl UiRenderer {
         };
 
         render_manager.render_with_layouts(
-            &shader_dir().join("ui_circle_glow.wgsl"),
+            circle_glow_shader,
             &[
                 &self.pipelines.uniform_layout,
                 &self.pipelines.circle_layout,
@@ -865,7 +963,7 @@ impl UiRenderer {
         };
 
         render_manager.render_with_layouts(
-            &shader_dir().join("ui_circle.wgsl"),
+            circle_shader,
             &[
                 &self.pipelines.uniform_layout,
                 &self.pipelines.circle_layout,
@@ -885,6 +983,7 @@ impl UiRenderer {
         pass: &mut RenderPass<'_>,
         handle_bg: &BindGroup,
         this_idx: u32,
+        shader: &Path,
     ) {
         let targets = color_target_ui(pipelines, self.pipelines.good_blend);
         let options = &PipelineOptions {
@@ -903,7 +1002,7 @@ impl UiRenderer {
         };
 
         render_manager.render_with_layouts(
-            &shader_dir().join("ui_handle.wgsl"),
+            shader,
             &[
                 &self.pipelines.uniform_layout,
                 &self.pipelines.handle_layout,
@@ -912,6 +1011,7 @@ impl UiRenderer {
             options,
             pass,
         );
+
         pass.set_vertex_buffer(0, self.pipelines.handle_quad_buffer.slice(..));
         pass.draw(0..4, this_idx..this_idx + 1);
     }
@@ -925,6 +1025,7 @@ impl UiRenderer {
         vbo: &wgpu::Buffer,
         start: u32,
         count: u32,
+        shader: &Path,
     ) {
         let targets = color_target_ui(pipelines, Some(BlendState::ALPHA_BLENDING));
         let options = &PipelineOptions {
@@ -943,7 +1044,7 @@ impl UiRenderer {
         };
 
         render_manager.render_with_layouts(
-            &shader_dir().join("ui_polygon.wgsl"),
+            shader,
             &[
                 &self.pipelines.uniform_layout,
                 &self.pipelines.polygon_layout,
@@ -952,6 +1053,7 @@ impl UiRenderer {
             options,
             pass,
         );
+
         pass.set_vertex_buffer(0, vbo.slice(..));
         pass.draw(start..start + count, 0..1);
     }
@@ -963,6 +1065,7 @@ impl UiRenderer {
         pass: &mut RenderPass<'_>,
         outline_bg: &BindGroup,
         this_idx: u32,
+        shader: &Path,
     ) {
         let targets = color_target_ui(pipelines, self.pipelines.good_blend);
         let options = &PipelineOptions {
@@ -981,7 +1084,7 @@ impl UiRenderer {
         };
 
         render_manager.render_with_layouts(
-            &shader_dir().join("ui_shape_outline.wgsl"),
+            shader,
             &[
                 &self.pipelines.uniform_layout,
                 &self.pipelines.outline_layout,
@@ -990,10 +1093,10 @@ impl UiRenderer {
             options,
             pass,
         );
+
         pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
         pass.draw(0..4, this_idx..this_idx + 1);
     }
-
     fn draw_rect(
         &self,
         render_manager: &mut RenderManager,
@@ -1002,6 +1105,9 @@ impl UiRenderer {
         rect_bg: &BindGroup,
         this_idx: u32,
         needs_blur: bool,
+        rect_glow_shader: &Path,
+        rect_blur_shader: &Path,
+        rect_shader: &Path,
     ) {
         let targets = color_target_ui(pipelines, Some(self.pipelines.additive_blend));
         let options = &PipelineOptions {
@@ -1020,7 +1126,7 @@ impl UiRenderer {
         };
 
         render_manager.render_with_layouts(
-            &shader_dir().join("ui_rect_glow.wgsl"),
+            rect_glow_shader,
             &[&self.pipelines.uniform_layout, &self.pipelines.rect_layout],
             &[&self.pipelines.uniform_bind_group, rect_bg],
             options,
@@ -1047,7 +1153,7 @@ impl UiRenderer {
 
             render_manager.render_with_layouts_and_textures(
                 &[&pipelines.resolved.hdr],
-                &shader_dir().join("ui_rect_blur.wgsl"),
+                rect_blur_shader,
                 &[&self.pipelines.rect_layout],
                 &[rect_bg],
                 options,
@@ -1088,7 +1194,7 @@ impl UiRenderer {
         };
 
         render_manager.render_with_layouts(
-            &shader_dir().join("ui_rect.wgsl"),
+            rect_shader,
             &[&self.pipelines.uniform_layout, &self.pipelines.rect_layout],
             &[&self.pipelines.uniform_bind_group, rect_bg],
             options,
@@ -1144,6 +1250,7 @@ impl UiRenderer {
         texture: &TextureView,
         rect_bg: &BindGroup,
         this_idx: u32,
+        shader: &Path,
     ) {
         let targets = color_target_ui(pipelines, Some(BlendState::ALPHA_BLENDING));
 
@@ -1164,7 +1271,7 @@ impl UiRenderer {
 
         render_manager.render_with_layouts_and_textures(
             &[texture],
-            &shader_dir().join("ui_rect_image.wgsl"),
+            shader,
             &[&self.pipelines.rect_layout],
             &[rect_bg],
             options,
@@ -1190,41 +1297,17 @@ impl UiRenderer {
 
         let depth = depth_for(layer_order, element_idx);
 
-        let border_size = 1.0; // TODO.:Fo ork... uhh... FORK Glyphon and add text border support in the shader and Rust neatly in the text buffer or whatever.   Update: SHIT! I forked Glyphon and I must now fork cosmic-text too!!
+        // TODO.:Fo ork... uhh... FORK Glyphon and add text border support in the shader and Rust neatly in the text buffer or whatever.   Update: SHIT! I forked Glyphon and I must now fork cosmic-text too!!
+        // UPDATE: COMPELTELY IRRELEVANT!! SLUGGRS SAVES US!1
+
         let bounds = TextBounds {
-            left: (left - border_size - 2.0).floor() as i32,
-            top: (top - border_size - 2.0).floor() as i32,
-            right: (left + width + border_size + 2.0).ceil() as i32,
-            bottom: (top + height + border_size + 2.0).ceil() as i32,
+            left: (left - 2.0).floor() as i32,
+            top: (top - 2.0).floor() as i32,
+            right: (left + width + 2.0).ceil() as i32,
+            bottom: (top + height + 2.0).ceil() as i32,
         };
 
-        // let offsets = [
-        //     (-border_size, -border_size),
-        //     (0.0, -border_size),
-        //     (border_size, -border_size),
-        //     (-border_size, 0.0),
-        //     (border_size, 0.0),
-        //     (-border_size, border_size),
-        //     (0.0, border_size),
-        //     (border_size, border_size),
-        // ];
-        //
-        let mut result = Vec::with_capacity(9);
-        //
-        // for (dx, dy) in offsets {
-        //     result.push((
-        //         TextArea {
-        //             buffer: &text.buffer,
-        //             left: left + dx,
-        //             top: top + dy,
-        //             scale: 1.0,
-        //             bounds,
-        //             default_color: glyphon::Color::rgba(0, 0, 0, 255),
-        //             custom_glyphs: &[],
-        //         },
-        //         depth,
-        //     ));
-        // }
+        let mut result = Vec::with_capacity(1);
 
         result.push((
             TextArea {
@@ -1233,9 +1316,8 @@ impl UiRenderer {
                 top,
                 scale: 1.0,
                 bounds,
-                default_color: Self::color_from_rgba(cache.color),
-                border_color: Self::color_from_rgba(cache.border_color),
-                border_width: cache.border_width,
+                default_color: stupid_color_from_rgba(cache.color),
+                decorations: cache.decorations.as_slice(),
             },
             depth,
         ));
@@ -1243,9 +1325,9 @@ impl UiRenderer {
         Some(result)
     }
 
-    fn flush_text_batch<'a>(
+    fn prepare_text_batch<'a>(
         &mut self,
-        pass: &mut RenderPass<'a>,
+        encoder: &mut CommandEncoder,
         queue: &Queue,
         batch: &mut Vec<(TextArea<'a>, f32)>,
     ) {
@@ -1254,27 +1336,19 @@ impl UiRenderer {
         }
 
         let depths: Vec<f32> = batch.iter().map(|(_, depth)| *depth).collect();
-
         let areas = batch.drain(..).map(|(area, _)| area);
 
         if let Err(e) = self.text_renderer.prepare_with_depth(
             &self.device,
             queue,
+            encoder,
             &mut self.font_system,
             &mut self.text_atlas,
             &self.viewport,
             areas,
             |index| depths[index],
         ) {
-            println!("{}", e);
-            return;
-        }
-
-        if let Err(e) = self
-            .text_renderer
-            .render(&self.text_atlas, &self.viewport, pass)
-        {
-            println!("{}", e);
+            error!("Failed to prepare UI text: {}", e);
         }
     }
 }

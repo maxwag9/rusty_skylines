@@ -1,4 +1,4 @@
-use crate::helpers::paths::sounds_dir;
+use crate::helpers::modpack::ModManager;
 use crate::helpers::positions::{ChunkSize, WorldPos};
 use crate::resources::Resources;
 use crate::world::sound::car_sounds::{CarAudioState, collect_car_audio};
@@ -10,7 +10,6 @@ use cpal::{
 };
 use std::collections::HashMap;
 use std::f32::consts::PI;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -114,6 +113,12 @@ impl Sounds {
             false
         }
     }
+    pub fn clear_sfx_queue(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.sfx_queue.clear();
+            state.active_sfx.clear();
+        }
+    }
 }
 #[derive(Debug)]
 pub enum AudioError {
@@ -163,8 +168,8 @@ impl Sounds {
     const MAX_CONSECUTIVE_FAILURES: u32 = 10;
     const BACKOFF_MAX: Duration = Duration::from_secs(30);
 
-    pub fn new() -> Self {
-        Self::new_robust().unwrap_or_else(|e| {
+    pub fn new(mod_manager: &ModManager) -> Self {
+        Self::new_robust(mod_manager).unwrap_or_else(|e| {
             eprintln!("Audio initialization failed: {}", e);
             eprintln!("Continuing without audio, will retry periodically...");
             Self::new_silent()
@@ -396,7 +401,7 @@ impl Sounds {
         Ok(stream)
     }
 
-    pub fn new_robust() -> Result<Self, AudioError> {
+    pub fn new_robust(mod_manager: &ModManager) -> Result<Self, AudioError> {
         let available_hosts = cpal::available_hosts();
         if available_hosts.is_empty() {
             return Err(AudioError::NoHostsAvailable);
@@ -416,8 +421,7 @@ impl Sounds {
         //     init_cars_audio(state);
         // }
 
-        let sfx_folder = sounds_dir();
-        let sfxs = Self::load_sfxs(sfx_folder);
+        let sfxs = Self::load_sfxs(mod_manager);
 
         let now = Instant::now();
         Ok(Self {
@@ -433,48 +437,17 @@ impl Sounds {
             sfxs,
         })
     }
-    fn load_sfxs(folder_path: PathBuf) -> HashMap<String, SfxConfig> {
-        let folder_path = folder_path.as_path();
+    fn load_sfxs(mod_manager: &ModManager) -> HashMap<String, SfxConfig> {
         let mut sfxs = HashMap::new();
 
-        let entries = std::fs::read_dir(folder_path).unwrap_or_else(|err| {
-            panic!(
-                "[Sounds] Failed to read sounds folder to get SFXs. Tried path: '{}'. Error: {}",
-                folder_path.display(),
-                err
-            )
-        });
+        let paths = mod_manager.sound_paths();
 
-        for entry in entries {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(err) => {
-                    eprintln!(
-                        "[Sounds] Failed to read an entry in the sounds folder '{}'. Error: {}",
-                        folder_path.display(),
-                        err
-                    );
-                    continue;
-                }
-            };
-
-            let path = entry.path();
-
-            // Only process files in the root of the folder.
-            if !path.is_file() {
-                continue;
-            }
-
-            // Only process YAML files.
-            if path.extension().and_then(|ext| ext.to_str()) != Some("yaml") {
-                continue;
-            }
-
+        for path in paths {
             let name = match path.file_stem().and_then(|stem| stem.to_str()) {
                 Some(name) => name.to_owned(),
                 None => {
                     eprintln!(
-                        "[Sounds] Failed to determine SFX name from file '{}'. Filename is not valid UTF-8.",
+                        "[Sounds] Failed to determine SFX name from file '{}'.",
                         path.display()
                     );
                     continue;

@@ -1,6 +1,7 @@
 use crate::data::Settings;
-use crate::helpers::paths::data_dir;
+use crate::helpers::modpack::ModManager;
 use crate::helpers::positions::WorldPos;
+use crate::helpers::{rgba_from_stupid_color, stupid_color_from_rgba};
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::renderer::ui_text_rendering::Anchor;
 use crate::ui::action_parser::CompiledAction;
@@ -10,15 +11,14 @@ use crate::ui::ui_edit_manager::ColorComponent;
 use crate::ui::ui_edits::SizeProperty;
 use crate::ui::ui_touch_manager::{ElementRef, Touchable};
 use crate::ui::variables::Variables;
-//use glyphon::Metrics;
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize, de};
-use sluggrs::cosmic_text::Metrics;
+use sluggrs_skylines::cosmic_text::Metrics;
+use sluggrs_skylines::cosmic_text::skrifa::metrics::Decoration;
+use sluggrs_skylines::{DecorationMode, TextDecoration, cosmic_text};
 use std::collections::HashMap;
-use std::ffi::OsStr;
 use std::fmt;
 use std::mem::size_of;
-use std::path::PathBuf;
 use tracing::error;
 use wgpu::{vertex_attr_array, *};
 use winit::dpi::PhysicalSize;
@@ -353,6 +353,7 @@ impl AdvancedPrimitive {
         window_size: PhysicalSize<f32>,
         device: &Device,
         queue: &Queue,
+        mod_manager: &ModManager,
     ) -> RuntimeLayer {
         let x_scale = window_size.width / 1920.0;
         let y_scale = window_size.height / 1080.0;
@@ -373,7 +374,7 @@ impl AdvancedPrimitive {
                 .clone()
                 .unwrap_or_default()
                 .into_iter()
-                .filter_map(|e| UiElement::from_yaml(e, window_size, device, queue))
+                .filter_map(|e| UiElement::from_yaml(e, window_size, device, queue, mod_manager))
                 .map(|mut el| {
                     //el.scale_by(x_scale, y_scale, );// WTF??!?!?!
                     el.translate(x, y);
@@ -472,25 +473,31 @@ impl ResizeBehaviour {
 
 #[derive(Debug, Clone)]
 pub enum RectTextureType {
-    Shader(PathBuf),
+    Shader(String),
     Image(TextureView),
 }
 
 impl RectTextureType {
-    pub fn from_str(kind: &str, path: &str, device: &Device, queue: &Queue) -> Option<Self> {
+    pub fn from_str(
+        kind: &str,
+        path: &str,
+        device: &Device,
+        queue: &Queue,
+        mod_manager: &ModManager,
+    ) -> Option<Self> {
         match kind.to_lowercase().as_str() {
             "shader" => {
-                let path = data_dir(path);
+                let relative_path = path;
 
-                if !path.is_file() || path.extension() != Some(OsStr::new("wgsl")) {
-                    return None;
-                }
-
-                Some(Self::Shader(path))
+                Some(Self::Shader(relative_path.to_owned()))
             }
 
             "image" => {
-                let path = data_dir(path);
+                let Some(path) = mod_manager.resource_path(path) else {
+                    error!("[Renderer] Missing shader '{path}' for UI Rect Image");
+                    return None;
+                };
+
                 //println!("Image path: {:?}", path);
                 if !path.is_file() {
                     error!("Image path isn't file: {}", path.display());
@@ -506,35 +513,35 @@ impl RectTextureType {
                 };
                 let dimensions = image.dimensions();
 
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
+                let texture = device.create_texture(&TextureDescriptor {
                     label: Some("Rect Image Texture"),
-                    size: wgpu::Extent3d {
+                    size: Extent3d {
                         width: dimensions.0,
                         height: dimensions.1,
                         depth_or_array_layers: 1,
                     },
                     mip_level_count: 1,
                     sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    dimension: TextureDimension::D2,
+                    format: TextureFormat::Rgba8UnormSrgb,
+                    usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
                     view_formats: &[],
                 });
 
                 queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
+                    TexelCopyTextureInfo {
                         texture: &texture,
                         mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
+                        origin: Origin3d::ZERO,
+                        aspect: TextureAspect::All,
                     },
                     &image,
-                    wgpu::TexelCopyBufferLayout {
+                    TexelCopyBufferLayout {
                         offset: 0,
                         bytes_per_row: Some(4 * dimensions.0),
                         rows_per_image: Some(dimensions.1),
                     },
-                    wgpu::Extent3d {
+                    Extent3d {
                         width: dimensions.0,
                         height: dimensions.1,
                         depth_or_array_layers: 1,
@@ -554,6 +561,7 @@ fn get_rect_texture(
     texture_string: Option<String>,
     device: &Device,
     queue: &Queue,
+    mod_manager: &ModManager,
 ) -> Option<RectTextureType> {
     let Some(texture_string) = texture_string.as_ref() else {
         return None;
@@ -562,7 +570,7 @@ fn get_rect_texture(
         None => None,
         Some((texture_type, path)) => {
             //println!("Trying texture: '{texture_type}', '{path}'");
-            RectTextureType::from_str(texture_type, path, device, queue)
+            RectTextureType::from_str(texture_type, path, device, queue, mod_manager)
         }
     }
     // 1. Path to shader relative to data folder  2. Path to an actual texture image relative to the data folder    // -3. Procedural texture (NO NOT YET)-
@@ -651,7 +659,12 @@ pub struct UiButtonRect {
 }
 
 impl UiButtonRect {
-    pub fn from_yaml(e: UiButtonRectYaml, device: &Device, queue: &Queue) -> Self {
+    pub fn from_yaml(
+        e: UiButtonRectYaml,
+        device: &Device,
+        queue: &Queue,
+        mod_manager: &ModManager,
+    ) -> Self {
         let yaml_element = Some(e.clone());
 
         UiButtonRect {
@@ -671,7 +684,7 @@ impl UiButtonRect {
             color: e.color,
             border_color: e.border_color,
             texture: e.texture.clone(),
-            cached_texture: get_rect_texture(e.texture, device, queue),
+            cached_texture: get_rect_texture(e.texture, device, queue, mod_manager),
             roundness: e.roundness,
             border_thickness: e.border_thickness,
             fade: e.fade,
@@ -761,6 +774,7 @@ impl UiElement {
         window_size: PhysicalSize<f32>,
         device: &Device,
         queue: &Queue,
+        mod_manager: &ModManager,
     ) -> Option<UiElement> {
         let mut element = match element {
             UiElementYaml::Circle(e) => UiElement::Circle(UiButtonCircle::from_yaml(e)),
@@ -770,7 +784,9 @@ impl UiElement {
             }
             UiElementYaml::Text(e) => UiElement::Text(UiButtonText::from_yaml(e)),
             UiElementYaml::Outline(e) => UiElement::Outline(UiButtonOutline::from_yaml(e)),
-            UiElementYaml::Rect(e) => UiElement::Rect(UiButtonRect::from_yaml(e, device, queue)),
+            UiElementYaml::Rect(e) => {
+                UiElement::Rect(UiButtonRect::from_yaml(e, device, queue, mod_manager))
+            }
             UiElementYaml::Advanced(ap) => UiElement::Advanced(AdvancedPrimitive::from_yaml(&ap)),
         };
 
@@ -2039,12 +2055,12 @@ pub struct ShapeData {
 impl ShapeData {
     pub fn scale_from_normalized(&self, window_size: PhysicalSize<f32>, scale: f32) -> ShapeData {
         let x = if self.x < 2.0 {
-            window_size.width as f32 * self.x
+            window_size.width * self.x
         } else {
             self.x
         };
         let y = if self.y < 2.0 {
-            window_size.height as f32 * self.y
+            window_size.height * self.y
         } else {
             self.y
         };
@@ -2063,8 +2079,8 @@ impl ShapeData {
 
     pub fn scale_to_normalized(&self, window_size: PhysicalSize<f32>, scale: f32) -> ShapeData {
         ShapeData {
-            x: self.x / window_size.width as f32,
-            y: self.y / window_size.height as f32,
+            x: self.x / window_size.width,
+            y: self.y / window_size.height,
             radius: self.radius / scale,
             border_thickness: self.border_thickness,
         }
@@ -2191,11 +2207,9 @@ pub struct UiButtonText {
     pub x: f32,
     pub y: f32,
     pub pt: f32,
-    pub border_width: f32,
     pub resize_behaviour: ResizeBehaviour,
     pub original_pt: f32,
     pub color: [f32; 4],
-    pub border_color: [f32; 4],
     pub text: String,
     pub template: String,
     pub misc: MiscButtonSettings,
@@ -2211,12 +2225,13 @@ pub struct UiButtonText {
     pub sel_end: usize,   // selection end index
     pub has_selection: bool,
 
-    pub buffer: sluggrs::Buffer,
+    pub buffer: sluggrs_skylines::Buffer,
     pub input_box: bool,
     pub anchor: Anchor,
     pub yaml_element: Option<UiButtonTextYaml>,
 
     pub cache: Option<TextParams>,
+    pub decorations: Vec<TextDecoration>,
 }
 
 #[derive(Debug, Clone)]
@@ -2306,7 +2321,17 @@ impl UiButtonText {
     pub fn from_yaml(e: UiButtonTextYaml) -> Self {
         let length = e.text.len();
         let yaml_element = Some(e.clone());
-
+        let decorations = e.decorations_to_runtime();
+        let decorations = match decorations {
+            Ok(decos) => decos,
+            Err(err) => {
+                error!(
+                    "[UI] Error while converting YAML text to Runtime Text: '{}'",
+                    err
+                );
+                vec![]
+            }
+        };
         UiButtonText {
             id: e.id,
             string_actions: e.actions.clone(),
@@ -2316,14 +2341,12 @@ impl UiButtonText {
             x: e.x as f32,
             y: e.y as f32,
             pt: e.pt,
-            border_width: e.border_width,
             original_pt: e.pt,
 
             resize_behaviour: e.resize_behaviour,
 
             color: e.color,
 
-            border_color: e.border_color,
             text: e.text.clone(),
             template: e.text,
 
@@ -2353,7 +2376,8 @@ impl UiButtonText {
             yaml_element,
             cache: None,
 
-            buffer: sluggrs::Buffer::new_empty(Metrics::new(e.pt, 20.0)),
+            buffer: sluggrs_skylines::Buffer::new_empty(Metrics::new(e.pt, 20.0)),
+            decorations,
         }
     }
 
@@ -2376,18 +2400,23 @@ impl UiButtonText {
             y: y as i16,
             pt,
 
-            border_width: self.border_width,
             resize_behaviour: self.resize_behaviour,
 
             color: self.color,
-            border_color: self.border_color,
             text: self.template.clone(),
 
             misc: self.misc.to_yaml(),
 
             input_box: self.input_box,
             anchor: self.anchor,
+            decorations: Self::decorations_to_yaml(self.decorations.clone()),
         }
+    }
+
+    fn decorations_to_yaml(decs: Vec<TextDecoration>) -> Vec<TextDecorationYaml> {
+        decs.into_iter()
+            .map(|d| TextDecorationYaml::from_runtime(d))
+            .collect()
     }
 
     pub fn set_pos(&mut self, position: [f32; 2]) {
@@ -2791,11 +2820,9 @@ impl Default for UiButtonText {
             x: 0.0,
             y: 0.0,
             pt: 14.0,
-            border_width: 5.0,
             resize_behaviour: Default::default(),
             original_pt: 14.0,
             color: [1.0, 1.0, 1.0, 1.0],
-            border_color: [0.0, 0.0, 0.0, 1.0],
             text: "default".into(),
             template: "default".to_string(),
             misc: MiscButtonSettings::default(),
@@ -2812,7 +2839,8 @@ impl Default for UiButtonText {
             anchor: Anchor::default(),
             yaml_element: None,
             cache: None,
-            buffer: sluggrs::Buffer::new_empty(Metrics::new(14.0, 20.0)),
+            buffer: sluggrs_skylines::Buffer::new_empty(Metrics::new(14.0, 20.0)),
+            decorations: vec![],
         }
     }
 }
@@ -3059,13 +3087,9 @@ pub struct UiButtonTextYaml {
     #[serde(skip_serializing_if = "is_default")]
     pub pt: f32,
     #[serde(default, skip_serializing_if = "is_default")]
-    pub border_width: f32,
-    #[serde(default, skip_serializing_if = "is_default")]
     pub resize_behaviour: ResizeBehaviour,
     #[serde(default, skip_serializing_if = "is_default")]
     pub color: [f32; 4],
-    #[serde(default = "default_border_color", skip_serializing_if = "is_default")]
-    pub border_color: [f32; 4],
     pub text: String,
 
     // If 'misc' matches defaults (active:true, pressable:false, editable:false),
@@ -3078,8 +3102,79 @@ pub struct UiButtonTextYaml {
 
     #[serde(default, skip_serializing_if = "is_default")]
     pub anchor: Anchor,
+
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub decorations: Vec<TextDecorationYaml>,
 }
 
+impl UiButtonTextYaml {
+    pub fn decorations_to_runtime(&self) -> anyhow::Result<Vec<TextDecoration>> {
+        let mut result = Vec::with_capacity(self.decorations.len());
+        let mut ring_count = 0;
+
+        for decoration in &self.decorations {
+            let decoration = decoration.to_runtime()?;
+
+            if decoration.mode == DecorationMode::Ring {
+                ring_count += 1;
+
+                if ring_count > 1 {
+                    anyhow::bail!("At most one Ring decoration per text area!! 🖕");
+                }
+            }
+
+            result.push(decoration);
+        }
+
+        Ok(result)
+    }
+}
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+pub struct TextDecorationYaml {
+    #[serde(default = "default_border_color", skip_serializing_if = "is_default")]
+    pub color: [f32; 4],
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub spread: f32,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub offset: [f32; 2],
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub blur: f32,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub mode: Option<DecorationMode>,
+}
+
+impl TextDecorationYaml {
+    fn to_runtime(&self) -> anyhow::Result<TextDecoration> {
+        if self.blur > 0.0 && self.spread > 0.0 {
+            anyhow::bail!("A blurred text decoration cannot also carry a spread! 😂");
+        }
+
+        let mode = self.mode.unwrap_or_else(|| {
+            if self.spread > 0.0 {
+                DecorationMode::Ring
+            } else {
+                DecorationMode::Solid
+            }
+        });
+
+        Ok(TextDecoration {
+            color: stupid_color_from_rgba(self.color),
+            spread: self.spread,
+            offset: self.offset,
+            blur: self.blur,
+            mode,
+        })
+    }
+    fn from_runtime(dec: TextDecoration) -> TextDecorationYaml {
+        TextDecorationYaml {
+            color: rgba_from_stupid_color(dec.color),
+            spread: dec.spread,
+            offset: dec.offset,
+            blur: dec.blur,
+            mode: Some(dec.mode),
+        }
+    }
+}
 impl Default for UiButtonTextYaml {
     fn default() -> Self {
         Self {
@@ -3089,14 +3184,13 @@ impl Default for UiButtonTextYaml {
             x: 0,
             y: 0,
             pt: 14.0,
-            border_width: 5.0,
             resize_behaviour: Default::default(),
             color: [1.0, 1.0, 1.0, 1.0],
-            border_color: [0.0, 0.0, 0.0, 1.0],
             text: String::new(),
             misc: MiscButtonSettingsYaml::default(),
             input_box: false,
             anchor: Anchor::default(),
+            decorations: vec![],
         }
     }
 }
@@ -3465,7 +3559,7 @@ where
     impl<'de> Visitor<'de> for StringOrVecVisitor {
         type Value = Vec<String>;
 
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
             formatter.write_str("a string or a sequence of strings")
         }
 

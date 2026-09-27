@@ -1,3 +1,4 @@
+use crate::helpers::modpack::ModManager;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::props::Props;
 use crate::world::buildings::building_mesher::{BuildingMeshBuilder, BuildingMeshManager};
@@ -31,6 +32,7 @@ impl BuildingRenderer {
     pub fn update(
         &mut self,
         render_manager: &mut RenderManager,
+        mod_manager: &ModManager,
         terrain: &mut Terrain,
         props: &mut Props,
         buildings: &mut Buildings,
@@ -50,6 +52,7 @@ impl BuildingRenderer {
             let mesh = if needs_rebuild {
                 self.mesh_manager.update_chunk_mesh(
                     render_manager,
+                    mod_manager,
                     terrain,
                     props,
                     chunk_coord,
@@ -118,6 +121,7 @@ impl BuildingRenderer {
     pub fn render_preview(
         &mut self,
         render_manager: &mut RenderManager,
+        mod_manager: &ModManager,
         terrain: &mut Terrain,
         props: &mut Props,
         parking_storage: &mut ParkingStorage,
@@ -142,6 +146,7 @@ impl BuildingRenderer {
                     signature,
                     true,
                     render_manager,
+                    mod_manager,
                     terrain,
                     buildings,
                     building_id,
@@ -156,6 +161,7 @@ impl BuildingRenderer {
                     signature,
                     false,
                     render_manager,
+                    mod_manager,
                     terrain,
                     buildings,
                     building_id,
@@ -171,6 +177,7 @@ impl BuildingRenderer {
                 signature,
                 true,
                 render_manager,
+                mod_manager,
                 terrain,
                 buildings,
                 building_id,
@@ -188,6 +195,7 @@ impl BuildingRenderer {
         signature: u64,
         regenerate_mesh: bool,
         render_manager: &mut RenderManager,
+        mod_manager: &ModManager,
         terrain: &mut Terrain,
         buildings: &mut Buildings,
         building_id: BuildingId,
@@ -201,6 +209,7 @@ impl BuildingRenderer {
             self.mesh_manager.build_mesh_for_building(
                 &mut mesh,
                 render_manager,
+                mod_manager,
                 terrain,
                 buildings,
                 false,

@@ -23,6 +23,7 @@ pub enum RouteStatus {
     },
     /// One or both locations are invalid or don't exist
     Invalid,
+    RoadRegionsNotInitialized,
 }
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
@@ -448,8 +449,12 @@ impl PartitionManager {
             return RouteStatus::Invalid;
         }
 
-        let from_region = road_storage.region_for_node(from);
-        let to_region = road_storage.region_for_node(to);
+        let Some(from_region) = road_storage.road_regions.region_for_node(from) else {
+            return RouteStatus::RoadRegionsNotInitialized;
+        };
+        let Some(to_region) = road_storage.road_regions.region_for_node(to) else {
+            return RouteStatus::RoadRegionsNotInitialized;
+        };
 
         if from_region == to_region {
             RouteStatus::Routable

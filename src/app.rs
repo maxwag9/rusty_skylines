@@ -1,7 +1,7 @@
 use crate::data::Cycle;
 use crate::data::FullScreenMode;
 use crate::data::SettingKey;
-use crate::helpers::paths::{data_dir, textures_dir};
+use crate::helpers::paths::data_dir;
 use crate::renderer::shadows::create_csm_shadow_texture;
 use crate::resources::{FrameTimeCheckpointType, Resources};
 use crate::simulation::update_picked_pos;
@@ -19,6 +19,7 @@ use glam::Vec2;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+use tracing::error;
 use winit::application::ApplicationHandler;
 use winit::cursor::{Cursor, CustomCursorSource};
 use winit::event::{ElementState, StartCause, WindowEvent};
@@ -104,25 +105,33 @@ impl ApplicationHandler for App {
             "screen",
             vec![window.surface_size().width, window.surface_size().height],
         );
-        let pointer_path = textures_dir().join("pointer.png");
-        let image = image::open(&pointer_path)
-            .expect("Failed to load cursor image")
-            .to_rgba8();
+        if let Some(pointer_path) = resources
+            .game_state
+            .mod_manager
+            .resource_path("textures/pointer.png")
+        {
+            let image = image::open(&pointer_path)
+                .expect("Failed to load cursor image")
+                .to_rgba8();
 
-        let width = image.width() as u16;
-        let height = image.height() as u16;
+            let width = image.width() as u16;
+            let height = image.height() as u16;
 
-        let rgba = image.into_raw();
+            let rgba = image.into_raw();
 
-        let source = CustomCursorSource::from_rgba(
-            rgba, width, height, 0, // hotspot x
-            0, // hotspot y
-        )
-        .expect("Invalid cursor image");
+            let source = CustomCursorSource::from_rgba(
+                rgba, width, height, 0, // hotspot x
+                0, // hotspot y
+            )
+            .expect("Invalid cursor image");
 
-        if let Ok(custom_cursor) = event_loop.create_custom_cursor(source) {
-            window.set_cursor(Cursor::Custom(custom_cursor));
-        }
+            if let Ok(custom_cursor) = event_loop.create_custom_cursor(source) {
+                window.set_cursor(Cursor::Custom(custom_cursor));
+            }
+        } else {
+            error!("[App] Missing texture 'textures/pointer.png'");
+            return;
+        };
 
         self.window = Some(window.clone());
         self.resources = Some(resources);
@@ -366,7 +375,7 @@ impl ApplicationHandler for App {
             WindowEvent::MouseWheel { delta, .. } => {
                 if let Some(resources) = self.resources.as_mut() {
                     let scroll = resources.world.input.handle_mouse_wheel(delta);
-
+                    resources.ui.variables.set_f64("scroll_delta", scroll.y);
                     if !resources.settings.editor_mode
                         && resources.ui.touch_manager.hovered().is_none()
                     {
@@ -663,7 +672,6 @@ fn update_stuff(resources: &mut Resources) {
             //println!("{}", format!("RESIDENTIAL: {}", district.zoning_demand.residential:.1));
             ui.variables
                 .set_f64("prestige", district.zoning_demand.prestige);
-
             ui.variables
                 .set_f64("residential_demand", district.zoning_demand.residential);
             ui.variables

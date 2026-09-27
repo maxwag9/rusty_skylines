@@ -566,7 +566,7 @@ impl Touchable for UiButtonText {
     fn sizes(&self) -> Vec<SizeProperty> {
         vec![
             SizeProperty::Pt(self.pt),
-            SizeProperty::Border(self.border_width),
+            //SizeProperty::Border(self.border_width),
             SizeProperty::Rect([self.width, self.height]),
         ]
     }

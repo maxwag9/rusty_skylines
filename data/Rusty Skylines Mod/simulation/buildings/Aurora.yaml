@@ -27,7 +27,12 @@ building_levels:
       solar_modules: false
       antenna: false
       usage: Commercial
-
+    utilities:
+      Electricity:
+        consumption: 400
+      Clean Water:
+        consumption: 200
+    utilities_scale_per_square_meter: false
   changes:
     2:
       wall_material:

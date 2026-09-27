@@ -258,15 +258,15 @@ impl RoadEditor {
         }
 
         let sign_pos = snap.world_pos.add_vec3(Vec3::new(0.0, 10.0, 0.0));
-        let scale = 2.0;
+        let scale = 4.0;
         gizmo.text(
             format!("{:.1}m", estimated_length),
-            sign_pos.add_vec3(Vec3::new(0.0, -2.0, 0.0)),
+            sign_pos.add_vec3(Vec3::new(0.0, -4.0, 0.0)),
             scale,
             [0.43, 0.50, 0.53, 0.85],
             None,
             true,
-            0.0,
+            2.0,
             0.0,
         );
         if city_state.economy.can_buy(cost) {
@@ -277,7 +277,7 @@ impl RoadEditor {
                 [0.03, 0.96, 0.03, 0.85],
                 None,
                 true,
-                0.0,
+                2.0,
                 0.0,
             );
         } else {
@@ -288,7 +288,7 @@ impl RoadEditor {
                 [0.96, 0.03, 0.03, 0.85],
                 None,
                 true,
-                0.0,
+                2.0,
                 0.0,
             );
         };
@@ -306,7 +306,7 @@ impl RoadEditor {
                 [0.03, 0.96, 0.03, 0.85],
                 None,
                 true,
-                0.0,
+                2.0,
                 3.0,
             );
             let road_cmds = self.commit_road_with_crossings(
@@ -474,10 +474,10 @@ impl RoadEditor {
             output.push(RoadEditorCommand::PreviewCrossing(crossing));
         }
         let sign_pos = snap.world_pos.add_vec3(Vec3::new(0.0, 10.0, 0.0));
-        let scale = 2.0;
+        let scale = 4.0;
         gizmo.text(
             format!("{:.1}m", estimated_length),
-            sign_pos.add_vec3(Vec3::new(0.0, -2.0, 0.0)),
+            sign_pos.add_vec3(Vec3::new(0.0, -4.0, 0.0)),
             scale,
             [0.43, 0.50, 0.53, 0.85],
             None,

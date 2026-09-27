@@ -7,7 +7,6 @@ use crate::renderer::props::Props;
 use crate::renderer::render_core::Renderer;
 use crate::simulation::Simulation;
 use crate::ui::action_parser::{compile_actions, run_action};
-use crate::ui::menu::Menu;
 use crate::ui::parser::Value;
 use crate::ui::ui_edit_manager::{
     ChangeColorCommand, ColorComponent, CreateAPCommand, CreateElementCommand, DeleteAPCommand,
@@ -34,9 +33,11 @@ use crate::world::world::World;
 use glam::Vec2;
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{HashMap, VecDeque};
+use std::io::Write;
 use std::str::FromStr;
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
+//use crate::world::sound::musictosfx::song_to_sfx_yaml;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum UiCommand {
@@ -725,11 +726,11 @@ impl CommandQueue {
                 let element_ctx = &ctx.element_ctx.clone();
                 let name = string_to_value(ctx, name);
                 let Some(name) = name.as_string() else {
-                    return CommandResult::Error("Name in inc_var() wasn't resolved to string, use 'str' or 'strexpr:' or do something else".to_string());
+                    return CommandResult::Error("Name in inc() wasn't resolved to string, use 'str' or 'strexpr:' or do something else".to_string());
                 };
                 let Some(amount) = string_to_value(ctx, amount).as_f64() else {
                     return CommandResult::Error(
-                        "Value in inc_var() wasn't resolved to f64".to_string(),
+                        "Value in inc() wasn't resolved to f64".to_string(),
                     );
                 };
                 if let Some(key) = get_setting_key(&name) {
@@ -1604,6 +1605,41 @@ fn call_rust(ctx: &mut CommandContext, function_name: &str, args: Vec<Value>) {
                 );
             }
         }
+        "stop_sounds" => {
+            ctx.world.sounds.clear_sfx_queue();
+        }
+        // "convert_song" => {
+        //     let path = args.get(0).and_then(|s| s.as_string());
+        //     let Some(path) = path else {
+        //         println!(
+        //             "[Sounds] Argument 0 of {function_name} must be a path: String, but it was: '{:?}'.",
+        //             args.get(0)
+        //         );
+        //         return;
+        //     };
+        //     let path = PathBuf::from(path);
+        //     let yaml = song_to_sfx_yaml(
+        //         path.as_path(),
+        //         None,
+        //         8
+        //     );
+        //     let (yaml, sfx) = match yaml {
+        //         Ok(good) => {good}
+        //         Err(err) => {
+        //             println!(
+        //                 "[Sounds] {function_name}: Couldn't convert song to yaml'{:?}': {:?}",
+        //                 path, err
+        //             ); return;
+        //         }
+        //     };
+        //     let path = data_dir(format!("Rusty Skylines Mod/sounds/{}.yaml", sanitize(sfx.name)));
+        //     if let Err(err) = std::fs::OpenOptions::new().write(true).create_new(true).open(path.as_path()).and_then(|mut file| file.write_all(yaml.as_bytes())) {
+        //         println!(
+        //             "[Sounds] {function_name}: Couldn't write to file '{:?}': '{:?}'",
+        //             path, err
+        //         );
+        //     }
+        // }
         // "place_building" => {
         //     let building_name = args.get(0).and_then(|s| s.as_string());
         //     let Some(building_name) = building_name else {
@@ -2556,10 +2592,11 @@ fn set_variable_or_property(ctx: &mut CommandContext, name: &str, value: Value) 
 
 #[test]
 fn test_send_properties_to_variables() {
+    use crate::ui::menu::Menu;
     use crate::ui::vertex::RuntimeLayer;
     use rand::RngExt;
     let with_as_element_percetage = 0.25;
-    let mut variables = Variables::new();
+    let variables = Variables::new();
     let mut menus = HashMap::new();
     let rect = UiButtonRect::default();
     let self_ref = ElementRef {

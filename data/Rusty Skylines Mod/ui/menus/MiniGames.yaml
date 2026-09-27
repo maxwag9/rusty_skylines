@@ -1,0 +1,142 @@
+name: MiniGames
+layers:
+  - name: main_menu_buttons
+    order: 2
+    elements:
+      - !Rect
+        id: Menu Background
+        x: 960
+        y: 540
+        w: 1920
+        h: 1080
+        rotation: 0.0
+        color:
+          - 0.01
+          - 0.01
+          - 0.01
+          - 0.01
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness: 0.00
+        fade: 0.0
+        blur: 5.5
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          touchable: false
+          editable: true
+      - !Rect
+        id: Buttons Background
+        x: 960
+        y: 550
+        w: 780
+        h: 600
+        rotation: 0.0
+        texture: "shader:shaders/fun!/test.wgsl"
+        color:
+          - 0.01
+          - 0.01
+          - 0.01
+          - 0.08
+        border_color:
+          - 2.0
+          - 1.0
+          - 1.0
+          - 1.0
+        roundness: 0.1
+        border_thickness: 3
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+      - !Advanced
+        name: to_main_menu_button
+        ap_name: button
+        ap_vars:
+          - "str:<- To Main Menu"
+          - "25"
+          - "str:on:r call(open_main_menus); call(rust:stop_sounds);"
+        x: 100
+        y: 50
+        scale: 1.0
+      - !Text
+        id: minigames_description_text
+        x: 960
+        y: 360
+        pt: 30.0
+        border_width: 4.0
+        resize_behaviour:
+          width: uniform
+          height: y
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.9
+        text: "Welcome to the Rusty Skylines Minigames! 
+         
+         
+         All these games were made using purely the UI system. 
+         
+         Enjoy!"
+        anchor: Center
+        misc:
+          touchable: false
+      - !Advanced
+        name: pingpong_button
+        ap_name: button
+        ap_vars:
+          - "str:Ping Pong!"
+          - "50"
+          - "str:on:r close_all_menus; open_menu(str:PingPong); set(str:ball.direction, 0.9); set(str:ball.speed, 3.0); 
+              set(str:ball.velocity.x, expr:cos({ball.direction})*2); set(str:ball.velocity.y, expr:sin({ball.direction})*2); 
+              set(str:paddle_speed, 30); set(str:show_world, false); set(str:ball.home_score, 0); set(str:ball.visitor_score, 0); call(rust:stop_sounds);"
+        x: 960
+        y: 640
+        scale: 1.0
+      - !Text
+        id: minigames_header
+        actions: [ ]
+        x: 960
+        y: 100
+        pt: 100.0
+        color:
+          - 0.2
+          - 0.56
+          - 0.2
+          - 1.0
+        text: MINI GAMES
+      - !Advanced
+        name: sound_button
+        ap_name: button
+        ap_vars:
+          - "str:Audio Jungle"
+          - "40"
+          - "str:on:r call(rust:str:play_sound, str:PixelQuestTheme)"
+        x: 960
+        y: 930
+        scale: 1.0
+#      - !Advanced
+#        name: convert_sound_button
+#        ap_name: button
+#        ap_vars:
+#          - "str:CONVERT"
+#          - "40"
+#          - "str:on:r call(rust:str:convert_song, str:/home/maxim/Music/Dopo Goto - The Songs From The Unknown Storage/Dopo Goto - The Songs From The Unknown Storage - 14 A Song To Restart.mp3); call(rust:str:play_sound, str:Dopo Goto - The Songs From The Unknown Storage - 14 A Song To Restart);"
+#        x: 960
+#        y: 990
+#        scale: 1.0

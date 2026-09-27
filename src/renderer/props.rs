@@ -1,5 +1,5 @@
 use crate::data::Settings;
-use crate::helpers::paths::shader_dir;
+use crate::helpers::modpack::ModManager;
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos};
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::shadows::{shadow_bias_for_cascade, shadow_pipeline_options};
@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::f32::consts::{PI, TAU};
 use std::mem;
-use std::path::PathBuf;
+use std::path::Path;
+use tracing::error;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use wgpu::{
     Buffer, BufferAddress, BufferDescriptor, BufferUsages, Device, Face, IndexFormat, Queue,
@@ -355,13 +356,13 @@ impl Props {
 
         SavedProps { instances }
     }
-    pub fn load_props(&mut self, saved: SavedProps) {
+    pub fn load_props(&mut self, saved: SavedProps, mod_manager: &ModManager) {
         self.clear();
 
         for prop in saved.instances {
             let key = &prop.archetype.to_lowercase();
             if !self.is_registered(key) {
-                if let Some(archetype) = make_archetype(key, &self.device) {
+                if let Some(archetype) = make_archetype(key, &self.device, mod_manager) {
                     self.register_archetype(archetype);
                 }
             }
@@ -508,9 +509,10 @@ impl Props {
         chunk_coord: ChunkCoord,
         new_instances: Vec<PropInstance>,
         archetypes: Vec<String>,
+        mod_manager: &ModManager,
     ) {
         for archetype in archetypes.into_iter() {
-            self.ensure_archetype(archetype);
+            self.ensure_archetype(archetype, mod_manager);
         }
 
         let prop_instances = &mut self.prop_instances;
@@ -680,13 +682,19 @@ impl Props {
         }
     }
 
-    pub fn place_props(&mut self, terrain: &Terrain, input: &mut Input, device: &Device) {
+    pub fn place_props(
+        &mut self,
+        terrain: &Terrain,
+        input: &mut Input,
+        device: &Device,
+        mod_manager: &ModManager,
+    ) {
         match &terrain.cursor.mode {
             CursorMode::Props => {
                 let name = &terrain.cursor.prop_name;
                 let name = &name.to_lowercase();
                 if !self.is_registered(name) {
-                    if let Some(archetype) = make_archetype(name, device) {
+                    if let Some(archetype) = make_archetype(name, device, mod_manager) {
                         self.register_archetype(archetype);
                     }
                 }
@@ -719,7 +727,8 @@ impl Props {
                                 variant: 0,
                                 generated: false,
                             };
-                            self.preview_prop_id = Some(self.place_prop(name, prop_instance));
+                            self.preview_prop_id =
+                                Some(self.place_prop(name, prop_instance, mod_manager));
                         }
                         if let Some(id) = self.preview_prop_id {
                             if let Some(prop) = self
@@ -755,8 +764,9 @@ impl Props {
         &mut self,
         archetype_name: impl Into<String>,
         mut prop_instance: PropInstance,
+        mod_manager: &ModManager,
     ) -> PropInstanceId {
-        let archetype_id = self.ensure_archetype(archetype_name);
+        let archetype_id = self.ensure_archetype(archetype_name, mod_manager);
         prop_instance.archetype_id = Some(archetype_id);
         self.add_instance(prop_instance)
     }
@@ -815,10 +825,14 @@ impl Props {
             }
         }
     }
-    pub fn ensure_archetype(&mut self, archetype_name: impl Into<String>) -> ArchetypeId {
+    pub fn ensure_archetype(
+        &mut self,
+        archetype_name: impl Into<String>,
+        mod_manager: &ModManager,
+    ) -> ArchetypeId {
         let key = &archetype_name.into().to_lowercase();
         if !self.is_registered(key) {
-            if let Some(archetype) = make_archetype(key, &self.device) {
+            if let Some(archetype) = make_archetype(key, &self.device, mod_manager) {
                 self.register_archetype(archetype);
             }
         }
@@ -829,7 +843,7 @@ impl Props {
         &mut self,
         render_manager: &mut RenderManager,
         pass: &mut RenderPass<'a>,
-        shader_path: PathBuf,
+        shader_path: &Path,
         opts: PipelineOptions,
         camera: &'a Camera,
         terrain: &'a Terrain,
@@ -887,7 +901,7 @@ impl Props {
                 //println!("{:?}", archetype.texture_keys);
                 render_manager.render(
                     &archetype.texture_keys,
-                    shader_path.as_path(),
+                    shader_path,
                     &opts,
                     &[&pipelines.buffers.camera],
                     pass,
@@ -911,6 +925,7 @@ impl Props {
         settings: &Settings,
         shadow_mat_buffer: &'a Buffer,
         cascade_idx: usize,
+        mod_manager: &ModManager,
     ) {
         let eye = camera.eye_world();
 
@@ -919,8 +934,10 @@ impl Props {
             pipelines.resources.csm_shadows.texels[cascade_idx],
             settings.reversed_depth_z,
         );
-
-        let shader = shader_dir().join("props_shadows.wgsl");
+        let Some(shader) = mod_manager.resource_path("shaders/props_shadows.wgsl") else {
+            error!("[Renderer] Missing shader 'shaders/props_shadows.wgsl'");
+            return;
+        };
         let opts = shadow_pipeline_options(
             settings,
             bias,
@@ -964,7 +981,7 @@ impl Props {
 
                 render_manager.render(
                     &archetype.texture_keys,
-                    shader.as_path(),
+                    shader,
                     &opts,
                     &[&pipelines.buffers.camera, shadow_mat_buffer],
                     pass,
@@ -1037,15 +1054,23 @@ fn select_lod(dist2: f64) -> u32 {
     }
 }
 
-fn make_archetype(key: &str, device: &Device) -> Option<Archetype> {
+fn make_archetype(key: &str, device: &Device, mod_manager: &ModManager) -> Option<Archetype> {
     match key.to_lowercase().as_str() {
-        "oak" | "oak_tree" => make_oak_tree(device),
+        "oak" | "oak_tree" => make_oak_tree(device, mod_manager),
         "pine" | "pine_tree" => make_pine_tree(device),
         _ => None,
     }
 }
 
-fn make_oak_tree(device: &Device) -> Option<Archetype> {
+fn make_oak_tree(device: &Device, mod_manager: &ModManager) -> Option<Archetype> {
+    let Some(leaves) = mod_manager.resource_path("shaders/textures/leaves.wgsl") else {
+        error!("[Props] Missing shader 'shaders/textures/leaves.wgsl'");
+        return None;
+    };
+    let Some(bark) = mod_manager.resource_path("shaders/textures/bark.wgsl") else {
+        error!("[Props] Missing shader 'shaders/textures/bark.wgsl'");
+        return None;
+    };
     Some(Archetype {
         name: "oak".to_string(),
         lod0: Some(make_oak_lod(device, 0)),
@@ -1054,7 +1079,7 @@ fn make_oak_tree(device: &Device) -> Option<Archetype> {
         lod3: Some(make_oak_lod(device, 3)),
         texture_keys: [
             TextureKey::new(
-                "leaves",
+                leaves,
                 TextureParams {
                     color_primary: [0.22, 0.40, 0.12, 1.0],
                     color_secondary: [0.30, 0.50, 0.18, 1.0],
@@ -1071,7 +1096,7 @@ fn make_oak_tree(device: &Device) -> Option<Archetype> {
                 MipmapMode::AlphaPreserving,
             ),
             TextureKey::new(
-                "bark",
+                bark,
                 TextureParams {
                     color_primary: [0.36, 0.26, 0.18, 1.0],
                     color_secondary: [0.25, 0.18, 0.12, 1.0],

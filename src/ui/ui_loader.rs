@@ -60,13 +60,13 @@ fn fnv1a_64(bytes: &[u8]) -> u64 {
 }
 
 /// Load from legacy single-file format
-pub fn load_legacy_gui_layout(path: &PathBuf, mode: &BendMode) -> Vec<MenuYaml> {
+pub fn load_legacy_gui_layout(path: &Path, mode: &BendMode) -> Vec<MenuYaml> {
     if !path.exists() {
         println!("Legacy file not found: {}", path.display());
         return vec![];
     }
 
-    match load_gui_from_file_legacy(path.clone(), mode) {
+    match load_gui_from_file_legacy(path, mode) {
         Ok(layout) => {
             println!("Loaded legacy layout with {} menus", layout.menus.len());
             layout.menus
@@ -97,100 +97,55 @@ pub fn load_gui_from_file_legacy<P: AsRef<Path>>(
     }
 }
 pub fn load_menus_from_directory(
-    menus_dir: &PathBuf,
+    menu_paths: Vec<PathBuf>,
     mode: &BendMode,
 ) -> Result<Vec<MenuYaml>, Box<dyn Error>> {
     let mut menus = Vec::new();
 
-    if !menus_dir.is_dir() {
-        println!("Menus directory not found: {}", menus_dir.display());
-        return Ok(menus);
-    }
-
-    for entry in fs::read_dir(menus_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        let is_yaml = path
-            .extension()
-            .map_or(false, |e| e == "yaml" || e == "yml" || e == "Yaml");
+    for path in menu_paths {
         if path.display().to_string().contains("_global_actions") {
             continue;
         }
-        if is_yaml && path.is_file() {
-            match load_menu_from_file(&path, mode) {
-                Ok(menu) => {
-                    //println!("Loaded menu: {}", menu.name);
-                    menus.push(menu);
-                }
-                Err(e) => {
-                    eprintln!("Failed to load {}: {}", path.display(), e);
-                }
+        match load_menu_from_file(&path, mode) {
+            Ok(menu) => {
+                //println!("Loaded menu: {}", menu.name);
+                menus.push(menu);
+            }
+            Err(e) => {
+                eprintln!("[UI] Failed to load {}: {}", path.display(), e);
             }
         }
     }
 
-    println!(
-        "📂 Loaded {} menus from {}",
-        menus.len(),
-        menus_dir.display()
-    );
+    println!("[UI] Loaded {} menus", menus.len());
     Ok(menus)
 }
 pub fn load_advanced_primitives_from_directory(
-    ap_dir: &PathBuf,
+    ap_paths: Vec<PathBuf>,
     mode: &BendMode,
 ) -> Result<Vec<UiLayerYaml>, Box<dyn Error>> {
     let mut aps = Vec::new();
 
-    if !ap_dir.is_dir() {
-        println!("Menus directory not found: {}", ap_dir.display());
-        return Ok(aps);
-    }
-
-    for entry in fs::read_dir(ap_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        let is_yaml = path
-            .extension()
-            .map_or(false, |e| e == "yaml" || e == "yml" || e == "Yaml");
-
-        if is_yaml && path.is_file() {
-            match load_layer_from_file(&path, mode) {
-                Ok(ap) => {
-                    aps.push(ap);
-                }
-                Err(e) => {
-                    eprintln!("Failed to load {}: {}", path.display(), e);
-                }
+    for path in ap_paths {
+        match load_layer_from_file(&path, mode) {
+            Ok(ap) => {
+                aps.push(ap);
+            }
+            Err(e) => {
+                eprintln!("Failed to load {}: {}", path.display(), e);
             }
         }
     }
 
-    println!(
-        "📂 Loaded {} Advanced Primitives from {}",
-        aps.len(),
-        ap_dir.display()
-    );
+    println!("[UI] Loaded {} Advanced Primitives", aps.len());
     Ok(aps)
 }
 pub fn load_global_actions(
-    ga_dir: &PathBuf,
+    path: &Path,
     mode: &BendMode,
 ) -> Result<GlobalActionsYaml, Box<dyn Error>> {
-    if !ga_dir.is_dir() {
-        println!("Global Actions directory not found: {}", ga_dir.display());
-        return Err("Global actions directory not found".into());
-    }
-    let ga_path = &ga_dir.join("_global_actions.yaml");
-
-    if !ga_path.is_file() {
-        return Err("_global_actions.yaml not found".into());
-    }
-
-    load_global_actions_from_file(&ga_path, mode).map_err(|e| {
-        eprintln!("Failed to load {}: {}", ga_path.display(), e);
+    load_global_actions_from_file(path, mode).map_err(|e| {
+        eprintln!("Failed to load {}: {}", path.display(), e);
         "Failed to load global actions".into()
     })
 }
@@ -201,7 +156,7 @@ pub fn load_menu_from_file(path: &PathBuf, mode: &BendMode) -> Result<MenuYaml, 
         BendMode::Strict | BendMode::Unknown => {
             let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("yaml");
             let parsed: MenuYaml = match extension {
-                "Yaml" => serde_yaml::from_slice(&bytes)?,
+                "yaml" => serde_yaml::from_slice(&bytes)?,
                 _ => serde_yaml::from_slice(&bytes)?,
             };
             Ok(parsed)
@@ -215,7 +170,7 @@ pub fn load_menu_from_file(path: &PathBuf, mode: &BendMode) -> Result<MenuYaml, 
     }
 }
 pub fn load_global_actions_from_file(
-    path: &PathBuf,
+    path: &Path,
     mode: &BendMode,
 ) -> Result<GlobalActionsYaml, Box<dyn Error>> {
     let bytes = fs::read(path)?;
@@ -224,7 +179,7 @@ pub fn load_global_actions_from_file(
         BendMode::Strict | BendMode::Unknown => {
             let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("yaml");
             let parsed: GlobalActionsYaml = match extension {
-                "Yaml" => serde_yaml::from_slice(&bytes)?,
+                "yaml" => serde_yaml::from_slice(&bytes)?,
                 _ => serde_yaml::from_slice(&bytes)?,
             };
             Ok(parsed)
@@ -386,15 +341,8 @@ fn synth_text(rng: &mut SimpleRng) -> UiButtonTextYaml {
         x: rng.next_i32_range(0, 1920) as i16,
         y: rng.next_i32_range(0, 1080) as i16,
         pt: rng.next_f32_range(0.1, 50.1),
-        border_width: rng.next_f32_range(0.0, 30.8),
         resize_behaviour: Default::default(), // TODO: Random resize behaviour is fun!!
         color: [
-            rng.next_f32_range(0.0, 2.0),
-            rng.next_f32_range(0.0, 2.0),
-            rng.next_f32_range(0.0, 2.0),
-            rng.next_f32_range(0.0, 0.9),
-        ],
-        border_color: [
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
@@ -408,6 +356,7 @@ fn synth_text(rng: &mut SimpleRng) -> UiButtonTextYaml {
         },
         input_box: rng.next_bool(),
         anchor: Anchor::default(),
+        decorations: vec![], // TODO: FANCY RANDOM DECO!!
     }
 }
 

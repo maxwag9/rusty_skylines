@@ -1,3 +1,4 @@
+use crate::helpers::modpack::ModManager;
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::props::{PropInstance, PropInstanceId, Props};
@@ -13,9 +14,11 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::{Deref, DerefMut};
+use tracing::error;
 use wgpu::{VertexAttribute, VertexFormat};
 use wgpu_render_manager::generator::{MipmapMode, TextureKey, TextureParams};
 use wgpu_render_manager::renderer::RenderManager;
+
 #[derive(Debug, Clone, Default)]
 #[revisioned(revision = 1)]
 pub struct Color(pub [f32; 4]);
@@ -75,6 +78,7 @@ impl BuildingMeshManager {
         &self,
         mesh: &mut BuildingMeshBuilder,
         render_manager: &mut RenderManager,
+        mod_manager: &ModManager,
         terrain: &mut Terrain,
         buildings: &mut Buildings,
         flatten_terrain: bool,
@@ -113,9 +117,13 @@ impl BuildingMeshManager {
         let mut prop_instance_ids = vec![];
         let entrance = &lot.entrance;
 
-        let wall_key = level.wall_material.texture_key();
+        let wall_key = level.wall_material.texture_key(mod_manager);
+        let Some(wood_slab) = mod_manager.resource_path("shaders/textures/wood_slab.wgsl") else {
+            error!("[Buildings] Missing shader 'shaders/textures/wood_slab.wgsl'");
+            return;
+        };
         let roof_side_key = TextureKey::new(
-            "wood_slab",
+            wood_slab,
             TextureParams::default()
                 .with_primary_color([0.62, 0.42, 0.22, 1.0])
                 .with_secondary_color([0.30, 0.18, 0.10, 1.0])
@@ -124,11 +132,14 @@ impl BuildingMeshManager {
             512,
             MipmapMode::Generate,
         );
-        let roof_key = level.roof_material.texture_key();
-        let window_key = level.miscellaneous.window_material_accent.texture_key();
-        let driveway_key = level.driveway_material.texture_key();
+        let roof_key = level.roof_material.texture_key(mod_manager);
+        let window_key = level
+            .miscellaneous
+            .window_material_accent
+            .texture_key(mod_manager);
+        let driveway_key = level.driveway_material.texture_key(mod_manager);
 
-        let mut grass_key = terrain_material_keys().remove(0);
+        let mut grass_key = terrain_material_keys(mod_manager).remove(0);
         grass_key.resolution = 512;
         grass_key.params.scale = 20.0;
 
@@ -207,6 +218,7 @@ impl BuildingMeshManager {
                                 variant: 0,
                                 generated: false,
                             },
+                            mod_manager,
                         );
                         prop_instance_ids.push(prop_instance_id);
                     }
@@ -325,7 +337,7 @@ impl BuildingMeshManager {
                     forward,
                     component,
                 };
-                prop_instance_ids.extend(accessory.place(&ctx, props));
+                prop_instance_ids.extend(accessory.place(&ctx, props, mod_manager));
             }
         }
 
@@ -365,6 +377,7 @@ impl BuildingMeshManager {
     pub fn build_mesh_for_chunk(
         &mut self,
         render_manager: &mut RenderManager,
+        mod_manager: &ModManager,
         terrain: &mut Terrain,
         props: &mut Props,
         chunk_coord: ChunkCoord,
@@ -418,6 +431,7 @@ impl BuildingMeshManager {
             self.build_mesh_for_building(
                 &mut mesh,
                 render_manager,
+                mod_manager,
                 terrain,
                 buildings,
                 true,
@@ -438,6 +452,7 @@ impl BuildingMeshManager {
     pub fn update_chunk_mesh(
         &mut self,
         render_manager: &mut RenderManager,
+        mod_manager: &ModManager,
         terrain: &mut Terrain,
         props: &mut Props,
         chunk_coord: ChunkCoord,
@@ -448,6 +463,7 @@ impl BuildingMeshManager {
     ) -> &BuildingChunkMesh {
         let mesh = self.build_mesh_for_chunk(
             render_manager,
+            mod_manager,
             terrain,
             props,
             chunk_coord,
@@ -643,118 +659,184 @@ fn compute_building_chunk_topo_version(chunk_coord: ChunkCoord, buildings: &Buil
 }
 
 pub trait TexturedMaterial {
-    fn texture_key(&self) -> TextureKey;
+    fn texture_key(&self, mod_manager: &ModManager) -> TextureKey;
 }
 
 impl TexturedMaterial for WallMaterial {
-    fn texture_key(&self) -> TextureKey {
+    fn texture_key(&self, mod_manager: &ModManager) -> TextureKey {
         match self {
-            WallMaterial::Paint(color) => TextureKey::new(
-                "paint",
-                TextureParams::default()
-                    .with_primary_color(**color)
-                    .with_secondary_color([0.0, 0.0, 0.0, 1.0]),
-                512,
-                MipmapMode::Generate,
-            ),
-            WallMaterial::Stucco(color) => TextureKey::new(
-                "stucco",
-                TextureParams::default()
-                    .with_primary_color(**color)
-                    .with_roughness(0.8)
-                    .with_scale(2.0),
-                512,
-                MipmapMode::Generate,
-            ),
-            WallMaterial::WoodSiding(color) => TextureKey::new(
-                "wood_siding",
-                TextureParams::default()
-                    .with_primary_color(**color)
-                    .with_secondary_color([0.25, 0.16, 0.08, 1.0])
-                    .with_scale(1.5),
-                512,
-                MipmapMode::Generate,
-            ),
-            WallMaterial::Glass(color) => TextureKey::new(
-                "glass",
-                TextureParams::default()
-                    .with_primary_color(**color)
-                    .with_roughness(0.05),
-                512,
-                MipmapMode::Generate,
-            ),
+            WallMaterial::Paint(color) => {
+                let Some(path) = mod_manager.shader_path("textures/paint.wgsl") else {
+                    return TextureKey::notex();
+                };
+
+                TextureKey::new(
+                    path.to_path_buf(),
+                    TextureParams::default()
+                        .with_primary_color(**color)
+                        .with_secondary_color([0.0, 0.0, 0.0, 1.0]),
+                    512,
+                    MipmapMode::Generate,
+                )
+            }
+            WallMaterial::Stucco(color) => {
+                let Some(path) = mod_manager.shader_path("textures/stucco.wgsl") else {
+                    return TextureKey::notex();
+                };
+
+                TextureKey::new(
+                    path.to_path_buf(),
+                    TextureParams::default()
+                        .with_primary_color(**color)
+                        .with_roughness(0.8)
+                        .with_scale(2.0),
+                    512,
+                    MipmapMode::Generate,
+                )
+            }
+            WallMaterial::WoodSiding(color) => {
+                let Some(path) = mod_manager.shader_path("textures/wood_siding.wgsl") else {
+                    return TextureKey::notex();
+                };
+
+                TextureKey::new(
+                    path.to_path_buf(),
+                    TextureParams::default()
+                        .with_primary_color(**color)
+                        .with_secondary_color([0.25, 0.16, 0.08, 1.0])
+                        .with_scale(1.5),
+                    512,
+                    MipmapMode::Generate,
+                )
+            }
+            WallMaterial::Glass(color) => {
+                let Some(path) = mod_manager.shader_path("textures/glass.wgsl") else {
+                    return TextureKey::notex();
+                };
+
+                TextureKey::new(
+                    path.to_path_buf(),
+                    TextureParams::default()
+                        .with_primary_color(**color)
+                        .with_roughness(0.05),
+                    512,
+                    MipmapMode::Generate,
+                )
+            }
             WallMaterial::Custom(key) => key.clone(),
         }
     }
 }
 
 impl TexturedMaterial for RoofMaterial {
-    fn texture_key(&self) -> TextureKey {
+    fn texture_key(&self, mod_manager: &ModManager) -> TextureKey {
         match self {
-            RoofMaterial::Shingles => TextureKey::new(
-                "shingles",
-                TextureParams::default().with_primary_color([0.4, 0.15, 0.05, 1.0]),
-                512,
-                MipmapMode::Generate,
-            ),
-            RoofMaterial::Metal => TextureKey::new(
-                "metal_roof",
-                TextureParams::default().with_primary_color([0.2, 0.2, 0.2, 1.0]),
-                512,
-                MipmapMode::Generate,
-            ),
-            RoofMaterial::Tile => TextureKey::new(
-                "roof_tile",
-                TextureParams::default()
-                    .with_primary_color([0.55, 0.2, 0.12, 1.0])
-                    .with_scale(1.2),
-                512,
-                MipmapMode::Generate,
-            ),
-            RoofMaterial::Slate => TextureKey::new(
-                "slate",
-                TextureParams::default()
-                    .with_primary_color([0.22, 0.24, 0.27, 1.0])
-                    .with_roughness(0.3),
-                512,
-                MipmapMode::Generate,
-            ),
+            RoofMaterial::Shingles => {
+                let Some(path) = mod_manager.shader_path("textures/shingles.wgsl") else {
+                    return TextureKey::notex();
+                };
+
+                TextureKey::new(
+                    path.to_path_buf(),
+                    TextureParams::default().with_primary_color([0.4, 0.15, 0.05, 1.0]),
+                    512,
+                    MipmapMode::Generate,
+                )
+            }
+            RoofMaterial::Metal => {
+                let Some(path) = mod_manager.shader_path("textures/metal_roof.wgsl") else {
+                    return TextureKey::notex();
+                };
+
+                TextureKey::new(
+                    path.to_path_buf(),
+                    TextureParams::default().with_primary_color([0.2, 0.2, 0.2, 1.0]),
+                    512,
+                    MipmapMode::Generate,
+                )
+            }
+            RoofMaterial::Tile => {
+                let Some(path) = mod_manager.shader_path("textures/roof_tile.wgsl") else {
+                    return TextureKey::notex();
+                };
+
+                TextureKey::new(
+                    path.to_path_buf(),
+                    TextureParams::default()
+                        .with_primary_color([0.55, 0.2, 0.12, 1.0])
+                        .with_scale(1.2),
+                    512,
+                    MipmapMode::Generate,
+                )
+            }
+            RoofMaterial::Slate => {
+                let Some(path) = mod_manager.shader_path("textures/slate.wgsl") else {
+                    return TextureKey::notex();
+                };
+
+                TextureKey::new(
+                    path.to_path_buf(),
+                    TextureParams::default()
+                        .with_primary_color([0.22, 0.24, 0.27, 1.0])
+                        .with_roughness(0.3),
+                    512,
+                    MipmapMode::Generate,
+                )
+            }
             RoofMaterial::Custom(key) => key.clone(),
         }
     }
 }
 
 impl TexturedMaterial for DrivewayMaterial {
-    fn texture_key(&self) -> TextureKey {
+    fn texture_key(&self, mod_manager: &ModManager) -> TextureKey {
         match self {
-            DrivewayMaterial::Bricks => TextureKey::new(
-                "driveway_bricks",
-                TextureParams::default()
-                    .with_primary_color([0.18, 0.18, 0.22, 1.0])
-                    .with_secondary_color([0.01, 0.01, 0.01, 1.0])
-                    .with_roughness(0.0)
-                    .with_scale(5.0),
-                512,
-                MipmapMode::Generate,
-            ),
-            DrivewayMaterial::Concrete => TextureKey::new(
-                "concrete",
-                TextureParams::default()
-                    .with_primary_color([0.6, 0.6, 0.58, 1.0])
-                    .with_roughness(0.6)
-                    .with_scale(3.0),
-                512,
-                MipmapMode::Generate,
-            ),
-            DrivewayMaterial::Gravel => TextureKey::new(
-                "gravel",
-                TextureParams::default()
-                    .with_primary_color([0.45, 0.42, 0.38, 1.0])
-                    .with_roughness(0.9)
-                    .with_scale(8.0),
-                512,
-                MipmapMode::Generate,
-            ),
+            DrivewayMaterial::Bricks => {
+                let Some(path) = mod_manager.shader_path("textures/driveway_bricks.wgsl") else {
+                    return TextureKey::notex();
+                };
+
+                TextureKey::new(
+                    path.to_path_buf(),
+                    TextureParams::default()
+                        .with_primary_color([0.18, 0.18, 0.22, 1.0])
+                        .with_secondary_color([0.01, 0.01, 0.01, 1.0])
+                        .with_roughness(0.0)
+                        .with_scale(5.0),
+                    512,
+                    MipmapMode::Generate,
+                )
+            }
+            DrivewayMaterial::Concrete => {
+                let Some(path) = mod_manager.shader_path("textures/concrete.wgsl") else {
+                    return TextureKey::notex();
+                };
+
+                TextureKey::new(
+                    path.to_path_buf(),
+                    TextureParams::default()
+                        .with_primary_color([0.6, 0.6, 0.58, 1.0])
+                        .with_roughness(0.6)
+                        .with_scale(3.0),
+                    512,
+                    MipmapMode::Generate,
+                )
+            }
+            DrivewayMaterial::Gravel => {
+                let Some(path) = mod_manager.shader_path("textures/gravel.wgsl") else {
+                    return TextureKey::notex();
+                };
+
+                TextureKey::new(
+                    path.to_path_buf(),
+                    TextureParams::default()
+                        .with_primary_color([0.45, 0.42, 0.38, 1.0])
+                        .with_roughness(0.9)
+                        .with_scale(8.0),
+                    512,
+                    MipmapMode::Generate,
+                )
+            }
             DrivewayMaterial::Custom(key) => key.clone(),
         }
     }
@@ -2028,7 +2110,12 @@ pub struct RoofAccessoryContext<'a> {
 }
 
 pub trait RoofAccessory {
-    fn place(&self, ctx: &RoofAccessoryContext, props: &mut Props) -> Vec<PropInstanceId>;
+    fn place(
+        &self,
+        ctx: &RoofAccessoryContext,
+        props: &mut Props,
+        mod_manager: &ModManager,
+    ) -> Vec<PropInstanceId>;
 }
 
 pub struct SolarPanelAccessory {
@@ -2046,7 +2133,12 @@ impl Default for SolarPanelAccessory {
 }
 
 impl RoofAccessory for SolarPanelAccessory {
-    fn place(&self, ctx: &RoofAccessoryContext, props: &mut Props) -> Vec<PropInstanceId> {
+    fn place(
+        &self,
+        ctx: &RoofAccessoryContext,
+        props: &mut Props,
+        mod_manager: &ModManager,
+    ) -> Vec<PropInstanceId> {
         let mut ids = Vec::new();
         if !matches!(
             ctx.component.sampler,
@@ -2088,6 +2180,7 @@ impl RoofAccessory for SolarPanelAccessory {
                             variant: 0,
                             generated: false,
                         },
+                        mod_manager,
                     );
                     ids.push(id);
                 }
@@ -2111,7 +2204,12 @@ impl Default for AntennaAccessory {
 }
 
 impl RoofAccessory for AntennaAccessory {
-    fn place(&self, ctx: &RoofAccessoryContext, props: &mut Props) -> Vec<PropInstanceId> {
+    fn place(
+        &self,
+        ctx: &RoofAccessoryContext,
+        props: &mut Props,
+        mod_manager: &ModManager,
+    ) -> Vec<PropInstanceId> {
         let gx = (ctx.component.min_x + ctx.component.max_x) * 0.5;
         let gz = (ctx.component.min_z + ctx.component.max_z) * 0.5;
         let height = ctx.component.sampler.height_at(gx, gz) + self.lift;
@@ -2133,6 +2231,7 @@ impl RoofAccessory for AntennaAccessory {
                 variant: 0,
                 generated: false,
             },
+            mod_manager,
         );
 
         vec![id]

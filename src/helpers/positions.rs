@@ -1015,6 +1015,157 @@ impl WorldPos {
 
         min_dist2
     }
+
+    pub fn offset_polyline(points: &[WorldPos], offset: f32) -> Vec<WorldPos> {
+        if points.len() < 2 || offset.abs() <= f32::EPSILON {
+            return points.to_vec();
+        }
+
+        let origin = points[0];
+        let offset = offset as f64;
+
+        let positions: Vec<(f64, f64)> = points
+            .iter()
+            .map(|&point| (origin.dx(point), origin.dz(point)))
+            .collect();
+
+        let mut directions = Vec::with_capacity(positions.len() - 1);
+        let mut normals = Vec::with_capacity(positions.len() - 1);
+
+        for i in 0..positions.len() - 1 {
+            let dx = positions[i + 1].0 - positions[i].0;
+            let dz = positions[i + 1].1 - positions[i].1;
+            let len = (dx * dx + dz * dz).sqrt();
+
+            if len <= f64::EPSILON {
+                directions.push((0.0, 0.0));
+                normals.push((0.0, 0.0));
+                continue;
+            }
+
+            let dx = dx / len;
+            let dz = dz / len;
+
+            directions.push((dx, dz));
+            normals.push((dz, -dx));
+        }
+
+        let mut result = Vec::with_capacity(points.len());
+
+        let first_normal = normals
+            .iter()
+            .copied()
+            .find(|(x, z)| x.abs() > f64::EPSILON || z.abs() > f64::EPSILON)
+            .unwrap_or((0.0, 0.0));
+
+        result.push(origin.add_vec3(Vec3::new(
+            (first_normal.0 * offset) as f32,
+            0.0,
+            (first_normal.1 * offset) as f32,
+        )));
+
+        for i in 1..positions.len() - 1 {
+            let (dx0, dz0) = directions[i - 1];
+            let (dx1, dz1) = directions[i];
+
+            if (dx0.abs() <= f64::EPSILON && dz0.abs() <= f64::EPSILON)
+                && (dx1.abs() <= f64::EPSILON && dz1.abs() <= f64::EPSILON)
+            {
+                result.push(points[i]);
+                continue;
+            }
+
+            let n0 = if dx0.abs() <= f64::EPSILON && dz0.abs() <= f64::EPSILON {
+                normals[i]
+            } else {
+                normals[i - 1]
+            };
+
+            let n1 = if dx1.abs() <= f64::EPSILON && dz1.abs() <= f64::EPSILON {
+                n0
+            } else {
+                normals[i]
+            };
+
+            let p = (
+                positions[i].0 + n0.0 * offset,
+                positions[i].1 + n0.1 * offset,
+            );
+
+            let q = (
+                positions[i].0 + n1.0 * offset,
+                positions[i].1 + n1.1 * offset,
+            );
+
+            let cross = dx0 * dz1 - dz0 * dx1;
+
+            let (x, z) = if cross.abs() > 1e-10 {
+                let qpx = q.0 - p.0;
+                let qpz = q.1 - p.1;
+                let t = (qpx * dz1 - qpz * dx1) / cross;
+
+                let ix = p.0 + dx0 * t;
+                let iz = p.1 + dz0 * t;
+
+                let mx = ix - positions[i].0;
+                let mz = iz - positions[i].1;
+                let miter_length = (mx * mx + mz * mz).sqrt();
+
+                if miter_length <= offset.abs() * 4.0 {
+                    (ix, iz)
+                } else {
+                    let nx = n0.0 + n1.0;
+                    let nz = n0.1 + n1.1;
+                    let len = (nx * nx + nz * nz).sqrt();
+
+                    if len > 1e-10 {
+                        (
+                            positions[i].0 + nx / len * offset,
+                            positions[i].1 + nz / len * offset,
+                        )
+                    } else {
+                        p
+                    }
+                }
+            } else {
+                let nx = n0.0 + n1.0;
+                let nz = n0.1 + n1.1;
+                let len = (nx * nx + nz * nz).sqrt();
+
+                if len > 1e-10 {
+                    (
+                        positions[i].0 + nx / len * offset,
+                        positions[i].1 + nz / len * offset,
+                    )
+                } else {
+                    p
+                }
+            };
+
+            result.push(origin.add_vec3(Vec3::new(
+                (x) as f32,
+                points[i].local.y - origin.local.y,
+                (z) as f32,
+            )));
+        }
+
+        let last_normal = normals
+            .iter()
+            .rev()
+            .copied()
+            .find(|(x, z)| x.abs() > f64::EPSILON || z.abs() > f64::EPSILON)
+            .unwrap_or((0.0, 0.0));
+
+        let last = *points.last().unwrap();
+
+        result.push(origin.add_vec3(Vec3::new(
+            (positions[positions.len() - 1].0 + last_normal.0 * offset - positions[0].0) as f32,
+            last.local.y - origin.local.y,
+            (positions[positions.len() - 1].1 + last_normal.1 * offset - positions[0].1) as f32,
+        )));
+
+        result
+    }
 }
 impl Default for WorldPos {
     fn default() -> Self {

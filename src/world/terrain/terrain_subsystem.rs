@@ -1,5 +1,6 @@
 use crate::commands::Command;
 use crate::data::{LodCenterType, Settings};
+use crate::helpers::modpack::ModManager;
 use crate::helpers::mouse_ray::*;
 use crate::helpers::positions::*;
 use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
@@ -480,6 +481,7 @@ impl Terrain {
         roads: &mut Roads,
         props: &mut Props,
         variables: &Variables,
+        mod_manager: &ModManager,
     ) {
         let t_frame = Instant::now();
 
@@ -495,7 +497,7 @@ impl Terrain {
         let frame = self.frame_state(settings, camera, aspect);
 
         let t0 = Instant::now();
-        self.drain_finished_meshes(props);
+        self.drain_finished_meshes(props, mod_manager);
         self.frame_timings.drain_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
@@ -621,7 +623,7 @@ impl Terrain {
         }
     }
 
-    pub fn drain_finished_meshes(&mut self, props: &mut Props) {
+    pub fn drain_finished_meshes(&mut self, props: &mut Props, mod_manager: &ModManager) {
         let mut recv_ms = 0.0;
         let mut rebuild_ms = 0.0;
         let mut gpu_ms = 0.0;
@@ -706,7 +708,12 @@ impl Terrain {
 
             insert_ms += t0.elapsed().as_secs_f32() * 1000.0;
 
-            props.replace_generated_instances(coord, cpu.tree_placements, cpu.archetypes);
+            props.replace_generated_instances(
+                coord,
+                cpu.tree_placements,
+                cpu.archetypes,
+                mod_manager,
+            );
         }
 
         self.frame_timings.drain_recv_ms = recv_ms;

@@ -3,7 +3,7 @@
 //! Uses Command pattern for all undoable operations.
 
 use crate::data::Settings;
-use crate::helpers::paths::data_dir;
+use crate::helpers::modpack::ModManager;
 use crate::renderer::render_core::Renderer;
 use crate::resources::{CommandQueues, Time};
 use crate::simulation::Simulation;
@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
+use tracing::error;
 use wgpu::{Device, Queue};
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
@@ -119,7 +120,7 @@ impl GlobalActions {
 }
 
 impl Ui {
-    pub fn new(settings: &Settings, variables: Variables, window_size: PhysicalSize<f32>, device: &Device, queue: &Queue) -> Self {
+    pub fn new(settings: &Settings, variables: Variables, window_size: PhysicalSize<f32>, device: &Device, queue: &Queue, mod_manager: &ModManager) -> Self {
 
         //println!("Global Actions loaded: {:?}", global_actions);
         let mut loader = Self {
@@ -132,32 +133,35 @@ impl Ui {
             ui_edit_manager: UiEditManager::new(),
             drag_start_state: None,
             element_clipboard: None,
-            action_events: vec![],
+            action_events: vec![]
         };
 
-        loader.reload_ui(settings, window_size, device, queue);
+        loader.reload_ui(settings, window_size, device, queue, mod_manager);
         loader
     }
-    pub fn reload_ui(&mut self, settings: &Settings, window_size: PhysicalSize<f32>, device: &Device, queue: &Queue) {
+    pub fn reload_ui(&mut self, settings: &Settings, window_size: PhysicalSize<f32>, device: &Device, queue: &Queue, mod_manager: &ModManager) {
         self.menus = HashMap::new();
-        let menus_dir = data_dir("ui_data/menus");
-        let ap_dir = data_dir("ui_data/menus/advanced_primitives");
-        let legacy_path = data_dir("ui_data/gui_layout.yaml");
+        let menu_paths = mod_manager.menu_paths();
+        let ap_paths = mod_manager.advanced_primitive_paths();
         let bend_mode = &settings.bend_mode;
-        let menu_files: Vec<MenuYaml> = load_menus_from_directory(&menus_dir, bend_mode).ok()
-            .filter(|menus| !menus.is_empty())
+        let menu_files: Vec<MenuYaml> = load_menus_from_directory(menu_paths, bend_mode).ok().filter(|menus| !menus.is_empty())
             .unwrap_or_else(|| {
-                println!("No menus in directory, trying legacy file...");
-                load_legacy_gui_layout(&legacy_path, bend_mode)
+                println!("[UI] No menus in directory, trying legacy file...");
+                if let Some(legacy_path) = mod_manager.resource_path("ui/gui_layout.yaml") {
+                    load_legacy_gui_layout(legacy_path, bend_mode)
+                } else { vec![] }
             });
-        self.aps = load_advanced_primitives_from_directory(&ap_dir, bend_mode).ok().filter(|ap| !ap.is_empty())
+        self.aps = load_advanced_primitives_from_directory(ap_paths, bend_mode).ok().filter(|ap| !ap.is_empty())
                 .unwrap_or_else(|| {
-                    println!("No advanced primitives in {:?}", ap_dir);
+                    println!("[UI] No advanced primitives in");
                     Vec::new()
                 }).into_iter()
                 .map(|l| (l.name.clone(), l)) // This IS the AP name, not ID!
                 .collect();
-        self.global_actions = GlobalActions::from_yaml(load_global_actions(&menus_dir, bend_mode).ok().unwrap_or_default());
+        if let Some(global_actions_path) = mod_manager.resource_path("ui/menus/_global_actions.yaml") {
+            self.global_actions = GlobalActions::from_yaml(load_global_actions(global_actions_path, bend_mode).ok().unwrap_or_default());
+        } else { error!("[UI] No global actions in '.../ui/menus/_global_actions.yaml'"); }
+
         let mut advanced_primitive_refs: HashMap<String, Vec<(AdvancedPrimitive, u32)>> =
             HashMap::new(); // menu name, ap.
         // Load menus
@@ -168,11 +172,11 @@ impl Ui {
                 // UiLayerYaml
                 let elements: Vec<UiElement> = l.elements.unwrap_or_default().into_iter()
                     .flat_map(|t| match t.advanced_primitive() {
-                        None => UiElement::from_yaml(t, window_size, device, queue),
+                        None => UiElement::from_yaml(t, window_size, device, queue, mod_manager),
                         Some(ap) => {
                             advanced_primitive_refs.entry(menu_yaml.name.clone()).or_default().push((ap.clone(), l.order));
 
-                            UiElement::from_yaml(t, window_size, device, queue)
+                            UiElement::from_yaml(t, window_size, device, queue, mod_manager)
                         }
                     }).collect();
 
@@ -209,7 +213,7 @@ impl Ui {
                 continue;
             };
             for (ap, order) in aps {
-                let layer = ap.to_layer(settings, &self.variables, &self.aps, order + 1, window_size, device, queue);
+                let layer = ap.to_layer(settings, &self.variables, &self.aps, order + 1, window_size, device, queue, mod_manager);
 
                 menu.layers.push(layer);
             }
@@ -250,7 +254,7 @@ impl Ui {
         self.global_actions.element_compiled_actions = compile_actions(&self.menus, None, self.global_actions.element_string_actions.clone());
         self.global_actions.global_compiled_actions = compile_actions(&self.menus, None, self.global_actions.global_string_actions.clone());
         self.touch_manager.global_events.push(GlobalEvent::StartUp);
-        println!("Reloaded UI");
+        println!("[UI] Reloaded UI");
     }
     pub fn resize(&mut self, old_size: PhysicalSize<f32>, new_size: PhysicalSize<f32>) {
         self.menus.values_mut()
@@ -274,7 +278,7 @@ impl Ui {
         }
         self.touch_manager.events.values_mut().for_each(|events| { events.clear() });
         if world.input.action_repeat("Reload UI") {
-            self.reload_ui(settings, window_size, &renderer.device, &renderer.queue);
+            self.reload_ui(settings, window_size, &renderer.device, &renderer.queue, &game_state.mod_manager);
         }
         self.touch_manager.config.snap_enabled = world.input.action_down("UI Snap Modifier");
 

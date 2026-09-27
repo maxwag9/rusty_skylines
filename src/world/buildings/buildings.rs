@@ -1,6 +1,6 @@
 pub(crate) use crate::helpers::implementations::RevisionedSmallVec;
 use crate::helpers::implementations::SerializableVec3;
-use crate::helpers::paths::buildings_dir;
+use crate::helpers::modpack::ModManager;
 use crate::helpers::positions::{ChunkCoord, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::props::{PropInstanceId, Props};
@@ -13,6 +13,10 @@ use crate::world::buildings::building_mesher::{
 use crate::world::buildings::building_renderer::BuildingRenderer;
 use crate::world::buildings::lot_fitting::{
     BUILDING_SNAP_RADIUS, LotPoint, close_polygon, fit_lot_to_neighbors, gather_closest_lot_point,
+};
+use crate::world::buildings::utilities::utilities::UtilityUsage;
+use crate::world::buildings::utilities::utilities_network::{
+    EndpointType, UtilityEndpoint, UtilityEndpointId, UtilityNetwork,
 };
 use crate::world::buildings::zoning::{Lot, LotEntrance, LotId, Zoning, ZoningType};
 use crate::world::camera::Camera;
@@ -123,7 +127,7 @@ impl Hash for RoofType {
 #[revisioned(revision = 1)]
 pub struct MiscBuildingParams {
     #[serde(default)]
-    pub window_material_accent: crate::world::buildings::building_mesher::WallMaterial,
+    pub window_material_accent: WallMaterial,
     #[serde(default)]
     pub solar_modules: bool,
     #[serde(default)]
@@ -184,6 +188,10 @@ pub struct BuildingParams {
     pub garage: Option<GarageParams>,
     #[serde(default)]
     pub miscellaneous: MiscBuildingParams,
+    #[serde(default)]
+    pub utilities: HashMap<String, UtilityUsage>,
+    #[serde(default)]
+    pub utilities_scale_per_square_meter: bool,
 }
 impl BuildingParams {
     pub fn apply_changes(&mut self, changes: BuildingParamsChanges) {
@@ -226,6 +234,9 @@ impl BuildingParams {
         if let Some(v) = changes.miscellaneous {
             self.miscellaneous = v;
         }
+        if let Some(v) = changes.utilities {
+            self.utilities = v.into_iter().collect();
+        }
     }
 
     pub fn with_changes(&self, changes: BuildingParamsChanges) -> Self {
@@ -233,6 +244,34 @@ impl BuildingParams {
         result.apply_changes(changes);
         result
     }
+
+    pub fn utility_usages(
+        &self,
+        utility_network: &UtilityNetwork,
+        one_story_area: f64,
+    ) -> Vec<UtilityUsage> {
+        let mut usages = Vec::with_capacity(utility_network.utilities.len());
+
+        for utility in &utility_network.utilities {
+            let mut usage = self
+                .utilities
+                .get(&utility.name)
+                .copied()
+                .unwrap_or_default();
+
+            if self.utilities_scale_per_square_meter {
+                usage.consumption *= one_story_area as f32;
+                usage.production *= one_story_area as f32;
+            }
+
+            usages.push(usage);
+        }
+
+        usages
+    }
+    //{
+    //
+    //             }; THESE ARE HOLY! IF THESE ARE REMOVED; MY GAME WILL FLOP!!!! Shut up, Astrology teacher!
 }
 impl BuildingParams {
     pub fn max_people(&self, one_story_area: f64) -> u32 {
@@ -260,16 +299,6 @@ impl Hash for BuildingParams {
         self.garage.hash(state);
         self.miscellaneous.hash(state);
     }
-}
-#[derive(Clone, Default, Hash)]
-#[revisioned(revision = 1)]
-pub struct BuildingParamsLevelsOld {
-    pub level0: BuildingParams,
-    pub level1: BuildingParams,
-    pub level2: BuildingParams,
-    pub level3: BuildingParams,
-    pub level4: BuildingParams,
-    pub level5: BuildingParams,
 }
 
 #[derive(Clone, Default, Hash)]
@@ -331,6 +360,7 @@ pub struct BuildingParamsChanges {
     pub garden: Option<GardenParams>,
     pub garage: Option<Option<GarageParams>>,
     pub miscellaneous: Option<MiscBuildingParams>,
+    pub utilities: Option<BTreeMap<String, UtilityUsage>>,
 }
 #[derive(Clone, Default, Deserialize)]
 pub struct HashableF32(pub f32);
@@ -523,6 +553,7 @@ pub struct Building {
     pub design_source: BuildingDesignSource,
     pub edit_id: Option<EditId>,
     pub prop_instance_ids: Vec<PropInstanceId>,
+    pub utility_endpoint_id: Option<UtilityEndpointId>,
     pub occupancy: BuildingOccupancy,
     pub misc: BuildingMisc,
 }
@@ -548,6 +579,7 @@ pub struct Buildings {
     pub storage: BuildingStorage,
     pub partitions: PartitionManager,
     pub catalog: BuildingsCatalog,
+    pub utilities: UtilityNetwork,
 }
 
 impl Buildings {
@@ -624,6 +656,7 @@ impl Buildings {
             design_source: BuildingDesignSource::Design(building_name.clone()),
             edit_id: None,
             prop_instance_ids: vec![],
+            utility_endpoint_id: None,
             occupancy: Default::default(),
             misc: BuildingMisc {
                 is_preview: true,
@@ -768,11 +801,12 @@ impl Buildings {
 }
 
 impl Buildings {
-    pub fn new() -> Buildings {
+    pub fn new(mod_manager: &ModManager) -> Buildings {
         Self {
             storage: BuildingStorage::new(),
             partitions: PartitionManager::new(),
-            catalog: BuildingsCatalog::new(),
+            catalog: BuildingsCatalog::new(mod_manager),
+            utilities: UtilityNetwork::new(mod_manager),
         }
     }
 
@@ -787,6 +821,7 @@ impl Buildings {
         variables: &mut Variables,
         building_renderer: &mut BuildingRenderer,
         render_manager: &mut RenderManager,
+        mod_manager: &ModManager,
         props: &mut Props,
         zoning: &mut Zoning,
         sounds: &mut Sounds,
@@ -853,6 +888,7 @@ impl Buildings {
 
             building_renderer.render_preview(
                 render_manager,
+                mod_manager,
                 terrain,
                 props,
                 &mut roads.parking,
@@ -982,6 +1018,7 @@ impl BuildingStorage {
             .get_lot(building.lot_id)
             .map_or(building.pos, |l| l.entrance.pos);
         let chunk_coord = entrance_pos.chunk;
+
         let building_id = if let Some(reused_id) = storage.free_list.pop() {
             // Reuse slot - III know it's None because it's in free_list
             building.id = reused_id;
@@ -1063,7 +1100,9 @@ impl BuildingStorage {
         let Some(building) = storage.buildings[id as usize].take() else {
             return;
         };
-
+        if let Some(endpoint_id) = building.utility_endpoint_id {
+            buildings.utilities.remove_endpoint(endpoint_id);
+        }
         // Remove jobs
         let Some(district) = zoning
             .zoning_storage
@@ -1099,7 +1138,39 @@ impl BuildingStorage {
             }
         }
     }
+    pub fn update_utility_endpoint(
+        buildings: &mut Buildings,
+        zoning: &Zoning,
+        building_id: BuildingId,
+    ) {
+        let Some(building) = buildings.storage.get_mut(building_id) else {
+            return;
+        };
+        let Some(lot) = zoning.zoning_storage.get_lot(building.lot_id) else {
+            return;
+        };
+        let Some(segment_id) = lot.segment_id else {
+            return;
+        };
+        let Some(building_params) = building.current_level_params(&buildings.catalog) else {
+            return;
+        };
+        let utility_usages =
+            building_params.utility_usages(&buildings.utilities, lot.floor_area_or_zero());
 
+        let endpoint = UtilityEndpoint {
+            endpoint_type: EndpointType::Building {
+                building_id,
+                segment_id,
+            },
+            utility_usages,
+        };
+        if let Some(endpoint_id) = building.utility_endpoint_id {
+            buildings.utilities.update_endpoint(endpoint_id, endpoint);
+        } else {
+            buildings.utilities.add_endpoint(endpoint);
+        }
+    }
     pub fn building_count(&self) -> usize {
         self.buildings.len() - self.free_list.len()
     }
@@ -1563,55 +1634,19 @@ pub struct BuildingsCatalog {
 }
 
 impl BuildingsCatalog {
-    pub fn new() -> Self {
+    pub fn new(mod_manager: &ModManager) -> Self {
         let mut catalog = Self {
             ploppables: HashMap::new(),
         };
-        catalog.load();
+        catalog.load(mod_manager);
         catalog
     }
-    fn load(&mut self) {
-        let folder_path = buildings_dir();
-        let folder_path = folder_path.as_path();
+    fn load(&mut self, mod_manager: &ModManager) {
         let mut ploppables = HashMap::new();
 
-        let entries = match std::fs::read_dir(folder_path) {
-            Ok(entries) => entries,
-            Err(err) => {
-                error!(
-                    "[Buildings] Failed to read buildings folder to get Ploppable Buildings. Tried path: '{}'. Error: {}",
-                    folder_path.display(),
-                    err
-                );
-                return;
-            }
-        };
+        let paths = mod_manager.building_paths(); // I TRUST you will give me only Files and they are Yaml.!!!!!
 
-        for entry in entries {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(err) => {
-                    error!(
-                        "[Buildings] Failed to read an entry in the buildings folder '{}'. Error: {}",
-                        folder_path.display(),
-                        err
-                    );
-                    continue;
-                }
-            };
-
-            let path = entry.path();
-
-            // Only process files in the root of the folder.
-            if !path.is_file() {
-                continue;
-            }
-
-            // Only process YAML files.
-            if path.extension().and_then(|ext| ext.to_str()) != Some("yaml") {
-                continue;
-            }
-
+        for path in paths {
             let name = match path.file_stem().and_then(|stem| stem.to_str()) {
                 Some(name) => name.to_owned(),
                 None => {

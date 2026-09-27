@@ -17,6 +17,7 @@ use crate::helpers::positions::{ChunkCoord, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::systems::systems::RoadDestroyType;
 use crate::world::buildings::buildings::Buildings;
+use crate::world::buildings::utilities::utilities::UtilityRail;
 use crate::world::buildings::zoning::{DistrictId, ZoningStorage};
 use crate::world::cars::car_subsystem::Cars;
 use crate::world::cars::parking::ParkingSpotId;
@@ -487,6 +488,7 @@ pub struct Segment {
     pub version: u32,
     pub road_type_id: RoadTypeId, // The ONLY place this is stored btw, intersections ask segments!
     pub parking_spots: Vec<ParkingSpotId>,
+    pub utility_rails: Vec<UtilityRail>,
 }
 
 impl Segment {
@@ -500,6 +502,7 @@ impl Segment {
             version: 0,
             road_type_id,
             parking_spots: vec![],
+            utility_rails: vec![],
         }
     }
 
@@ -565,7 +568,7 @@ pub struct Lane {
     from: NodeId,
     to: NodeId,
     segment: SegmentId,
-    lane_index: i8, // signed, relative to segment centerline
+    lane_index: i8, // signed, relative to segment centerline, 0 skipped
     speed_limit: f32,
     capacity: u32,
     vehicle_mask: u32,
@@ -926,15 +929,19 @@ impl LaneGeometry {
 
 pub type RoadRegionId = u32;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 #[revisioned(revision = 1)]
 pub struct RoadRegion {
     nodes: Vec<NodeId>,
 }
 
 impl RoadRegion {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self { nodes: Vec::new() }
+    }
+
+    pub fn push_node(&mut self, node: NodeId) {
+        self.nodes.push(node);
     }
 
     pub fn node_ids(&self) -> &[NodeId] {
@@ -950,6 +957,57 @@ impl RoadRegion {
     }
 }
 
+#[derive(Clone, Default)]
+#[revisioned(revision = 1)]
+pub struct RoadRegions {
+    pub regions: Vec<RoadRegion>,
+    pub node_to_region: Vec<Option<RoadRegionId>>,
+}
+
+impl RoadRegions {
+    pub fn clear(&mut self) {
+        self.regions.clear();
+        self.node_to_region.clear();
+    }
+
+    #[inline]
+    pub fn region_for_node(&self, node_id: NodeId) -> Option<RoadRegionId> {
+        self.node_to_region.get(node_id.index()).copied().flatten()
+    }
+
+    #[inline]
+    pub fn are_nodes_connected(&self, a: NodeId, b: NodeId) -> bool {
+        match (self.region_for_node(a), self.region_for_node(b)) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        }
+    }
+
+    #[inline]
+    pub fn get_region(&self, region_id: RoadRegionId) -> Option<&RoadRegion> {
+        self.regions.get(region_id as usize)
+    }
+
+    #[inline]
+    pub fn nodes_in_region(&self, region_id: RoadRegionId) -> &[NodeId] {
+        self.regions
+            .get(region_id as usize)
+            .map_or(&[], |r| r.node_ids())
+    }
+
+    #[inline]
+    pub fn region_count(&self) -> usize {
+        self.regions.len()
+    }
+
+    pub fn iter_regions(&self) -> impl Iterator<Item = (RoadRegionId, &RoadRegion)> {
+        self.regions
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (i as RoadRegionId, r))
+    }
+}
+
 #[derive(Clone)]
 #[revisioned(revision = 1)]
 pub struct RoadStorage {
@@ -959,10 +1017,8 @@ pub struct RoadStorage {
     segments_free_list: Vec<SegmentId>,
     pub lanes: Vec<Option<Lane>>,
     lanes_free_list: Vec<LaneId>,
-    node_to_region: Vec<RoadRegionId>,
-    regions: Vec<RoadRegion>,
-    free_regions: Vec<RoadRegionId>,
-    active_region_count: usize,
+    pub road_regions: RoadRegions,
+    pub rebuild_utility_graph: bool,
 }
 
 impl Default for RoadStorage {
@@ -974,10 +1030,8 @@ impl Default for RoadStorage {
             segments_free_list: vec![],
             lanes: Vec::new(),
             lanes_free_list: vec![],
-            node_to_region: Vec::new(),
-            regions: Vec::new(),
-            free_regions: Vec::new(),
-            active_region_count: 0,
+            road_regions: RoadRegions::default(),
+            rebuild_utility_graph: true,
         }
     }
 }
@@ -985,30 +1039,18 @@ impl Default for RoadStorage {
 impl RoadStorage {
     pub fn clear(&mut self) {
         self.nodes.clear();
+        self.nodes_free_list.clear();
         self.segments.clear();
+        self.segments_free_list.clear();
         self.lanes.clear();
-        self.node_to_region.clear();
-        self.regions.clear();
-        self.free_regions.clear();
-        self.active_region_count = 0;
+        self.lanes_free_list.clear();
+        self.road_regions.clear();
+        self.rebuild_utility_graph = true;
     }
 
     pub fn add_node(&mut self, id: NodeId, world_pos: WorldPos) {
         self.nodes[id.index()] = Some(Node::new(world_pos));
-
-        let region_id = if let Some(reused_id) = self.free_regions.pop() {
-            self.regions[reused_id as usize].nodes.push(id);
-            reused_id
-        } else {
-            let new_id = self.regions.len() as RoadRegionId;
-            let mut region = RoadRegion::new();
-            region.nodes.push(id);
-            self.regions.push(region);
-            new_id
-        };
-
-        self.node_to_region.push(region_id);
-        self.active_region_count += 1;
+        self.rebuild_utility_graph = true;
     }
 
     pub fn add_segment(
@@ -1019,15 +1061,8 @@ impl RoadStorage {
         structure: StructureType,
         road_type_id: RoadTypeId,
     ) {
-        let segment = Segment::new(start, end, structure, road_type_id);
-        self.segments[id.index()] = Some(segment);
-
-        let region_a = self.node_to_region[start.index()];
-        let region_b = self.node_to_region[end.index()];
-
-        if region_a != region_b {
-            self.merge_regions(region_a, region_b);
-        }
+        self.segments[id.index()] = Some(Segment::new(start, end, structure, road_type_id));
+        self.rebuild_utility_graph = true;
     }
 
     pub fn alloc_node_id(&mut self) -> NodeId {
@@ -1085,83 +1120,6 @@ impl RoadStorage {
 
     pub fn segment_of_lane(&self, lane_id: LaneId) -> SegmentId {
         self.lane(lane_id).segment()
-    }
-
-    fn merge_regions(&mut self, a: RoadRegionId, b: RoadRegionId) {
-        // let len_a = self.regions[a as usize].nodes.len();
-        // let len_b = self.regions[b as usize].nodes.len();
-        //
-        // let (smaller, larger) = if len_a <= len_b { (a, b) } else { (b, a) };
-        //
-        // let nodes_to_move = std::mem::take(&mut self.regions[smaller as usize].nodes);
-        //
-        // for &node_idx in &nodes_to_move {
-        //     self.node_to_region[node_idx.index()] = larger;
-        // }
-        //
-        // self.regions[larger as usize].nodes.extend(nodes_to_move);
-        // self.free_regions.push(smaller);
-        // self.active_region_count -= 1;
-    }
-
-    /// Returns the current region ID for a node.
-    ///
-    /// # Stability
-    ///
-    /// Region IDs become stale after merges. If you call `add_segment` connecting
-    /// two nodes in different regions, the smaller region is merged into the larger.
-    /// Any previously-obtained ID for the smaller region now points to an empty slot.
-    /// Re-query after any connectivity changes if freshness matters.
-    #[inline]
-    pub fn region_for_node(&self, node_id: NodeId) -> RoadRegionId {
-        self.node_to_region[node_id.index()]
-    }
-    /// Returns an iterator over all active (non-empty) regions with their IDs.
-    ///
-    /// Active regions contain at least one node. Empty regions resulting from
-    /// prior merge operations are skipped. Region IDs remain stable until the
-    /// next merge operation occurs.
-    pub fn iter_active_regions(&self) -> impl Iterator<Item = (RoadRegionId, &RoadRegion)> {
-        self.regions
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| !r.is_empty())
-            .map(|(i, r)| (i as RoadRegionId, r))
-    }
-    /// Returns the region, which may be empty if it was merged into another.
-    #[inline]
-    pub fn get_region(&self, region_id: RoadRegionId) -> &RoadRegion {
-        &self.regions[region_id as usize]
-    }
-
-    #[inline]
-    pub fn are_nodes_connected(&self, a: NodeId, b: NodeId) -> bool {
-        self.node_to_region[a.index()] == self.node_to_region[b.index()]
-    }
-
-    #[inline]
-    pub fn nodes_in_region(&self, region_id: RoadRegionId) -> &[NodeId] {
-        &self.regions[region_id as usize].nodes
-    }
-
-    #[inline]
-    pub fn is_region_active(&self, region_id: RoadRegionId) -> bool {
-        (region_id as usize) < self.regions.len() && !self.regions[region_id as usize].is_empty()
-    }
-
-    #[inline]
-    pub fn active_region_count(&self) -> usize {
-        self.active_region_count
-    }
-
-    #[inline]
-    pub fn total_region_slots(&self) -> usize {
-        self.regions.len()
-    }
-
-    #[inline]
-    pub fn free_region_slot_count(&self) -> usize {
-        self.free_regions.len()
     }
 
     #[inline]
@@ -1395,6 +1353,7 @@ impl RoadStorage {
 
         let node = self.node_mut(to);
         node.incoming_lanes.push(id);
+        self.rebuild_utility_graph = true;
     }
     #[inline]
     pub fn lane_exists(&self, id: LaneId) -> bool {
@@ -1543,6 +1502,7 @@ impl RoadStorage {
         self.delete_segment(old_segment, road_types, gizmo, false);
 
         add_new(self);
+        self.rebuild_utility_graph = true;
 
         (segment_count_before..self.segments.len())
             .map(|i| SegmentId::new(i as u32))
@@ -1747,12 +1707,15 @@ impl RoadStorage {
     fn apply_impact(&mut self, impact: &DeleteImpact) {
         for &node_id in &impact.nodes {
             self.nodes[node_id.index()] = None;
+            self.rebuild_utility_graph = true;
         }
         for &seg_id in &impact.segments {
             self.segments[seg_id.index()] = None;
+            self.rebuild_utility_graph = true;
         }
         for &lane_id in &impact.lanes {
             self.lanes[lane_id.index()] = None;
+            self.rebuild_utility_graph = true;
         }
     }
 
@@ -1909,9 +1872,7 @@ impl RoadStorage {
             map
         };
 
-        // ── insert nodes ──────────────────────────────────────────────────────────
-        for (_, mut node) in nodes.into_iter().chain(nodes_needing_regen.into_iter()) {
-            // OMG so stupid! I forgot to add it here!!
+        for (old_id, mut node) in nodes.into_iter().chain(nodes_needing_regen.into_iter()) {
             node.incoming_lanes = node
                 .incoming_lanes
                 .iter()
@@ -1948,36 +1909,28 @@ impl RoadStorage {
             });
             for nl in &mut node.node_lanes {
                 for lr in nl.merging.iter_mut().chain(nl.splitting.iter_mut()) {
-                    if let LaneRef::Lane(lid, _) = lr {
-                        if let Some(&new_id) = remap_lane.get(lid) {
-                            *lid = new_id;
+                    match lr {
+                        LaneRef::Lane(lid, _) => {
+                            if let Some(&new_id) = remap_lane.get(lid) {
+                                *lid = new_id;
+                            }
+                        }
+                        LaneRef::NodeLane(nid, _, _) => {
+                            if let Some(&new_id) = remap_node.get(nid) {
+                                *nid = new_id;
+                            }
                         }
                     }
                 }
             }
 
-            let node_idx = self.alloc_node_id();
-            self.nodes[node_idx.index()] = Some(node);
-
-            let region_id = if let Some(reused) = self.free_regions.pop() {
-                self.regions[reused as usize].nodes.push(node_idx);
-                reused
-            } else {
-                let new_id = self.regions.len() as RoadRegionId;
-                let mut r = RoadRegion::new();
-                r.nodes.push(node_idx);
-                self.regions.push(r);
-                new_id
-            };
-            self.node_to_region.push(region_id);
-            self.active_region_count += 1;
+            self.nodes[remap_node[&old_id].index()] = Some(node);
         }
 
-        // ── insert segments (skip any that failed validation) ─────────────────────
         for (old_id, mut seg) in segments {
-            if !remap_seg.contains_key(&old_id) {
+            let Some(&new_id) = remap_seg.get(&old_id) else {
                 continue;
-            }
+            };
 
             seg.start = remap_node[&seg.start()];
             seg.end = remap_node[&seg.end()];
@@ -1987,14 +1940,7 @@ impl RoadStorage {
                 .filter_map(|id| remap_lane.get(id).copied())
                 .collect();
 
-            self.segments[remap_seg[&old_id].index()] = Some(seg);
-
-            let idx = SegmentId((self.segments.len() - 1) as u32);
-            let ra = self.node_to_region[self.segment(idx).start.index()];
-            let rb = self.node_to_region[self.segment(idx).end.index()];
-            if ra != rb {
-                self.merge_regions(ra, rb);
-            }
+            self.segments[new_id.index()] = Some(seg);
         }
 
         // ── insert lanes (skip any that failed validation) ────────────────────────
@@ -2008,6 +1954,7 @@ impl RoadStorage {
             lane.segment = remap_seg[&lane.segment];
             self.lanes[remap_lane[&old_id].index()] = Some(lane);
         }
+        self.rebuild_utility_graph = true;
     }
 
     // When the terrain changes, so must the roads.
@@ -2061,15 +2008,7 @@ impl RoadTypes {
         key
     }
 }
-/// Global road topology manager with append-only storage.
-///
-/// # Thread Safety
-/// RoadManager is `Send + Sync` for read-only access during simulation.
-/// Mutable operations must be serialized and occur outside simulation ticks.
-///
-/// # Determinism
-/// All ID allocation is monotonic and deterministic.
-/// Iteration order is stable and matches insertion order.
+
 pub struct RoadManager {
     pub roads: RoadStorage,
     pub preview_roads: RoadStorage,

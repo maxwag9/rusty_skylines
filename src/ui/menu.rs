@@ -1,9 +1,10 @@
 use crate::data::Settings;
+use crate::helpers::modpack::ModManager;
 use crate::ui::cache::*;
 use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
-use sluggrs::FontSystem;
+use sluggrs_skylines::FontSystem;
 use std::collections::HashMap;
 use wgpu::{Device, Queue};
 //use glyphon::FontSystem;
@@ -67,6 +68,7 @@ impl Menu {
         window_size: PhysicalSize<f32>,
         device: &Device,
         queue: &Queue,
+        mod_manager: &ModManager,
     ) -> Vec<RuntimeLayer> {
         let mut ap_layers = vec![];
         let (before, rest) = self.layers.split_at_mut(layer_index);
@@ -100,6 +102,7 @@ impl Menu {
                                 window_size,
                                 device,
                                 queue,
+                                mod_manager,
                             );
                             ap_layers.push(layer);
                         }

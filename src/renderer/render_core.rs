@@ -1,8 +1,7 @@
 use crate::data::{DebugViewState, Settings, ShadowType};
 use crate::gpu_timestamp;
-use crate::helpers::paths::{
-    compute_shader_dir, next_screenshot_path, shader_dir, texture_shaders_dir,
-};
+use crate::helpers::modpack::ModManager;
+use crate::helpers::paths::next_screenshot_path;
 use crate::helpers::positions::WorldPos;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
@@ -37,7 +36,7 @@ use crate::world::terrain::terrain_gen::TerrainGenerator;
 use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
 use crate::world::world::World;
 use glam::UVec2;
-use sluggrs::Resolution;
+use sluggrs_skylines::Resolution;
 //use glyphon::Resolution;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
@@ -92,21 +91,29 @@ impl Renderer {
         settings: &Settings,
         camera: &Camera,
         props: Props,
+        mod_manager: &ModManager,
     ) -> Self {
-        let shader_watcher = ShaderWatcher::new().ok();
+        let shader_watcher = ShaderWatcher::new(mod_manager.shader_paths()).ok();
 
         let mut rt_subsystem = RTSubsystem::new(device);
-        let ui_renderer = UiRenderer::new(device, queue, config, size, settings.msaa_samples)
+        let mut ui_renderer = UiRenderer::new(device, queue, config, size, settings.msaa_samples)
             .expect("Failed to create UI pipelines");
         let terrain_renderer = TerrainRenderSubsystem::new();
         let road_renderer = RoadRenderSubsystem::new(device);
         let car_renderer = CarRenderSubsystem::new(device, queue, &mut rt_subsystem);
         let building_renderer = BuildingRenderer::new(device);
-        let mut render_manager = RenderManager::new(device, queue, texture_shaders_dir());
-        let gizmo = Gizmo::new(device, config, &ui_renderer.font_arc, settings.msaa_samples);
+        let mut render_manager = RenderManager::new(device, queue);
+        let gizmo = Gizmo::new(
+            device,
+            queue,
+            config,
+            &mut ui_renderer.text_atlas,
+            settings.msaa_samples,
+        );
         let profiler = GpuProfiler::new(&device, 3);
         let pipelines = Pipelines::new(
             &mut render_manager,
+            mod_manager,
             device,
             queue,
             &config,
@@ -182,6 +189,7 @@ impl Renderer {
         world: &mut World,
         ui: &mut Ui,
         settings: &Settings,
+        mod_manager: &ModManager,
     ) {
         if settings.render_debug_print {
             println!("[render] start");
@@ -189,7 +197,7 @@ impl Renderer {
         let aspect = self.config.width as f32 / self.config.height as f32;
         let screen_size: UVec2 = UVec2::new(self.config.width, self.config.height);
         //let t = Instant::now();
-        self.update_render(world, ui, settings, aspect, screen_size);
+        self.update_render(world, ui, settings, aspect, screen_size, mod_manager);
         if settings.render_debug_print {
             print!(" [render] after update_render");
         }
@@ -228,6 +236,7 @@ impl Renderer {
                     settings,
                     terrain,
                     buildings,
+                    mod_manager,
                 );
             });
             self.execute_main_pass(
@@ -243,6 +252,7 @@ impl Renderer {
                 &world.buildings,
                 &world.cars.car_storage(),
                 settings,
+                mod_manager,
             );
         });
 
@@ -272,6 +282,7 @@ impl Renderer {
         settings: &Settings,
         aspect: f32,
         screen_size: UVec2,
+        mod_manager: &ModManager,
     ) {
         let time = &world.time;
         let camera = &world.world_state.camera;
@@ -327,6 +338,7 @@ impl Renderer {
             &mut world.buildings,
             &mut world.zoning,
             &mut world.sounds,
+            mod_manager,
         );
     }
 
@@ -376,6 +388,7 @@ impl Renderer {
         buildings: &mut Buildings,
         zoning: &mut Zoning,
         sounds: &mut Sounds,
+        mod_manager: &ModManager,
     ) {
         let eye = camera.target;
         let target_pos_render = eye.to_relative_pos(WorldPos::zero());
@@ -393,6 +406,7 @@ impl Renderer {
             &mut ui.variables,
             &mut self.building_renderer,
             &mut self.render_manager,
+            mod_manager,
             &mut self.props,
             zoning,
             sounds,
@@ -408,7 +422,8 @@ impl Renderer {
             &mut self.props,
             &mut self.gizmo,
         );
-        self.props.place_props(terrain, input, &self.device);
+        self.props
+            .place_props(terrain, input, &self.device, mod_manager);
         time.timer.checkpoint("UI Render Update", false);
         self.ui_renderer.update(
             ui,
@@ -418,6 +433,7 @@ impl Renderer {
             &self.queue,
             PhysicalSize::new(self.config.width, self.config.height).cast::<f32>(),
             settings,
+            mod_manager,
         );
         time.timer.checkpoint("UI Render Update", true);
         self.road_renderer.update(
@@ -430,6 +446,7 @@ impl Renderer {
         );
         self.building_renderer.update(
             &mut self.render_manager,
+            mod_manager,
             terrain,
             &mut self.props,
             buildings,
@@ -474,6 +491,7 @@ impl Renderer {
         settings: &Settings,
         terrain: &Terrain,
         buildings: &Buildings,
+        mod_manager: &ModManager,
     ) {
         if time.astronomy.sun_dir.y < 0.0 {
             return;
@@ -515,6 +533,7 @@ impl Renderer {
                 aspect,
                 shadow_buf,
                 cascade_idx,
+                mod_manager,
             );
             //}
             render_roads_shadows(
@@ -525,6 +544,7 @@ impl Renderer {
                 settings,
                 shadow_buf,
                 cascade_idx,
+                mod_manager,
             );
             render_buildings_shadows(
                 &mut pass,
@@ -536,6 +556,7 @@ impl Renderer {
                 settings,
                 shadow_buf,
                 cascade_idx,
+                mod_manager,
             );
             render_cars_shadows(
                 &mut pass,
@@ -548,6 +569,7 @@ impl Renderer {
                 camera,
                 shadow_buf,
                 cascade_idx,
+                mod_manager,
             );
             self.props.render_shadows(
                 &mut self.render_manager,
@@ -558,6 +580,7 @@ impl Renderer {
                 settings,
                 shadow_buf,
                 cascade_idx,
+                mod_manager,
             );
         }
     }
@@ -576,6 +599,7 @@ impl Renderer {
         buildings: &Buildings,
         car_storage: &CarStorage,
         settings: &Settings,
+        mod_manager: &ModManager,
     ) {
         self.execute_world_pass(
             encoder,
@@ -586,10 +610,11 @@ impl Renderer {
             car_storage,
             settings,
             aspect,
+            mod_manager,
         );
 
         gpu_timestamp!(encoder, &mut self.profiler, "GTAO", {
-            self.execute_gtao_pass(encoder, settings, time);
+            self.execute_gtao_pass(encoder, settings, time, mod_manager);
         });
 
         gpu_timestamp!(encoder, &mut self.profiler, "RT", {
@@ -603,21 +628,22 @@ impl Renderer {
                     &mut self.pipelines,
                     &mut self.profiler,
                     self.msaa_samples,
+                    mod_manager,
                 );
             }
         });
-        self.execute_fog_pass(encoder, settings);
+        self.execute_fog_pass(encoder, settings, mod_manager);
 
         time.timer.checkpoint("UI Render", false);
         gpu_timestamp!(encoder, &mut self.profiler, "UI", {
-            self.execute_ui_pass(encoder, ui, time, input, settings);
+            self.execute_ui_pass(encoder, ui, time, input, settings, mod_manager);
         });
         time.timer.checkpoint("UI Render", true);
 
         self.execute_debug_preview_pass(encoder, settings, &terrain.terrain_gen);
 
         gpu_timestamp!(encoder, &mut self.profiler, "Tonemap", {
-            self.execute_tonemap_pass(encoder, surface_view);
+            self.execute_tonemap_pass(encoder, surface_view, mod_manager);
         });
         if input.action_repeat("Screenshot") {
             let view = &self.pipelines.resolved.tonemapped;
@@ -718,6 +744,7 @@ impl Renderer {
         car_storage: &CarStorage,
         settings: &Settings,
         aspect: f32,
+        mod_manager: &ModManager,
     ) {
         create_world_pass(encoder, &self.pipelines, config, self.msaa_samples, true); // Just Clear the frame
         if !settings.show_world {
@@ -734,6 +761,7 @@ impl Renderer {
             settings,
             config,
             self.msaa_samples,
+            mod_manager,
         );
 
         // 2. Terrain
@@ -749,6 +777,7 @@ impl Renderer {
                 self.msaa_samples,
                 camera,
                 aspect,
+                mod_manager,
             );
         });
 
@@ -761,6 +790,7 @@ impl Renderer {
                 settings,
                 config,
                 self.msaa_samples,
+                mod_manager,
             );
         });
         // 4. Roads
@@ -773,6 +803,7 @@ impl Renderer {
                 settings,
                 config,
                 self.msaa_samples,
+                mod_manager,
             );
         });
 
@@ -788,6 +819,7 @@ impl Renderer {
                 settings,
                 config,
                 self.msaa_samples,
+                mod_manager,
             );
         });
 
@@ -803,6 +835,7 @@ impl Renderer {
                 settings,
                 camera,
                 config,
+                mod_manager,
             );
         });
         // 7
@@ -818,8 +851,10 @@ impl Renderer {
                 &self.device,
                 &self.queue,
                 config,
+                mod_manager,
             );
         });
+
         // 8. Gizmo
         gpu_timestamp!(encoder, &mut self.profiler, "Gizmo", {
             render_gizmo(
@@ -833,6 +868,8 @@ impl Renderer {
                 camera,
                 &self.device,
                 &self.queue,
+                mod_manager,
+                &mut self.ui_renderer,
             );
         });
         // let pass = &mut create_id_pass(encoder, &self.pipelines);
@@ -852,6 +889,7 @@ impl Renderer {
         encoder: &mut CommandEncoder,
         settings: &Settings,
         time: &Time,
+        mod_manager: &ModManager,
     ) {
         if !settings.show_world {
             return;
@@ -870,7 +908,10 @@ impl Renderer {
         } else {
             "gtao_prep"
         };
-
+        let Some(shader) = mod_manager.resource_path("shaders/compute/gtao_prep.wgsl") else {
+            error!("[Renderer] Missing shader 'shaders/compute/gtao_prep.wgsl'");
+            return;
+        };
         gpu_timestamp!(encoder, &mut self.profiler, "GTAO_Prep", {
             self.render_manager.compute(
                 Some(encoder),
@@ -884,7 +925,7 @@ impl Renderer {
                     &self.pipelines.post_fx.linear_depth_half,
                     &self.pipelines.post_fx.normal_half,
                 ],
-                &compute_shader_dir().join("gtao_prep.wgsl"),
+                shader,
                 ComputePipelineOptions {
                     dispatch_size: half_disp,
                 },
@@ -900,7 +941,10 @@ impl Renderer {
         let write_idx = 1 - read_idx;
         let hw = half_w as f32;
         let hh = half_h as f32;
-
+        let Some(shader) = mod_manager.resource_path("shaders/compute/gtao_generate.wgsl") else {
+            error!("[Renderer] Missing shader 'shaders/compute/gtao_generate.wgsl'");
+            return;
+        };
         gpu_timestamp!(encoder, &mut self.profiler, "GTAO_Generate", {
             self.render_manager.compute(
                 Some(encoder),
@@ -913,7 +957,7 @@ impl Renderer {
                     &self.pipelines.post_fx.motion_full,
                 ],
                 vec![&self.pipelines.post_fx.gtao_history[write_idx]],
-                &compute_shader_dir().join("gtao_generate.wgsl"),
+                shader,
                 ComputePipelineOptions {
                     dispatch_size: half_disp,
                 },
@@ -936,7 +980,10 @@ impl Renderer {
             0,
             bytemuck::bytes_of(&blur_params),
         );
-
+        let Some(shader) = mod_manager.resource_path("shaders/compute/gtao_blur_2d.wgsl") else {
+            error!("[Renderer] Missing shader 'shaders/compute/gtao_blur_2d.wgsl'");
+            return;
+        };
         gpu_timestamp!(encoder, &mut self.profiler, "GTAO_Blur", {
             self.render_manager.compute(
                 Some(encoder),
@@ -947,7 +994,7 @@ impl Renderer {
                     &self.pipelines.post_fx.normal_half,
                 ],
                 vec![&self.pipelines.post_fx.gtao_blurred_half],
-                &compute_shader_dir().join("gtao_blur_2d.wgsl"),
+                shader,
                 ComputePipelineOptions {
                     dispatch_size: half_disp,
                 },
@@ -1023,10 +1070,15 @@ impl Renderer {
                 &self.pipelines.msaa.depth_sample,
                 &self.pipelines.resolved.normal,
             ];
-
+            let Some(shader) =
+                mod_manager.resource_path("shaders/compute/gtao_upsample_apply.wgsl")
+            else {
+                error!("[Renderer] Missing shader 'shaders/compute/gtao_upsample_apply.wgsl'");
+                return;
+            };
             self.render_manager.render_with_textures(
                 &textures,
-                shader_dir().join("gtao_upsample_apply.wgsl").as_path(),
+                shader,
                 &options,
                 &[
                     &self.pipelines.buffers.camera,
@@ -1039,7 +1091,12 @@ impl Renderer {
         });
     }
 
-    fn execute_fog_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
+    fn execute_fog_pass(
+        &mut self,
+        encoder: &mut CommandEncoder,
+        settings: &Settings,
+        mod_manager: &ModManager,
+    ) {
         if !settings.show_world || !settings.show_fog {
             return;
         }
@@ -1088,10 +1145,13 @@ impl Renderer {
             ];
 
             let shader_name = if msaa_on { "fog_msaa" } else { "fog" };
-
+            let Some(shader) = mod_manager.resource_path("shaders/fog.wgsl") else {
+                error!("[Renderer] Missing shader 'shaders/fog.wgsl'");
+                return;
+            };
             self.render_manager.render_with_textures(
                 &textures,
-                shader_dir().join("fog.wgsl").as_path(),
+                shader,
                 &options,
                 &[&self.pipelines.buffers.camera, &self.pipelines.buffers.fog],
                 &mut pass,
@@ -1108,6 +1168,7 @@ impl Renderer {
         time: &Time,
         input_state: &Input,
         settings: &Settings,
+        mod_manager: &ModManager,
     ) {
         let screen_uniform = ScreenUniform {
             size: [self.config.width as f32, self.config.height as f32],
@@ -1124,6 +1185,7 @@ impl Renderer {
 
         self.ui_renderer.render(
             &mut self.render_manager,
+            mod_manager,
             encoder,
             &self.queue,
             ui_loader,
@@ -1353,7 +1415,12 @@ impl Renderer {
         }
     }
 
-    fn execute_tonemap_pass(&mut self, encoder: &mut CommandEncoder, surface_view: &TextureView) {
+    fn execute_tonemap_pass(
+        &mut self,
+        encoder: &mut CommandEncoder,
+        surface_view: &TextureView,
+        mod_manager: &ModManager,
+    ) {
         // Post-process passes don't need MSAA - render directly to target
         let surface_attachment = RenderPassColorAttachment {
             view: surface_view,
@@ -1405,10 +1472,13 @@ impl Renderer {
             shadow: None,
             sampler: Default::default(),
         };
-
+        let Some(shader) = mod_manager.resource_path("shaders/tonemap.wgsl") else {
+            error!("[Renderer] Missing shader 'shaders/tonemap.wgsl'");
+            return;
+        };
         self.render_manager.render_with_textures(
             &[&self.pipelines.resolved.hdr, &self.pipelines.resolved.ui], // Sample FROM non-msaa hdr and FROM non-msaa UI
-            shader_dir().join("tonemap.wgsl").as_path(),
+            shader,
             &options,
             &[&self.pipelines.buffers.post_processing],
             &mut pass,
@@ -1436,6 +1506,11 @@ impl Renderer {
         self.render_manager
             .update_define("MSAA".to_string(), self.msaa_samples > 1);
         self.pipelines.resize(&self.config, self.msaa_samples);
+        self.gizmo.update_msaa(
+            self.msaa_samples,
+            &self.device,
+            &mut self.ui_renderer.text_atlas,
+        );
         self.ui_renderer.pipelines.msaa_samples = self.msaa_samples;
 
         self.render_manager.invalidate_bind_groups();
@@ -1446,7 +1521,7 @@ impl Renderer {
         Ok(())
     }
 
-    fn check_shader_changes(&mut self, ui_loader: &mut Ui) {
+    fn check_shader_changes(&mut self, ui: &mut Ui) {
         let Some(watcher) = &self.shader_watcher else {
             return;
         };
@@ -1470,9 +1545,9 @@ impl Renderer {
                     format!("Shaders reloaded: {summary}")
                 };
                 println!("{}", label);
-                ui_loader.log_console(format!("✅ {label}"));
+                ui.log_console(format!("✅ {label}"));
             }
-            Err(err) => ui_loader.log_console(format!("❌ Shader reload failed: {err}")),
+            Err(err) => ui.log_console(format!("❌ Shader reload failed: {err}")),
         }
     }
 

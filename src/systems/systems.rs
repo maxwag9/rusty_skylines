@@ -49,7 +49,16 @@ pub fn run_ticked(resources: &mut Resources) {
     if resources.simulation.running() {
         time.timer.checkpoint("Terrain", false);
         terrain.update(
-            gizmo, camera, aspect, settings, input, time, roads, props, variables,
+            gizmo,
+            camera,
+            aspect,
+            settings,
+            input,
+            time,
+            roads,
+            props,
+            variables,
+            &resources.game_state.mod_manager,
         );
         time.timer.checkpoint("Terrain", true);
     }
@@ -66,7 +75,7 @@ pub fn run_ticked(resources: &mut Resources) {
         props,
     );
     roads.update(
-        terrain, cars, city_state, input, time, settings, gizmo, sounds,
+        terrain, cars, city_state, input, time, settings, gizmo, sounds, buildings,
     );
 }
 
@@ -355,6 +364,7 @@ pub fn run_render(resources: &mut Resources) {
         &mut resources.world,
         &mut resources.ui,
         &resources.settings,
+        &resources.game_state.mod_manager,
     );
 
     resources.world.world_state.camera.end_frame();

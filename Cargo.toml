@@ -1,6 +1,6 @@
 [package]
 name = "Rusty_Skylines"
-version = "0.8.8"
+version = "0.9.0"
 edition = "2024"
 
 [dependencies]
@@ -9,7 +9,7 @@ winit = { version = "0.31.0-beta.3", features = ["serde"] }
 wgpu = { version = "30.0.1", features = ["strict_asserts"] }
 pollster = "1.0.1"
 bytemuck = { version = "1.25.2", features = ["derive"] }
-glam = { version = "0.33.7", features = ["serde"] }
+glam = { version = "0.33.11", features = ["serde"] }
 toml = "1.1.6"
 serde = { version = "1.0.229", features = ["derive"] }
 anyhow = "1.0.104"
@@ -17,13 +17,13 @@ notify = "9.0.0-rc.5"
 num_cpus = "1.17.0"
 crossbeam-channel = "0.5.17"
 fastnoise-lite = "1.1.1"
-rand = "0.10.2"
+rand = "0.10.3"
 zstd = "0.14.0"
 postcard = { version = "1.1.3", features = ["use-std"] }
 serde_yaml = { version = "0.9.34" }
-wgpu_render_manager = "30.0.2"                          # HERE!
+wgpu_render_manager = "30.0.5"                          # HERE!
 earcutr = "0.5.0"
-clipper2-rust = "1.1.0"
+clipper2-rust = "1.2.0"
 rayon = "1.12.0"
 cpal = "0.18.2"
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }
@@ -44,12 +44,20 @@ revision = "0.30.0"
 sysinfo = "0.39.6"
 gfxinfo = { version = "0.1.2", features = ["amd", "nvidia", "intel"] }
 #glyphon = "0.12.0" ඞ
-wgpu_text = "30.0.0"
+#wgpu_text = "30.0.1" ඞvඞ
 owo-colors = "4.4.0"
 unicode-segmentation = "1.13.3"
-fontdb = "0.24.0"
-smallvec = "2.0.0-alpha.13"
-sluggrs = { git = "https://github.com/maxwag9/sluggrs_skylines.git" }
+#fontdb = "0.24.0" ඞඞඞ
+smallvec = "2.0.0-beta.1"
+sluggrs_skylines = "0.3.1" # Better than you
+xz2 = "0.1.7"
+lz4_flex = "0.14.0"
+unarc-rs = "0.6.3"
+thiserror = "2.0.21"
+
+rustfft = "6.4.1"
+num-complex = "0.4.6"
+symphonia = { version = "0.6.0", features = ["all"] }
 
 [profile.fastdev]
 inherits = "release"      # start with release defaults

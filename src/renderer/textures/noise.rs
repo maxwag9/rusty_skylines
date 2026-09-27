@@ -1,4 +1,5 @@
-use crate::helpers::paths::compute_shader_dir;
+use crate::helpers::modpack::ModManager;
+use tracing::error;
 use wgpu::{
     BufferDescriptor, BufferUsages, Device, Extent3d, Queue, TextureDescriptor, TextureDimension,
     TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
@@ -8,6 +9,7 @@ use wgpu_render_manager::renderer::RenderManager;
 
 pub fn create_blue_noise_texture_gpu(
     render_manager: &mut RenderManager,
+    mod_manager: &ModManager,
     device: &Device,
     queue: &Queue,
     size: u32,
@@ -83,14 +85,17 @@ pub fn create_blue_noise_texture_gpu(
 
     // Initialize
     queue.write_buffer(&state, 0, bytemuck::bytes_of(&[target + 1, 0u32]));
-
+    let Some(shader) = mod_manager.resource_path("shaders/compute/blue_noise_init.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/compute/blue_noise_init.wgsl'");
+        return view;
+    };
     // Dispatch init pass once
     render_manager.compute(
         None,
         "blue_noise_init",
         vec![],
         vec![&view],
-        &compute_shader_dir().join("blue_noise_init.wgsl"),
+        shader,
         ComputePipelineOptions {
             dispatch_size: [(n + 255) / 256, 1, 1],
         },
@@ -101,7 +106,10 @@ pub fn create_blue_noise_texture_gpu(
             BufferSet::from_uniform(&params),
         ],
     );
-
+    let Some(shader) = mod_manager.resource_path("shaders/compute/blue_noise_step.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/compute/blue_noise_step.wgsl'");
+        return view;
+    };
     // One dispatch per pruning iteration (CPU loop)
     for iteration in 0..target {
         render_manager.compute(
@@ -109,7 +117,7 @@ pub fn create_blue_noise_texture_gpu(
             "blue_noise_prune_step",
             vec![],
             vec![],
-            &compute_shader_dir().join("blue_noise_step.wgsl"),
+            shader,
             ComputePipelineOptions {
                 dispatch_size: [(n + 255) / 256, 1, 1],
             },
@@ -123,14 +131,17 @@ pub fn create_blue_noise_texture_gpu(
             ],
         );
     }
-
+    let Some(shader) = mod_manager.resource_path("shaders/compute/blue_noise_output.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/compute/blue_noise_output.wgsl'");
+        return view;
+    };
     // Final output pass
     render_manager.compute(
         None,
         "blue_noise_output",
         vec![],
         vec![&view],
-        &compute_shader_dir().join("blue_noise_output.wgsl"),
+        shader,
         ComputePipelineOptions {
             dispatch_size: [(n + 255) / 256, 1, 1],
         },

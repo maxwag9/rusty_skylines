@@ -1,13 +1,15 @@
 use crate::gpu_timestamp;
-use crate::helpers::paths::{compute_shader_dir, shader_dir};
+use crate::helpers::modpack::ModManager;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_subsystem::{RTSubsystem, build_render_space_instances};
 use crate::renderer::render_core::create_color_attachment_load;
+use crate::renderer::ui_pipelines::multisample_state;
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::car_subsystem::{CAR_BASE_LENGTH, CAR_BASE_WIDTH};
 use glam::Vec3;
+use tracing::error;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::{
     BlendComponent, BlendFactor, BlendOperation, BlendState, ColorTargetState, ColorWrites,
@@ -16,7 +18,6 @@ use wgpu::{
 use wgpu_render_manager::compute_system::ComputePipelineOptions;
 use wgpu_render_manager::pipelines::PipelineOptions;
 use wgpu_render_manager::renderer::RenderManager;
-use crate::renderer::ui_pipelines::multisample_state;
 
 pub fn update_rt_instances(
     rt: &mut RTSubsystem,
@@ -61,6 +62,7 @@ pub fn render_ray_tracing(
     pipelines: &mut Pipelines,
     profiler: &mut GpuProfiler,
     msaa_samples: u32,
+    mod_manager: &ModManager,
 ) {
     let half_width = (config.width / 2).max(1);
     let half_height = (config.height / 2).max(1);
@@ -73,7 +75,10 @@ pub fn render_ray_tracing(
     let Some(buffer_sets) = rt.get_buffer_sets(pipelines) else {
         return;
     };
-
+    let Some(shader) = mod_manager.resource_path("shaders/compute/ray_tracing.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/compute/ray_tracing.wgsl'");
+        return;
+    };
     gpu_timestamp!(encoder, profiler, "RT_Tracing", {
         render_manager.compute(
             Some(encoder),
@@ -84,7 +89,7 @@ pub fn render_ray_tracing(
                 &pipelines.post_fx.rt_instance,
             ],
             vec![&pipelines.post_fx.rt_raw_half],
-            &compute_shader_dir().join("ray_tracing.wgsl"),
+            shader,
             make_ray_tracing_options(rt_dispatch),
             buffer_sets.as_slice(),
         );
@@ -96,7 +101,11 @@ pub fn render_ray_tracing(
         (config.height + WG - 1) / WG,
         1,
     ];
-
+    let Some(shader) = mod_manager.resource_path("shaders/compute/ray_tracing_upsample.wgsl")
+    else {
+        error!("[Renderer] Missing shader 'shaders/compute/ray_tracing_upsample.wgsl'");
+        return;
+    };
     // rt_full and rt_full_history swap roles each frame
     gpu_timestamp!(encoder, profiler, "RT_Upsample", {
         // swap for next frame
@@ -114,12 +123,15 @@ pub fn render_ray_tracing(
                 &pipelines.post_fx.motion_full,     // @group(0) @binding(3) - motion vectors
             ],
             vec![&pipelines.post_fx.rt_full], // @group(1) @binding(0) - output (write)
-            &compute_shader_dir().join("ray_tracing_upsample.wgsl"),
+            shader,
             make_ray_tracing_options(upsample_dispatch),
             &[],
         );
     });
-
+    let Some(shader) = mod_manager.resource_path("shaders/ray_tracing_apply.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/ray_tracing_apply.wgsl'");
+        return;
+    };
     // === Pass 3: Apply shadow to HDR (trivial per-sample cost) ===
     gpu_timestamp!(encoder, profiler, "RT_Apply", {
         let color_attachment = create_color_attachment_load(
@@ -155,7 +167,7 @@ pub fn render_ray_tracing(
 
         render_manager.render_with_textures(
             &[&pipelines.post_fx.rt_full],
-            shader_dir().join("ray_tracing_apply.wgsl").as_path(),
+            shader,
             &options,
             &[&pipelines.buffers.camera],
             &mut pass,

@@ -79,20 +79,16 @@ layers:
           - 1.0
           - 1.0
         text: Ping Pong in Rusty Skylines UI!
-      - !Text
-        id: back_text
-        actions:
-          - on:r call(open_main_menus)
+      - !Advanced
+        name: to_main_menu_button
+        ap_name: button
+        ap_vars:
+          - "str:<- To Minigames"
+          - "25"
+          - "str:on:r close_all_menus; open_menu(str:MiniGames);"
         x: 100
         y: 50
-        pt: 18.0
-        border_width: 5.0
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: <- Back to Main Menu
+        scale: 1.0
       - !Text
         id: faster_text
         actions:

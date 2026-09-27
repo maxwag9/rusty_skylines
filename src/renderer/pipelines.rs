@@ -174,6 +174,7 @@ impl ToneMappingUniforms {
     }
 }
 
+use crate::helpers::modpack::ModManager;
 use crate::ui::variables::Variables;
 use bytemuck::{Pod, Zeroable};
 
@@ -459,6 +460,7 @@ pub struct Pipelines {
 impl Pipelines {
     pub fn new(
         render_manager: &mut RenderManager,
+        mod_manager: &ModManager,
         device: &Device,
         queue: &Queue,
         config: &SurfaceConfiguration,
@@ -468,8 +470,10 @@ impl Pipelines {
         let msaa = Self::create_msaa_textures(device, config, settings.msaa_samples);
         let resolved = Self::create_resolved_textures(device, config);
         let post_fx = Self::create_post_fx_textures(device, config, settings.msaa_samples);
-        let blue_noise = create_blue_noise_texture_gpu(render_manager, device, queue, 32, 69);
+        let blue_noise =
+            create_blue_noise_texture_gpu(render_manager, mod_manager, device, queue, 32, 69);
         // ^ Only GTAO needs it, it doesn't give a shit. This is expensive O(size⁴) computation. 32 is enough, 64 is bigger and still doesn't hog the game, but it's no use.
+        // Important comment, thank you, younger self, for writing this, or else I wouldn't have understood why the blue noise texture is so small...
 
         let csm_shadow_map = create_csm_shadow_texture(device, settings.shadow_map_size, "Sun CSM");
         let shadow_samplers = create_shadow_samplers(device);

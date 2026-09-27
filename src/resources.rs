@@ -204,7 +204,7 @@ impl Resources {
 
         let game_state = GameState::new();
         let props = Props::new(device);
-        let mut world = World::new(device, queue, &settings, &props);
+        let mut world = World::new(device, queue, &settings, &props, &game_state.mod_manager);
         let camera = &mut world.world_state.camera;
 
         let render_core = Renderer::new(
@@ -216,6 +216,7 @@ impl Resources {
             &settings,
             camera,
             props,
+            &game_state.mod_manager,
         );
 
         let mut ui = Ui::new(
@@ -224,6 +225,7 @@ impl Resources {
             window.surface_size().cast::<f32>(),
             device,
             queue,
+            &game_state.mod_manager,
         );
         ui.variables.set_bool("editor_mode", settings.editor_mode);
         load_colors(

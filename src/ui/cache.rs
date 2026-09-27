@@ -6,9 +6,8 @@ use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::vertex::*;
 use bytemuck::Zeroable;
-use sluggrs::FontSystem;
-use sluggrs::cosmic_text::{Attrs, Metrics, Shaping};
-//use glyphon::{Attrs, FontSystem, Metrics, Shaping};
+use sluggrs_skylines::FontSystem;
+use sluggrs_skylines::cosmic_text::{Attrs, Metrics, Shaping};
 use unicode_segmentation::UnicodeSegmentation;
 
 pub fn rebuild_text_cache(
@@ -49,9 +48,7 @@ pub fn rebuild_text_cache(
             *cache = TextParams {
                 pos: [t.x, t.y],
                 pt: t.pt,
-                border_width: t.border_width,
                 color: t.color,
-                border_color: t.border_color,
                 id_hash: hash,
                 misc: [
                     if t.misc.active { 1.0 } else { 0.0 },
@@ -66,6 +63,7 @@ pub fn rebuild_text_cache(
                 caret: t.caret.min(t.text.graphemes(true).count()),
                 anchor: t.anchor,
                 depth: 0.0,
+                decorations: t.decorations.clone(),
             };
         }
     }

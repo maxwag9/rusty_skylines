@@ -1,9 +1,23 @@
+use crate::helpers::modpack::ModManager;
+use tracing::error;
 use wgpu_render_manager::generator::{MipmapMode, TextureKey, TextureParams};
 
-pub fn road_material_keys() -> Vec<TextureKey> {
+pub fn road_material_keys(mod_manager: &ModManager) -> Vec<TextureKey> {
+    let Some(asphalt) = mod_manager.resource_path("shaders/textures/asphalt.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/textures/asphalt.wgsl'");
+        return vec![];
+    };
+    let Some(concrete) = mod_manager.resource_path("shaders/textures/concrete.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/textures/concrete.wgsl'");
+        return vec![];
+    };
+    let Some(goo) = mod_manager.resource_path("shaders/textures/goo.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/textures/goo.wgsl'");
+        return vec![];
+    };
     vec![
         TextureKey {
-            shader_id: "concrete".to_string(),
+            shader_id: concrete.to_path_buf(),
             params: TextureParams {
                 seed: 1,
                 scale: 2.0,
@@ -13,10 +27,10 @@ pub fn road_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 512,
-            mipmap_mode: MipmapMode::Generate
+            mipmap_mode: MipmapMode::Generate,
         },
         TextureKey {
-            shader_id: "goo".to_string(),
+            shader_id: goo.to_path_buf(),
             params: TextureParams {
                 seed: 0,
                 scale: 3.0,
@@ -26,10 +40,10 @@ pub fn road_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 512,
-            mipmap_mode: MipmapMode::Generate
+            mipmap_mode: MipmapMode::Generate,
         },
         TextureKey {
-            shader_id: "asphalt".to_string(),
+            shader_id: asphalt.to_path_buf(),
             params: TextureParams {
                 seed: 0,
                 scale: 20.0,
@@ -39,10 +53,10 @@ pub fn road_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 512,
-            mipmap_mode: MipmapMode::Generate
+            mipmap_mode: MipmapMode::Generate,
         },
         TextureKey {
-            shader_id: "asphalt".to_string(),
+            shader_id: asphalt.to_path_buf(),
             params: TextureParams {
                 seed: 1,
                 scale: 16.0,
@@ -52,10 +66,10 @@ pub fn road_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 512,
-            mipmap_mode: MipmapMode::Generate
+            mipmap_mode: MipmapMode::Generate,
         },
         TextureKey {
-            shader_id: "asphalt".to_string(),
+            shader_id: asphalt.to_path_buf(),
             params: TextureParams {
                 seed: 2,
                 scale: 16.0,
@@ -65,10 +79,10 @@ pub fn road_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 512,
-            mipmap_mode: MipmapMode::Generate
+            mipmap_mode: MipmapMode::Generate,
         },
         TextureKey {
-            shader_id: "asphalt".to_string(),
+            shader_id: asphalt.to_path_buf(),
             params: TextureParams {
                 seed: 3,
                 scale: 16.0,
@@ -78,14 +92,19 @@ pub fn road_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 512,
-            mipmap_mode: MipmapMode::Generate
+            mipmap_mode: MipmapMode::Generate,
         },
     ]
 }
 
-pub fn cars_material_keys() -> Vec<TextureKey> {
+pub fn cars_material_keys(mod_manager: &ModManager) -> Vec<TextureKey> {
+    let Some(shiny_metal) = mod_manager.resource_path("shaders/textures/shiny_metal.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/textures/shiny_metal.wgsl'");
+        return vec![];
+    };
+
     vec![TextureKey {
-        shader_id: "shiny_metal".to_string(),
+        shader_id: shiny_metal.to_path_buf(),
         params: TextureParams {
             seed: 3,
             scale: 16.0,
@@ -95,14 +114,29 @@ pub fn cars_material_keys() -> Vec<TextureKey> {
             ..Default::default()
         },
         resolution: 512,
-        mipmap_mode: MipmapMode::Generate
+        mipmap_mode: MipmapMode::Generate,
     }]
 }
 
-pub fn terrain_material_keys() -> Vec<TextureKey> {
+pub fn terrain_material_keys(mod_manager: &ModManager) -> Vec<TextureKey> {
+    let Some(grass) = mod_manager.resource_path("shaders/textures/grass.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/textures/grass.wgsl'");
+        return vec![];
+    };
+
+    let Some(rock) = mod_manager.resource_path("shaders/textures/rock.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/textures/rock.wgsl'");
+        return vec![];
+    };
+
+    let Some(dirt) = mod_manager.resource_path("shaders/textures/dirt.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/textures/dirt.wgsl'");
+        return vec![];
+    };
+
     vec![
         TextureKey {
-            shader_id: "grass".to_string(),
+            shader_id: grass.to_path_buf(),
             params: TextureParams {
                 seed: 1337,
                 scale: 40.0,
@@ -115,10 +149,10 @@ pub fn terrain_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 1024,
-            mipmap_mode: MipmapMode::Generate
+            mipmap_mode: MipmapMode::Generate,
         },
         TextureKey {
-            shader_id: "grass".to_string(),
+            shader_id: grass.to_path_buf(),
             params: TextureParams {
                 seed: 42,
                 scale: 64.0,
@@ -131,10 +165,10 @@ pub fn terrain_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 1024,
-            mipmap_mode: MipmapMode::Generate
+            mipmap_mode: MipmapMode::Generate,
         },
         TextureKey {
-            shader_id: "rock".to_string(),
+            shader_id: rock.to_path_buf(),
             params: TextureParams {
                 seed: 9001,
                 scale: 52.0,
@@ -147,10 +181,10 @@ pub fn terrain_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 1024,
-            mipmap_mode: MipmapMode::Generate
+            mipmap_mode: MipmapMode::Generate,
         },
         TextureKey {
-            shader_id: "rock".to_string(),
+            shader_id: rock.to_path_buf(),
             params: TextureParams {
                 seed: 9002,
                 scale: 76.0,
@@ -163,10 +197,10 @@ pub fn terrain_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 1024,
-            mipmap_mode: MipmapMode::Generate
+            mipmap_mode: MipmapMode::Generate,
         },
         TextureKey {
-            shader_id: "dirt".to_string(),
+            shader_id: dirt.to_path_buf(),
             params: TextureParams {
                 seed: 31415,
                 scale: 48.0,
@@ -179,7 +213,7 @@ pub fn terrain_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 1024,
-            mipmap_mode: MipmapMode::Generate
+            mipmap_mode: MipmapMode::Generate,
         },
     ]
 }

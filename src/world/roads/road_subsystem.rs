@@ -11,6 +11,7 @@ use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::resources::Time;
 use crate::simulation::Ticker;
 use crate::ui::input::Input;
+use crate::world::buildings::buildings::Buildings;
 use crate::world::camera::Camera;
 use crate::world::cars::car_subsystem::Cars;
 use crate::world::cars::parking::ParkingStorage;
@@ -229,6 +230,7 @@ impl Roads {
         settings: &Settings,
         gizmo: &mut Gizmo,
         sounds: &mut Sounds,
+        buildings: &mut Buildings,
     ) {
         self.road_commands = self.road_editor.update(
             &mut self.road_manager,
@@ -254,6 +256,10 @@ impl Roads {
                 gizmo,
                 &self.road_commands,
             );
+        }
+        if self.road_manager.roads.rebuild_utility_graph {
+            buildings.utilities.mark_dirty();
+            self.road_manager.roads.rebuild_utility_graph = false;
         }
     }
 }

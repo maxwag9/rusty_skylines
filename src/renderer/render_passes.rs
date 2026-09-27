@@ -1,12 +1,14 @@
 use crate::data::{Settings, ShadowType};
 use crate::gpu_timestamp;
-use crate::helpers::paths::shader_dir;
+use crate::helpers::modpack::ModManager;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
 use crate::renderer::props::{GpuPropInstance, PropVertex, Props};
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
+use crate::renderer::render_core::{create_color_attachment_clear, create_color_attachment_load};
 use crate::renderer::textures::material_keys::*;
+use crate::renderer::ui::UiRenderer;
 use crate::renderer::ui_pipelines::multisample_state;
 use crate::ui::vertex::{TextVtxRender, ThickLineVtxRender, ThinLineVtxRender, Vertex};
 use crate::world::buildings::building_mesher::BuildingVertex;
@@ -22,6 +24,7 @@ use crate::world::roads::road_subsystem::RoadRenderSubsystem;
 use crate::world::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
 use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
 use crate::world::terrain::water::SimpleVertex;
+use tracing::error;
 use wgpu::CompareFunction::Always;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
@@ -184,7 +187,28 @@ pub fn create_world_pass<'a>(
         multiview_mask: None,
     })
 }
+pub fn create_gizmo_text_pass<'a>(
+    encoder: &'a mut CommandEncoder,
+    pipelines: &'a Pipelines,
+    config: &'a RenderPassConfig,
+    msaa_samples: u32,
+) -> RenderPass<'a> {
+    let color_attachment = make_color_attachment(
+        &pipelines.msaa.hdr,
+        &pipelines.resolved.hdr,
+        msaa_samples,
+        None,
+    );
 
+    encoder.begin_render_pass(&RenderPassDescriptor {
+        label: Some("Gizmo Text Pass"),
+        color_attachments: &[Some(color_attachment)],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    })
+}
 pub fn create_id_pass<'a>(
     encoder: &'a mut CommandEncoder,
     pipelines: &'a Pipelines,
@@ -223,6 +247,7 @@ pub fn render_sky<'a>(
     settings: &Settings,
     config: &RenderPassConfig,
     msaa_samples: u32,
+    mod_manager: &ModManager,
 ) {
     let sky_depth_stencil = Some(DepthStencilState {
         format: DEPTH_FORMAT,
@@ -236,13 +261,17 @@ pub fn render_sky<'a>(
         bias: Default::default(),
     });
     let targets = color_and_normals_and_motion_targets(pipelines);
+    let Some(shader) = mod_manager.resource_path("shaders/stars.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/stars.wgsl'");
+        return;
+    };
     gpu_timestamp!(encoder, profiler, "Stars", {
         let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
         //pass.draw_indexed_indirect()
         // Stars
         render_manager.render(
             &[],
-            shader_dir().join("stars.wgsl").as_path(),
+            shader,
             &PipelineOptions {
                 topology: PrimitiveTopology::TriangleStrip,
                 depth_stencil: sky_depth_stencil.clone(),
@@ -259,13 +288,16 @@ pub fn render_sky<'a>(
         pass.set_vertex_buffer(0, pipelines.resources.stars_meshes.vertex.slice(..));
         pass.draw(0..4, 0..STAR_COUNT);
     });
-
+    let Some(shader) = mod_manager.resource_path("shaders/sky.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/sky.wgsl'");
+        return;
+    };
     gpu_timestamp!(encoder, profiler, "Sky", {
         let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
         // Sky
         render_manager.render(
             &[],
-            shader_dir().join("sky.wgsl").as_path(),
+            shader,
             &PipelineOptions {
                 topology: Default::default(),
                 depth_stencil: sky_depth_stencil,
@@ -291,10 +323,14 @@ pub fn render_terrain<'a>(
     msaa_samples: u32,
     camera: &Camera,
     aspect: f32,
+    mod_manager: &ModManager,
 ) {
     let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
-    let keys = terrain_material_keys();
-    let shader_path = shader_dir().join("terrain.wgsl");
+    let keys = terrain_material_keys(mod_manager);
+    let Some(shader) = mod_manager.resource_path("shaders/terrain.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/terrain.wgsl'");
+        return;
+    };
     let shadow = make_shadow_option(settings, pipelines);
 
     let make_stencil = |write_mask: u32| -> DepthStencilState {
@@ -308,13 +344,13 @@ pub fn render_terrain<'a>(
             },
             stencil: StencilState {
                 front: StencilFaceState {
-                    compare: CompareFunction::Always,
+                    compare: Always,
                     fail_op: StencilOperation::Keep,
                     depth_fail_op: StencilOperation::Keep,
                     pass_op: StencilOperation::Replace,
                 },
                 back: StencilFaceState {
-                    compare: CompareFunction::Always,
+                    compare: Always,
                     fail_op: StencilOperation::Keep,
                     depth_fail_op: StencilOperation::Keep,
                     pass_op: StencilOperation::Replace,
@@ -331,7 +367,7 @@ pub fn render_terrain<'a>(
     pass.set_stencil_reference(1);
     render_manager.render(
         keys.as_slice(),
-        shader_path.as_path(),
+        shader,
         &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(make_stencil(0xFF)),
@@ -353,7 +389,7 @@ pub fn render_terrain<'a>(
     pass.set_stencil_reference(0);
     render_manager.render(
         keys.as_slice(),
-        shader_path.as_path(),
+        shader,
         &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(make_stencil(0)),
@@ -376,21 +412,25 @@ pub fn render_water<'a>(
     _settings: &Settings,
     config: &RenderPassConfig,
     msaa_samples: u32,
+    mod_manager: &ModManager,
 ) {
     let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
     let targets = color_and_normals_and_motion_targets(pipelines);
-
+    let Some(shader) = mod_manager.resource_path("shaders/water.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/water.wgsl'");
+        return;
+    };
     // Water
     pass.set_stencil_reference(1);
     render_manager.render(
         &[],
-        shader_dir().join("water.wgsl").as_path(),
+        shader,
         &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: Some(true),
-                depth_compare: Some(CompareFunction::Always),
+                depth_compare: Some(Always),
                 stencil: StencilState {
                     front: StencilFaceState {
                         compare: CompareFunction::Equal,
@@ -437,10 +477,14 @@ pub fn render_roads<'a>(
     settings: &Settings,
     config: &RenderPassConfig,
     msaa_samples: u32,
+    mod_manager: &ModManager,
 ) {
     let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
-    let keys = road_material_keys();
-    let shader_path = shader_dir().join("road.wgsl");
+    let keys = road_material_keys(mod_manager);
+    let Some(shader) = mod_manager.resource_path("shaders/road.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/road.wgsl'");
+        return;
+    };
     let shadow = make_shadow_option(settings, pipelines);
 
     fn road_bias(settings: &Settings, constant: i32, slope: f32) -> DepthBiasState {
@@ -460,7 +504,7 @@ pub fn render_roads<'a>(
     // Roads
     render_manager.render(
         keys.as_slice(),
-        shader_path.as_path(),
+        shader,
         &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(depth_stencil(base_bias, settings)),
@@ -493,7 +537,7 @@ pub fn render_roads<'a>(
     // Preview Roads
     render_manager.render(
         keys.as_slice(),
-        shader_path.as_path(),
+        shader,
         &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(DepthStencilState {
@@ -532,9 +576,13 @@ pub fn render_buildings<'a>(
     settings: &Settings,
     config: &RenderPassConfig,
     msaa_samples: u32,
+    mod_manager: &ModManager,
 ) {
     let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
-    let shader_path = shader_dir().join("buildings.wgsl");
+    let Some(shader) = mod_manager.resource_path("shaders/buildings.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/buildings.wgsl'");
+        return;
+    };
     let shadow = make_shadow_option(settings, pipelines);
 
     fn building_bias(settings: &Settings, constant: i32, slope: f32) -> DepthBiasState {
@@ -552,7 +600,7 @@ pub fn render_buildings<'a>(
     // Buildings
     render_manager.render(
         &[],
-        shader_path.as_path(),
+        shader,
         &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(depth_stencil(base_bias, settings)),
@@ -580,7 +628,7 @@ pub fn render_buildings<'a>(
         // Pass 1: always beats terrain, writes depth, stamps preview bit.
         render_manager.render(
             &[],
-            shader_path.as_path(),
+            shader,
             &PipelineOptions {
                 topology: TriangleList,
                 depth_stencil: Some(preview_establish_depth_stencil()),
@@ -602,7 +650,7 @@ pub fn render_buildings<'a>(
         // to pixels Pass 1 just touched.
         render_manager.render(
             &[],
-            shader_path.as_path(),
+            shader,
             &PipelineOptions {
                 topology: TriangleList,
                 depth_stencil: Some(preview_resolve_depth_stencil(settings)),
@@ -616,6 +664,7 @@ pub fn render_buildings<'a>(
             &[&pipelines.buffers.camera],
             pass,
         );
+        // I don't like drawing twice, ChatGPT...
         draw_preview_building(pass, terrain);
     }
 }
@@ -690,136 +739,146 @@ pub fn render_gizmo<'a>(
     camera: &Camera,
     device: &Device,
     queue: &Queue,
+    mod_manager: &ModManager,
+    ui: &mut UiRenderer,
 ) {
-    let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
-    let targets = color_and_normals_and_motion_targets(pipelines);
+    let batches = gizmo.collect_batches(camera);
 
-    let batches = gizmo.collect_batches(camera, pipelines, queue);
-    let (thin_count, thick_count, filled_count, text_count) =
-        gizmo.update_buffers(device, queue, &batches);
+    let (thin_count, thick_count, filled_count) = gizmo.update_buffers(device, queue, &batches);
+
     let Some(gb) = gizmo.gizmo_buffers.as_mut() else {
         gizmo.clear();
         return;
     };
-    // Render thin lines with LineList
-    if thin_count > 0 {
-        render_manager.render(
-            &[],
-            shader_dir().join("lines.wgsl").as_path(),
-            &PipelineOptions {
-                topology: PrimitiveTopology::LineList,
-                depth_stencil: Some(DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(CompareFunction::Always),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample_state: multisample_state(msaa_samples),
-                vertex_layouts: Vec::from([Some(ThinLineVtxRender::layout())]),
-                fragment: FragmentOption::Default {
-                    targets: targets.clone(),
-                },
-                ..Default::default()
-            },
-            &[&pipelines.buffers.camera],
-            pass,
-        );
-        pass.set_vertex_buffer(0, gb.thin_buffer.slice(..));
-        pass.draw(0..thin_count, 0..1);
-    }
 
-    // Render thick lines with TriangleList
-    if thick_count > 0 {
-        render_manager.render_with_textures(
-            &[],
-            shader_dir().join("thick_lines.wgsl").as_path(),
-            &PipelineOptions {
-                topology: TriangleList,
-                depth_stencil: Some(DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(Always),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample_state: multisample_state(msaa_samples),
-                vertex_layouts: Vec::from([Some(ThickLineVtxRender::layout())]),
-                fragment: FragmentOption::Default {
-                    targets: targets.clone(),
-                },
-                cull_mode: None,
-                ..Default::default()
-            },
-            &[&pipelines.buffers.camera],
-            pass,
-        );
-        pass.set_vertex_buffer(0, gb.thick_buffer.slice(..));
-        pass.draw(0..thick_count, 0..1);
-    }
+    {
+        let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
 
-    // Render filled areas with TriangleList
-    if filled_count > 0 {
-        render_manager.render_with_textures(
-            &[],
-            shader_dir().join("lines.wgsl").as_path(),
-            &PipelineOptions {
-                topology: TriangleList,
-                depth_stencil: Some(DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(Always),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample_state: multisample_state(msaa_samples),
-                vertex_layouts: Vec::from([Some(ThinLineVtxRender::layout())]),
-                fragment: FragmentOption::Default {
-                    targets: targets.clone(),
-                },
-                ..Default::default()
-            },
-            &[&pipelines.buffers.camera],
-            pass,
-        );
-        pass.set_vertex_buffer(0, gb.filled_buffer.slice(..));
-        pass.draw(0..filled_count, 0..1);
-    }
+        if thin_count > 0 {
+            let Some(shader) = mod_manager.resource_path("shaders/lines.wgsl") else {
+                error!("[Renderer] Missing shader 'shaders/lines.wgsl'");
+                return;
+            };
 
-    // Render text in 3D
-    if text_count > 0 {
-        render_manager.render_with_textures(
-            &[&pipelines.resolved.atlas],
-            shader_dir().join("text3d.wgsl").as_path(),
-            &PipelineOptions {
-                topology: TriangleList,
-                depth_stencil: Some(DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(CompareFunction::Always),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample_state: multisample_state(msaa_samples),
-                vertex_layouts: Vec::from([Some(TextVtxRender::layout())]),
-                fragment: FragmentOption::Default { targets },
-                sampler: SamplerDescriptor {
-                    label: Some("Text Sampler"),
-                    address_mode_u: AddressMode::ClampToEdge,
-                    address_mode_v: AddressMode::ClampToEdge,
-                    address_mode_w: AddressMode::ClampToEdge,
-                    mag_filter: FilterMode::Linear,
-                    min_filter: FilterMode::Linear,
-                    mipmap_filter: MipmapFilterMode::Nearest,
+            render_manager.render(
+                &[],
+                shader,
+                &PipelineOptions {
+                    topology: PrimitiveTopology::LineList,
+                    depth_stencil: Some(DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: Some(false),
+                        depth_compare: Some(Always),
+                        stencil: Default::default(),
+                        bias: Default::default(),
+                    }),
+                    multisample_state: multisample_state(msaa_samples),
+                    vertex_layouts: Vec::from([Some(ThinLineVtxRender::layout())]),
+                    fragment: FragmentOption::Default {
+                        targets: color_and_normals_and_motion_targets(pipelines),
+                    },
                     ..Default::default()
                 },
-                ..Default::default()
-            },
-            &[&pipelines.buffers.camera],
-            pass,
-        );
-        pass.set_vertex_buffer(0, gb.text_buffer.slice(..));
-        pass.draw(0..text_count, 0..1);
+                &[&pipelines.buffers.camera],
+                pass,
+            );
+
+            pass.set_vertex_buffer(0, gb.thin_buffer.slice(..));
+            pass.draw(0..thin_count, 0..1);
+        }
+
+        if thick_count > 0 {
+            let Some(shader) = mod_manager.resource_path("shaders/thick_lines.wgsl") else {
+                error!("[Renderer] Missing shader 'shaders/thick_lines.wgsl'");
+                return;
+            };
+
+            render_manager.render(
+                &[],
+                shader,
+                &PipelineOptions {
+                    topology: PrimitiveTopology::TriangleList,
+                    depth_stencil: Some(DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: Some(false),
+                        depth_compare: Some(Always),
+                        stencil: Default::default(),
+                        bias: Default::default(),
+                    }),
+                    multisample_state: multisample_state(msaa_samples),
+                    vertex_layouts: Vec::from([Some(ThickLineVtxRender::layout())]),
+                    fragment: FragmentOption::Default {
+                        targets: color_and_normals_and_motion_targets(pipelines),
+                    },
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                &[&pipelines.buffers.camera],
+                pass,
+            );
+
+            pass.set_vertex_buffer(0, gb.thick_buffer.slice(..));
+            pass.draw(0..thick_count, 0..1);
+        }
+
+        if filled_count > 0 {
+            let Some(shader) = mod_manager.resource_path("shaders/lines.wgsl") else {
+                error!("[Renderer] Missing shader 'shaders/lines.wgsl'");
+                return;
+            };
+
+            render_manager.render(
+                &[],
+                shader,
+                &PipelineOptions {
+                    topology: PrimitiveTopology::TriangleList,
+                    depth_stencil: Some(DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: Some(false),
+                        depth_compare: Some(Always),
+                        stencil: Default::default(),
+                        bias: Default::default(),
+                    }),
+                    multisample_state: multisample_state(msaa_samples),
+                    vertex_layouts: Vec::from([Some(ThinLineVtxRender::layout())]),
+                    fragment: FragmentOption::Default {
+                        targets: color_and_normals_and_motion_targets(pipelines),
+                    },
+                    ..Default::default()
+                },
+                &[&pipelines.buffers.camera],
+                pass,
+            );
+
+            pass.set_vertex_buffer(0, gb.filled_buffer.slice(..));
+            pass.draw(0..filled_count, 0..1);
+        }
+    }
+    let text_ready = gizmo.prepare_text(
+        camera,
+        device,
+        queue,
+        encoder,
+        &ui.viewport,
+        &mut ui.text_atlas,
+        &mut ui.font_system,
+        pipelines.config.width,
+        pipelines.config.height,
+    );
+    if text_ready {
+        let Some(gb) = gizmo.gizmo_buffers.as_mut() else {
+            gizmo.clear();
+            error!("[Renderer] Gizmo buffers is empty");
+            return;
+        };
+
+        let mut pass = create_gizmo_text_pass(encoder, pipelines, config, msaa_samples);
+        if let Err(error) = gb
+            .text_renderer
+            .render(&ui.text_atlas, &ui.viewport, &mut pass)
+        {
+            error!("Failed to render gizmo text: {}", error);
+        }
     }
 
     gizmo.clear();
@@ -835,17 +894,21 @@ pub fn render_cars<'a>(
     settings: &Settings,
     camera: &Camera,
     config: &RenderPassConfig,
+    mod_manager: &ModManager,
 ) {
     let pass = &mut create_world_pass(encoder, pipelines, config, settings.msaa_samples, false);
-    let keys = cars_material_keys();
-    let shader_path = shader_dir().join("car.wgsl");
+    let keys = cars_material_keys(mod_manager);
+    let Some(shader) = mod_manager.resource_path("shaders/car.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/car.wgsl'");
+        return;
+    };
     let shadow = make_shadow_option(settings, pipelines);
 
     let targets = color_and_normals_and_motion_targets(pipelines);
     // Cars
     render_manager.render(
         keys.as_slice(),
-        shader_path.as_path(),
+        shader,
         &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(depth_stencil(Default::default(), settings)),
@@ -871,12 +934,16 @@ pub fn render_instance_ids<'a>(
     camera: &'a Camera,
     props: &'a mut Props,
     terrain: &'a Terrain,
+    mod_manager: &ModManager,
 ) {
-    let shader_path = shader_dir().join("car_instance_id.wgsl");
+    let Some(shader) = mod_manager.resource_path("shaders/car_instance_id.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/car_instance_id.wgsl'");
+        return;
+    };
 
     render_manager.render(
-        cars_material_keys().as_slice(),
-        shader_path.as_path(),
+        cars_material_keys(mod_manager).as_slice(),
+        shader,
         &PipelineOptions {
             topology: TriangleList,
             depth_stencil: None,
@@ -897,7 +964,10 @@ pub fn render_instance_ids<'a>(
     );
 
     car_renderer.render_last(pass);
-    let shader_path = shader_dir().join("props_instance_id.wgsl");
+    let Some(shader) = mod_manager.resource_path("shaders/props_instance_id.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/props_instance_id.wgsl'");
+        return;
+    };
     let shadow = make_shadow_option(settings, pipelines);
     //let targets = color_and_normals_and_motion_targets(pipelines);
 
@@ -920,7 +990,7 @@ pub fn render_instance_ids<'a>(
     props.render(
         render_manager,
         pass,
-        shader_path,
+        shader,
         opts,
         camera,
         terrain,
@@ -940,9 +1010,13 @@ pub fn render_props<'a>(
     device: &Device,
     queue: &Queue,
     config: &RenderPassConfig,
+    mod_manager: &ModManager,
 ) {
     let pass = &mut create_world_pass(encoder, pipelines, config, settings.msaa_samples, false);
-    let shader_path = shader_dir().join("props.wgsl");
+    let Some(shader) = mod_manager.resource_path("shaders/props.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/props.wgsl'");
+        return;
+    };
     let shadow = make_shadow_option(settings, pipelines);
     let targets = color_and_normals_and_motion_targets(pipelines);
 
@@ -967,7 +1041,7 @@ pub fn render_props<'a>(
     props.render(
         render_manager,
         pass,
-        shader_path,
+        shader,
         opts,
         camera,
         terrain,

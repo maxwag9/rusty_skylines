@@ -20,13 +20,17 @@ use crate::world::buildings::lot_fitting::{
     fit_lot_to_neighbors, gather_closest_lot_point,
 };
 use crate::world::buildings::lot_layout::{LotFrame, LotPlan};
+use crate::world::buildings::utilities::utilities::UtilityUsage;
+use crate::world::buildings::utilities::utilities_network::{
+    EndpointType, UtilityEndpoint, UtilityNetwork,
+};
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::{Car, CarId, CarMode, CarStorage, SimTime};
 use crate::world::cars::car_subsystem::make_random_car;
 use crate::world::cars::parking::{ParkingSpotId, ParkingStorage};
 use crate::world::cars::partitions::Destination;
-use crate::world::roads::road_mesh_manager::{Edges, RoadEdgeStorage, RoadEdges, RoadMeshManager};
-use crate::world::roads::road_structs::{LaneId, SegmentId};
+use crate::world::roads::road_mesh_manager::{RoadEdgeStorage, RoadMeshManager};
+use crate::world::roads::road_structs::SegmentId;
 use crate::world::roads::road_subsystem::Roads;
 use crate::world::roads::roads::RoadStorage;
 use crate::world::statisticals::CityState;
@@ -281,6 +285,17 @@ impl District {
 
                     callback.occupancy_updates.push((building.id, building_occ));
                     callback.land_value_updates.push((lot_id, new_land_value));
+                    if let Some(segment_id) = lot.segment_id {
+                        let endpoint = UtilityEndpoint {
+                            endpoint_type: EndpointType::Building {
+                                building_id: building.id,
+                                segment_id,
+                            },
+                            utility_usages: current_level
+                                .utility_usages(&buildings.utilities, floor_area),
+                        };
+                        callback.utility_updates.push((building.id, endpoint));
+                    }
                     continue;
                 } else {
                     if let Some(zoning_type) = lot.zoning_type {
@@ -301,7 +316,7 @@ impl District {
                             continue;
                         }
 
-                        let building = generate_building(terrain, lot);
+                        let building = generate_building(terrain, lot, &buildings.utilities);
                         (lot.center.chunk, lot.zoning_type, building)
                     } else {
                         (lot.center.chunk, lot.zoning_type, None)
@@ -835,6 +850,7 @@ pub struct DistrictUpdateCallback {
     pub total_births: u32,
     pub total_deaths: u32,
     pub new_workers: Vec<(BuildingId, BuildingId)>,
+    pub utility_updates: Vec<(BuildingId, UtilityEndpoint)>,
 }
 impl DistrictUpdateCallback {
     pub fn new(district_id: DistrictId) -> Self {
@@ -844,76 +860,42 @@ impl DistrictUpdateCallback {
         }
     }
 }
-fn generate_building(terrain: &Terrain, lot: &Lot) -> Option<Building> {
+fn generate_building(
+    terrain: &Terrain,
+    lot: &Lot,
+    utility_network: &UtilityNetwork,
+) -> Option<Building> {
     let Some(zoning_type) = lot.zoning_type else {
         return None;
     };
 
-    let roof = match zoning_type {
-        ZoningType::Residential => RoofType::Triangle(30.0),
-        ZoningType::Commercial => RoofType::Flat,
-        ZoningType::Industrial => RoofType::Flat,
-        ZoningType::Office => RoofType::Flat,
-    };
-    let roof_material = match zoning_type {
-        ZoningType::Residential => RoofMaterial::Shingles,
-        ZoningType::Commercial => RoofMaterial::Metal,
-        ZoningType::Industrial => RoofMaterial::Metal,
-        ZoningType::Office => RoofMaterial::Shingles,
-    };
-    let wall_material = match zoning_type {
-        ZoningType::Residential => WallMaterial::Paint(Color([0.9f32, 0.9, 0.9, 1.0])),
-        ZoningType::Commercial => WallMaterial::Paint(Color([0.9f32, 0.9, 0.9, 1.0])),
-        ZoningType::Industrial => WallMaterial::Paint(Color([0.4f32, 0.4, 0.4, 1.0])),
-        ZoningType::Office => WallMaterial::Paint(Color([0.9f32, 0.9, 0.9, 1.0])),
-    };
     let story_height = match zoning_type {
         ZoningType::Residential => 2.7,
         ZoningType::Commercial => 3.0,
         ZoningType::Industrial => 4.0,
         ZoningType::Office => 3.0,
     };
+
     let num_stories = match zoning_type {
-        ZoningType::Residential => 2,
-        ZoningType::Commercial => 1,
-        ZoningType::Industrial => 2,
-        ZoningType::Office => 3,
+        ZoningType::Residential => [2, 3, 4, 5, 7, 10],
+        ZoningType::Commercial => [1, 2, 3, 5, 8, 12],
+        ZoningType::Industrial => [2, 2, 3, 4, 6, 8],
+        ZoningType::Office => [3, 4, 5, 7, 10, 15],
     };
-    let garage = match zoning_type {
-        ZoningType::Residential => Some(GarageParams {
-            story_height,
-            num_stories: 1,
-        }),
-        ZoningType::Commercial => None,
-        ZoningType::Industrial => None,
-        ZoningType::Office => None,
-    };
-    let miscellaneous = MiscBuildingParams {
-        window_material_accent: Default::default(),
-        solar_modules: false,
-        antenna: false,
-        usage: BuildingUsage::from_zoning_type(zoning_type),
-    };
-    let level0 = BuildingParams {
-        roof,
-        roof_material,
-        wall_material,
-        driveway_material: DrivewayMaterial::Bricks,
-        story_height,
-        num_stories,
-        basement: Default::default(),
-        garden: Default::default(),
-        garage,
-        miscellaneous: Default::default(),
-    };
-    let levels = RevisionedSmallVec(SmallVec::from_vec(vec![
-        level0,
-        BuildingParams::default(),
-        BuildingParams::default(),
-        BuildingParams::default(),
-        BuildingParams::default(),
-        BuildingParams::default(),
-    ]));
+
+    let levels = RevisionedSmallVec(SmallVec::from_vec(
+        (0..6)
+            .map(|level| {
+                make_building_parmas_for_level(
+                    level,
+                    zoning_type,
+                    story_height,
+                    num_stories,
+                    utility_network,
+                )
+            })
+            .collect(),
+    ));
 
     Some(Building {
         id: 631864891,
@@ -924,11 +906,76 @@ fn generate_building(terrain: &Terrain, lot: &Lot) -> Option<Building> {
         design_source: BuildingDesignSource::BuildingParams { levels },
         edit_id: None,
         prop_instance_ids: vec![],
+        utility_endpoint_id: None,
         occupancy: Default::default(),
         misc: Default::default(),
     })
 }
+fn make_building_parmas_for_level(
+    level: usize,
+    zoning_type: ZoningType,
+    story_height: f32,
+    num_stories: [u16; 6],
+    utility_network: &UtilityNetwork,
+) -> BuildingParams {
+    let roof = match zoning_type {
+        ZoningType::Residential if level >= 3 => RoofType::Flat,
+        ZoningType::Residential => RoofType::Triangle(30.0),
+        ZoningType::Commercial => RoofType::Flat,
+        ZoningType::Industrial => RoofType::Flat,
+        ZoningType::Office => RoofType::Flat,
+    };
 
+    let roof_material = match zoning_type {
+        ZoningType::Residential => RoofMaterial::Shingles,
+        ZoningType::Commercial => RoofMaterial::Metal,
+        ZoningType::Industrial => RoofMaterial::Metal,
+        ZoningType::Office => RoofMaterial::Shingles,
+    };
+
+    let wall_material = match zoning_type {
+        ZoningType::Residential => WallMaterial::Paint(Color([0.9f32, 0.9, 0.9, 1.0])),
+        ZoningType::Commercial => WallMaterial::Paint(Color([0.9f32, 0.9, 0.9, 1.0])),
+        ZoningType::Industrial => WallMaterial::Paint(Color([0.4f32, 0.4, 0.4, 1.0])),
+        ZoningType::Office => WallMaterial::Paint(Color([0.9f32, 0.9, 0.9, 1.0])),
+    };
+
+    let garage = match zoning_type {
+        ZoningType::Residential if level <= 2 => Some(GarageParams {
+            story_height,
+            num_stories: 1,
+        }),
+        _ => None,
+    };
+
+    let miscellaneous = MiscBuildingParams {
+        window_material_accent: Default::default(),
+        solar_modules: level >= 3,
+        antenna: level >= 2,
+        usage: BuildingUsage::from_zoning_type(zoning_type),
+    };
+
+    let utilities: HashMap<String, UtilityUsage> = utility_network
+        .utilities
+        .iter()
+        .map(|util| (util.name.clone(), util.automatic_buildings_usage))
+        .collect();
+
+    BuildingParams {
+        roof,
+        roof_material,
+        wall_material,
+        driveway_material: DrivewayMaterial::Bricks,
+        story_height,
+        num_stories: num_stories[level],
+        basement: Default::default(),
+        garden: Default::default(),
+        garage,
+        miscellaneous,
+        utilities,
+        utilities_scale_per_square_meter: true,
+    }
+}
 #[derive(Clone, Default)]
 struct ZoningState {
     pub district_id: DistrictId,
@@ -1215,6 +1262,18 @@ impl Zoning {
                     building.occupancy = occ;
                 }
             }
+            for (building_id, endpoint) in callback.utility_updates {
+                if let Some(building) = buildings.storage.get_mut(building_id) {
+                    if let Some(utility_endpoint_id) = building.utility_endpoint_id {
+                        buildings
+                            .utilities
+                            .update_endpoint(utility_endpoint_id, endpoint);
+                    } else {
+                        building.utility_endpoint_id =
+                            Some(buildings.utilities.add_endpoint(endpoint));
+                    }
+                }
+            }
 
             for (building_id, groups) in callback.building_demography_updates {
                 if let Some(building) = buildings.storage.get_mut(building_id) {
@@ -1357,11 +1416,11 @@ impl Zoning {
                         gizmo.text(
                             "Not enough Workers!",
                             pos,
-                            3.0,
+                            1.0,
                             [1.0, 0.0, 0.0, 1.0],
                             None,
                             false,
-                            0.0,
+                            2.0,
                             1.0,
                         );
                     }
@@ -1369,11 +1428,11 @@ impl Zoning {
                         gizmo.text(
                             "Not enough Customers!",
                             pos,
-                            3.0,
+                            1.0,
                             [1.0, 0.0, 0.0, 1.0],
                             None,
                             false,
-                            0.0,
+                            2.0,
                             1.0,
                         );
                     }
@@ -1381,11 +1440,11 @@ impl Zoning {
                         gizmo.text(
                             "Not enough Jobs!",
                             pos,
-                            3.0,
+                            1.0,
                             [1.0, 0.0, 0.0, 1.0],
                             None,
                             false,
-                            0.0,
+                            2.0,
                             1.0,
                         );
                     }
@@ -2334,7 +2393,7 @@ impl Lot {
         let frame = LotFrame::from_lot(self);
         let plan = LotPlan::generate(&frame, &mut rng);
 
-        let mut tiles = plan.rasterize(self);
+        let tiles = plan.rasterize(self);
         let driveway_entrances = plan.driveway_entrances(&frame);
         let parking_spots = plan.generate_parking(self, &frame, &tiles, parking_storage);
 

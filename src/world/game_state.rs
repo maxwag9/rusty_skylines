@@ -1,4 +1,5 @@
 use crate::data::Settings;
+use crate::helpers::modpack::ModManager;
 use crate::helpers::paths::saves_dir;
 use crate::helpers::positions::{ChunkSize, WorldPos, chunk_size, set_chunk_size};
 use crate::renderer::props::{Props, SavedProps};
@@ -242,11 +243,13 @@ pub struct NewSavePackage {
 #[derive(Default)]
 pub struct GameState {
     pub current_save_info: Option<SaveInfo>,
+    pub mod_manager: ModManager,
 }
 impl GameState {
     pub fn new() -> Self {
         Self {
             current_save_info: None,
+            mod_manager: ModManager::new(),
         }
     }
 
@@ -372,7 +375,7 @@ impl GameState {
             Err(e) => return LoadResult::PathError(e.to_string()),
         }
 
-        load_save.load(world, props);
+        load_save.load(world, props, &self.mod_manager);
 
         let success = LoadResult::Success(detected_version);
         self.current_save_info = Some(SaveInfo {
@@ -476,7 +479,7 @@ impl GameState {
         }
         if and_exit {
             self.current_save_info = None;
-            world.recreate(settings, props);
+            world.recreate(settings, props, &self.mod_manager);
         }
         // If exiting the save after saving, set to false, if not exiting after saving, then set to true, because The player is inside the save of course!
         SaveResult::Success
@@ -554,7 +557,7 @@ impl SaveState {
             ..Default::default()
         }
     }
-    pub fn load(&mut self, world: &mut World, props: &mut Props) {
+    pub fn load(&mut self, world: &mut World, props: &mut Props, mod_manager: &ModManager) {
         if self.chunk_size == 0 {
             self.chunk_size = default_chunk_size();
         }
@@ -579,7 +582,7 @@ impl SaveState {
 
         roads.road_manager.roads = mem::take(&mut self.roads);
 
-        props.load_props(mem::take(&mut self.props));
+        props.load_props(mem::take(&mut self.props), mod_manager);
 
         zoning.zoning_storage = mem::take(&mut self.zones);
         buildings.storage = mem::take(&mut self.buildings);

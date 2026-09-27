@@ -1,5 +1,6 @@
 use crate::commands::CommandBuffer;
 use crate::data::Settings;
+use crate::helpers::modpack::ModManager;
 use crate::renderer::props::Props;
 use crate::resources::Time;
 use crate::ui::input::Input;
@@ -28,7 +29,13 @@ pub struct World {
 }
 
 impl World {
-    pub fn new(device: &Device, queue: &Queue, settings: &Settings, props: &Props) -> Self {
+    pub fn new(
+        device: &Device,
+        queue: &Queue,
+        settings: &Settings,
+        props: &Props,
+        mod_manager: &ModManager,
+    ) -> Self {
         let world_state = WorldState::new();
         let terrain = Terrain::new(device, queue, settings, props);
         Self {
@@ -38,19 +45,20 @@ impl World {
             terrain,
             roads: Roads::new(),
             cars: Cars::new(),
-            buildings: Buildings::new(),
+            buildings: Buildings::new(mod_manager),
             zoning: Zoning::new(),
             events: CommandBuffer::new(),
             city_state: CityState::new(),
-            sounds: Sounds::new(),
+            sounds: Sounds::new(mod_manager),
         }
     }
-    pub fn recreate(&mut self, settings: &Settings, props: &Props) {
+    pub fn recreate(&mut self, settings: &Settings, props: &Props, mod_manager: &ModManager) {
         *self = World::new(
             &self.terrain.device.clone(),
             &self.terrain.queue.clone(),
             settings,
             props,
+            mod_manager,
         )
     }
 }

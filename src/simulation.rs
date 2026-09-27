@@ -143,6 +143,7 @@ impl Simulation {
         world
             .city_state
             .update(&world.time, &mut world.zoning, &world.buildings);
+        world.buildings.utilities.check_network(&mut world.roads);
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::data::Settings;
-use crate::helpers::paths::shader_dir;
+use crate::helpers::modpack::ModManager;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::render_passes::{draw_visible_buildings, draw_visible_roads};
@@ -435,14 +435,16 @@ pub fn render_roads_shadows(
     settings: &Settings,
     shadow_mat_buffer: &Buffer,
     cascade_idx: usize,
+    mod_manager: &ModManager,
 ) {
     let bias = shadow_bias_for_cascade(
         cascade_idx,
         pipelines.resources.csm_shadows.texels[cascade_idx],
         settings.reversed_depth_z,
     );
-
-    let shader = shader_dir().join("shadows.wgsl");
+    let Some(shader) = mod_manager.shader_path("shadows.wgsl") else {
+        return;
+    };
     let opts = shadow_pipeline_options(
         settings,
         bias,
@@ -453,7 +455,7 @@ pub fn render_roads_shadows(
 
     render_manager.render(
         &[],
-        shader.as_path(),
+        shader,
         &opts,
         &[&pipelines.buffers.camera, shadow_mat_buffer],
         pass,
@@ -478,7 +480,7 @@ pub fn render_roads_shadows(
 
         render_manager.render(
             &[],
-            shader.as_path(),
+            shader,
             &opts2,
             &[&pipelines.buffers.camera, shadow_mat_buffer],
             pass,
@@ -499,14 +501,16 @@ pub fn render_buildings_shadows(
     settings: &Settings,
     shadow_mat_buffer: &Buffer,
     cascade_idx: usize,
+    mod_manager: &ModManager,
 ) {
     let bias = shadow_bias_for_cascade(
         cascade_idx,
         pipelines.resources.csm_shadows.texels[cascade_idx],
         settings.reversed_depth_z,
     );
-
-    let shader = shader_dir().join("shadows.wgsl");
+    let Some(shader) = mod_manager.shader_path("shadows.wgsl") else {
+        return;
+    };
     let opts = shadow_pipeline_options(
         settings,
         bias,
@@ -518,7 +522,7 @@ pub fn render_buildings_shadows(
     // Buildings
     render_manager.render(
         &[],
-        shader.as_path(),
+        shader,
         &opts,
         &[&pipelines.buffers.camera, shadow_mat_buffer],
         pass,
@@ -537,6 +541,7 @@ pub fn render_terrain_shadows(
     aspect: f32,
     shadow_mat_buffer: &Buffer,
     cascade_idx: usize,
+    mod_manager: &ModManager,
 ) {
     let bias = shadow_bias_for_cascade(
         cascade_idx,
@@ -544,7 +549,9 @@ pub fn render_terrain_shadows(
         settings.reversed_depth_z,
     );
 
-    let shader = shader_dir().join("shadows.wgsl");
+    let Some(shader) = mod_manager.shader_path("shadows.wgsl") else {
+        return;
+    };
     let opts = shadow_pipeline_options(
         settings,
         bias,
@@ -555,7 +562,7 @@ pub fn render_terrain_shadows(
 
     render_manager.render(
         &[],
-        shader.as_path(),
+        shader,
         &opts,
         &[&pipelines.buffers.camera, shadow_mat_buffer],
         pass,
@@ -574,14 +581,16 @@ pub fn render_cars_shadows(
     camera: &Camera,
     shadow_mat_buffer: &Buffer,
     cascade_idx: usize,
+    mod_manager: &ModManager,
 ) {
     let bias = shadow_bias_for_cascade(
         cascade_idx,
         pipelines.resources.csm_shadows.texels[cascade_idx],
         settings.reversed_depth_z,
     );
-
-    let shader = shader_dir().join("car_shadows.wgsl");
+    let Some(shader) = mod_manager.shader_path("car_shadows.wgsl") else {
+        return;
+    };
     let opts = shadow_pipeline_options(
         settings,
         bias,
@@ -590,7 +599,7 @@ pub fn render_cars_shadows(
         FragmentOption::None,
     );
 
-    render_manager.render(&[], shader.as_path(), &opts, &[shadow_mat_buffer], pass);
+    render_manager.render(&[], shader, &opts, &[shadow_mat_buffer], pass);
 
     car_renderer.render(pipelines, rt_subsystem, car_storage, camera, pass)
 }

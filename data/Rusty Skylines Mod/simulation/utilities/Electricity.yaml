@@ -1,0 +1,9 @@
+name: Electricity
+primary_unit: kWh
+secondary_unit: V
+amount_per_rail: 500
+rail_color: [ 0.7, 1.0, 0.128, 1.0 ]
+second_rail_color: [ 0.93, 0.6, 0.228, 1.0 ]
+automatic_buildings_usage:
+  consumption: 1
+  production: 0

@@ -44,27 +44,26 @@ fn find_data_root() -> PathBuf {
 }
 
 fn rusty_skylines_root() -> PathBuf {
-    // Prefer portable folder if it exists
     let portable = exe_dir().join("RustySkylines");
     if portable.exists() {
         return portable;
     }
 
-    // If not portable, then Documents folder on systems that have it
     let base = dirs::document_dir()
-        .or_else(dirs::data_local_dir) // if documents doesn't exist, then appdata/local or user/.local/share on Linux. Inconvenient path, I know it from Minecraft Roaming! Annoying! So I chose documents instead!
+        .or_else(dirs::data_local_dir)
         .expect("Failed to get documents or local data directory");
 
     let dir = base.join("RustySkylines");
-
     if let Err(e) = fs::create_dir_all(&dir) {
         eprintln!("[data_path] Failed to create app dir: {}", e);
     }
-
     dir
 }
 
-/// Cache the data root to avoid repeated filesystem checks
+fn mods_root_impl() -> PathBuf {
+    rusty_skylines_root().join("mods")
+}
+
 fn data_root() -> &'static PathBuf {
     use std::sync::OnceLock;
     static DATA_ROOT: OnceLock<PathBuf> = OnceLock::new();
@@ -74,60 +73,25 @@ fn data_root() -> &'static PathBuf {
 pub fn data_dir(path: impl AsRef<Path>) -> PathBuf {
     data_root().join(path.as_ref())
 }
+
 pub fn rusty_skylines_dir(path: impl AsRef<Path>) -> PathBuf {
     rusty_skylines_root().join(path.as_ref())
 }
-pub fn shader_dir() -> PathBuf {
-    let dir = data_dir("shaders");
-    if let Err(e) = fs::create_dir_all(&dir) {
-        eprintln!("[data_path] Failed to create shader dir: {}", e);
-    }
-    dir
+
+pub fn mods_root() -> PathBuf {
+    mods_root_impl()
 }
 
-pub fn texture_shaders_dir() -> PathBuf {
-    let dir = shader_dir().join("textures");
-    if let Err(e) = fs::create_dir_all(&dir) {
-        eprintln!("[data_path] Failed to create texture shaders dir: {}", e);
-    }
-    dir
-}
-pub fn textures_dir() -> PathBuf {
-    let dir = data_dir("textures");
-    if let Err(e) = fs::create_dir_all(&dir) {
-        eprintln!("[data_path] Failed to create texture dir: {}", e);
-    }
-    dir
-}
-pub fn simulation_dir() -> PathBuf {
-    let dir = data_dir("simulation");
-    if let Err(e) = fs::create_dir_all(&dir) {
-        eprintln!("[data_path] Failed to create simulation dir: {}", e);
-    }
-    dir
+pub fn mods_dir() -> PathBuf {
+    mods_root()
 }
 
-pub fn buildings_dir() -> PathBuf {
-    let dir = simulation_dir().join("buildings");
-    if let Err(e) = fs::create_dir_all(&dir) {
-        eprintln!("[data_path] Failed to create buildings dir: {}", e);
-    }
-    dir
+pub fn mods_config_path() -> PathBuf {
+    mods_root().join("mods.toml")
 }
 
-pub fn sounds_dir() -> PathBuf {
-    let dir = data_dir("sounds");
-    if let Err(e) = fs::create_dir_all(&dir) {
-        eprintln!("[data_path] Failed to create sounds dir: {}", e);
-    }
-    dir
-}
-pub fn compute_shader_dir() -> PathBuf {
-    let dir = shader_dir().join("compute");
-    if let Err(e) = fs::create_dir_all(&dir) {
-        eprintln!("[data_path] Failed to create compute shader dir: {}", e);
-    }
-    dir
+pub fn user_mod_cache_dir() -> PathBuf {
+    mods_root().join(".mod_cache")
 }
 
 pub fn saves_dir() -> PathBuf {
@@ -145,20 +109,17 @@ pub fn screenshots_dir() -> PathBuf {
     }
     dir
 }
+
 pub fn next_screenshot_path() -> PathBuf {
     let dir = screenshots_dir();
-
     let now = chrono::Local::now();
-    let base = now.format("RS_%Y-%m-%d_%H.%M.%S").to_string(); // "RS_2026-10-13_13.56.03"
-
-    // Try without suffix first
+    let base = now.format("RS_%Y-%m-%d_%H.%M.%S").to_string();
     let path = dir.join(format!("{}.png", base));
 
     if !path.exists() {
         return path;
     }
 
-    // If exists, append _2, _3, ...
     for i in 2..69 {
         let candidate = dir.join(format!("{}_{}.png", base, i));
         if !candidate.exists() {
