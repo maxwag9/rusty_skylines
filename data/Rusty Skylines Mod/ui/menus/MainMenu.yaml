@@ -89,12 +89,12 @@ layers:
 
         editing_tool: false
       - !Advanced
-        name: pingpong_button
+        name: minigames_button
         ap_name: button
         ap_vars:
           - "str:Minigames!"
           - "50"
-          - "str:on:r close_all_menus; open_menu(str:MiniGames); call(rust:play_sound, PixelQue5stTheme)"
+          - "str:on:r close_all_menus; open_menu(str:MiniGames); call(rust:play_sound, PixelQuestTheme)"
         x: 960
         y: 640
         scale: 1.0

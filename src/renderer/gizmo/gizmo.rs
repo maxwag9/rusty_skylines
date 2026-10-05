@@ -5,12 +5,12 @@ use crate::helpers::hsv::{HSV, depth_to_color, hsv_to_rgb};
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 
 use crate::helpers::stupid_color_from_rgba;
-use crate::renderer::pipelines::{COLOR_FORMAT, Pipelines};
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::ray_tracing::structs::{Aabb, Blas, BvhNode, Tlas};
-use crate::renderer::ui_pipelines::UI_DEPTH_FORMAT;
 use crate::ui::ui_editor::Ui;
-use crate::ui::vertex::{LineVtxWorld, TextVtxRender, ThickLineVtxRender, ThinLineVtxRender};
+use crate::ui::vertex::{
+    FlowingThickLineVtxRender, LineVtxWorld, TextVtxRender, ThickLineVtxRender, ThinLineVtxRender,
+};
 use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::{Zoning, ZoningStorage, point_in_polygon_xz};
 use crate::world::camera::{Camera, CameraMode};
@@ -22,20 +22,19 @@ use crate::world::roads::road_structs::SnapPreview;
 use crate::world::roads::roads::{RoadManager, RoadStorage};
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec3;
-use sluggrs_skylines::cosmic_text::{Attrs, Family, Metrics, Shaping, Wrap};
+use sluggrs_skylines::cosmic_text::{Attrs, Family, Metrics, Shaping};
 use sluggrs_skylines::{
-    Cache, FontSystem, Resolution, TextArea, TextAtlas, TextBounds, TextDecoration, TextRenderer,
-    Viewport, cosmic_text,
+    FontSystem, TextArea, TextAtlas, TextBounds, TextDecoration, TextRenderer, Viewport,
+    cosmic_text,
 };
-use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::mem;
 use std::sync::{Mutex, OnceLock};
 use tracing::error;
 use wgpu::{
-    Buffer, BufferDescriptor, BufferUsages, CommandEncoder, DepthStencilState, Device,
-    MultisampleState, Queue, SurfaceConfiguration,
+    Buffer, BufferDescriptor, BufferUsages, CommandEncoder, Device, MultisampleState, Queue,
+    SurfaceConfiguration,
 };
 
 static PENDING_GIZMO_RENDERS: OnceLock<Mutex<Vec<PendingGizmoRender>>> = OnceLock::new();
@@ -64,7 +63,16 @@ pub struct PendingGizmoRender {
     pub start_time: f64,
     pub filled: bool,
 }
-
+pub struct PendingFlowing {
+    pub segs: Vec<(WorldPos, WorldPos, f32, f32)>, // (start, end, start_dist, end_dist)
+    pub color_a: [f32; 4],
+    pub color_b: [f32; 4],
+    pub band_length: f32,
+    pub pattern_length: f32,
+    pub thickness: f32,
+    pub duration: f32,
+    pub start_time: f64,
+}
 pub struct PendingGizmoTextRender {
     pub buffer: cosmic_text::Buffer,
     pub center: WorldPos,
@@ -78,10 +86,12 @@ pub struct GizmoBuffers {
     pub thin_buffer: Buffer,
     pub thick_buffer: Buffer,
     pub filled_buffer: Buffer,
+    pub flowing_buffer: Buffer,
     pub text_renderer: TextRenderer,
 }
 pub struct Gizmo {
     pub pending_renders: Vec<PendingGizmoRender>,
+    pub pending_flowing: Vec<PendingFlowing>,
     pub gizmo_buffers: Option<GizmoBuffers>,
     total_game_time: f64,
 }
@@ -91,6 +101,7 @@ pub struct GizmoBatches {
     pub thin_vertices: Vec<ThinLineVtxRender>,
     pub thick_vertices: Vec<ThickLineVtxRender>,
     pub filled_vertices: Vec<ThinLineVtxRender>,
+    pub flowing_vertices: Vec<FlowingThickLineVtxRender>,
 }
 impl Gizmo {
     pub fn new(
@@ -131,16 +142,24 @@ impl Gizmo {
             },
             None,
         );
+        let flowing_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Gizmo Flowing Instance VB"),
+            size: (size_of::<FlowingThickLineVtxRender>() * 2048) as u64,
+            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         let gizmo_buffers = Some(GizmoBuffers {
             thin_buffer,
             thick_buffer,
             filled_buffer,
+            flowing_buffer,
             text_renderer,
         });
 
         Self {
             pending_renders: Vec::new(),
+            pending_flowing: vec![],
             gizmo_buffers,
             total_game_time: 0.0,
         }
@@ -148,6 +167,7 @@ impl Gizmo {
     pub fn new_empty() -> Self {
         Self {
             pending_renders: Vec::new(),
+            pending_flowing: vec![],
             gizmo_buffers: None,
             total_game_time: 0.0,
         }
@@ -155,6 +175,8 @@ impl Gizmo {
     pub fn clear(&mut self) {
         let now = self.total_game_time;
         self.pending_renders
+            .retain(|g| now - g.start_time < g.duration as f64);
+        self.pending_flowing
             .retain(|g| now - g.start_time < g.duration as f64);
     }
     pub fn update_msaa(&mut self, msaa_samples: u32, device: &Device, text_atlas: &mut TextAtlas) {
@@ -177,13 +199,14 @@ impl Gizmo {
         device: &Device,
         queue: &Queue,
         batches: &GizmoBatches,
-    ) -> (u32, u32, u32) {
+    ) -> (u32, u32, u32, u32) {
         let thin_count = batches.thin_vertices.len() as u32;
         let thick_count = batches.thick_vertices.len() as u32;
         let filled_count = batches.filled_vertices.len() as u32;
+        let flowing_count = batches.flowing_vertices.len() as u32;
 
         let Some(gb) = self.gizmo_buffers.as_mut() else {
-            return (0, 0, 0);
+            return (0, 0, 0, 0);
         };
 
         if thin_count > 0 {
@@ -194,7 +217,7 @@ impl Gizmo {
 
                 if new_size > device.limits().max_buffer_size {
                     error!("Gizmo Thin Buffer tried to become larger than the max_buffer_size");
-                    return (0, 0, 0);
+                    return (0, 0, 0, 0);
                 }
 
                 gb.thin_buffer = device.create_buffer(&BufferDescriptor {
@@ -220,7 +243,7 @@ impl Gizmo {
 
                 if new_size > device.limits().max_buffer_size {
                     error!("Gizmo Thick Buffer tried to become larger than the max_buffer_size");
-                    return (0, 0, 0);
+                    return (0, 0, 0, 0);
                 }
 
                 gb.thick_buffer = device.create_buffer(&BufferDescriptor {
@@ -246,7 +269,7 @@ impl Gizmo {
 
                 if new_size > device.limits().max_buffer_size {
                     error!("Gizmo Filled Buffer tried to become larger than the max_buffer_size");
-                    return (0, 0, 0);
+                    return (0, 0, 0, 0);
                 }
 
                 gb.filled_buffer = device.create_buffer(&BufferDescriptor {
@@ -263,8 +286,34 @@ impl Gizmo {
                 bytemuck::cast_slice(&batches.filled_vertices),
             );
         }
+        if flowing_count > 0 {
+            let byte_size =
+                (batches.flowing_vertices.len() * size_of::<FlowingThickLineVtxRender>()) as u64;
 
-        (thin_count, thick_count, filled_count)
+            if byte_size > gb.flowing_buffer.size() {
+                let new_size = (gb.flowing_buffer.size() * 2).max(byte_size);
+
+                if new_size > device.limits().max_buffer_size {
+                    error!("Gizmo Flowing Buffer tried to become larger than the max_buffer_size");
+                    return (0, 0, 0, 0);
+                }
+
+                gb.flowing_buffer = device.create_buffer(&BufferDescriptor {
+                    label: Some("Gizmo Flowing Instance VB"),
+                    size: new_size,
+                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+
+            queue.write_buffer(
+                &gb.flowing_buffer,
+                0,
+                bytemuck::cast_slice(&batches.flowing_vertices),
+            );
+        }
+
+        (thin_count, thick_count, filled_count, flowing_count)
     }
 
     pub fn visualize_utilities(
@@ -326,15 +375,7 @@ impl Gizmo {
                     } else {
                         (utility.second_rail_color, utility.rail_color)
                     };
-                    self.polyline_flowing(
-                        points.as_slice(),
-                        a_color,
-                        b_color,
-                        0.0,
-                        false,
-                        0.5,
-                        0.0,
-                    );
+                    self.polyline_flowing(points.as_slice(), a_color, b_color, false, 0.3, 0.0);
 
                     rail_index += 1;
                 }
@@ -1137,12 +1178,11 @@ impl Gizmo {
         points: &[WorldPos],
         color_a: [f32; 4],
         color_b: [f32; 4],
-        arrow_spacing: f32,
         closed: bool,
         thickness: f32,
         duration: f32,
     ) {
-        if points.len() < 2 {
+        if points.len() < 2 || thickness <= 0.0 {
             return;
         }
 
@@ -1151,9 +1191,7 @@ impl Gizmo {
         } else {
             points.len() - 1
         };
-
         let mut lengths = vec![0.0f32];
-
         for i in 0..seg_count {
             let a = points[i];
             let b = if i + 1 < points.len() {
@@ -1161,13 +1199,9 @@ impl Gizmo {
             } else {
                 points[0]
             };
-
-            let d = b.to_relative_pos(a).length();
-            lengths.push(lengths.last().unwrap() + d);
+            lengths.push(lengths.last().unwrap() + b.to_relative_pos(a).length());
         }
-
         let total_len = *lengths.last().unwrap();
-
         if total_len < 0.001 {
             return;
         }
@@ -1176,108 +1210,34 @@ impl Gizmo {
         let band_length = average_section_len.max(0.05);
         let pattern_length = band_length * 2.0;
 
-        let flow_speed = -7.0;
-        let phase = self.total_game_time as f32 * flow_speed;
-
-        let sample_at = |t: f32| -> (WorldPos, Vec3) {
-            let mut i = 1;
-
-            while i < lengths.len() && lengths[i] < t {
-                i += 1;
-            }
-
-            let i0 = i - 1;
-            let i1 = i.min(seg_count);
-
-            let a = points[i0];
-            let b = if i1 < points.len() {
-                points[i1]
+        // We push a special PendingGizmoRender that the collect path will recognise
+        // as flowing.  vertices is left empty; we store the real data in a side channel.
+        // (Alternative: add a new variant to PendingGizmoRender – both work.)
+        let mut segs = Vec::with_capacity(seg_count);
+        for i in 0..seg_count {
+            let a = points[i];
+            let b = if i + 1 < points.len() {
+                points[i + 1]
             } else {
                 points[0]
             };
-
-            let seg_t = if lengths[i1] > lengths[i0] {
-                (t - lengths[i0]) / (lengths[i1] - lengths[i0])
-            } else {
-                0.0
-            };
-
-            let pos = a.lerp(b, seg_t as f64);
-            let dir = b.to_relative_pos(a).normalize_or_zero();
-
-            (pos, dir)
-        };
-
-        let sample_step = (band_length * 0.15).max(0.1);
-        let sample_count = (total_len / sample_step).ceil() as usize;
-
-        let mut verts = Vec::with_capacity(sample_count * 2 + 64);
-
-        let color_at = |distance: f32| -> [f32; 4] {
-            let p = (distance + phase).rem_euclid(pattern_length);
-            let color_index = (p / band_length).floor() as i32;
-
-            if color_index & 1 == 0 {
-                color_a
-            } else {
-                color_b
-            }
-        };
-
-        let mut previous_distance = 0.0;
-        let mut previous_pos = sample_at(0.0).0;
-
-        for i in 1..=sample_count {
-            let distance = (i as f32 * sample_step).min(total_len);
-            let pos = sample_at(distance).0;
-
-            let color = color_at((previous_distance + distance) * 0.5);
-
-            verts.push(LineVtxWorld::new(previous_pos, color));
-            verts.push(LineVtxWorld::new(pos, color));
-
-            previous_distance = distance;
-            previous_pos = pos;
-
-            if distance >= total_len {
-                break;
-            }
+            segs.push((a, b, lengths[i], lengths[i + 1]));
         }
 
-        let time = self.total_game_time as f32;
-        let head_len = 0.30;
-        let head_width = 0.25;
-        let spin_speed = 1.0;
+        // Store in a new pending type or just push into a dedicated vec on Gizmo.
+        // For minimal disruption we push a marker render and keep the segs elsewhere,
+        // but the clean way is a new PendingFlowingRender.  Here is the practical version:
 
-        if arrow_spacing > 0.0 {
-            let mut t = arrow_spacing;
-            let mut idx = 0;
-
-            while t < total_len {
-                let (pos, dir) = sample_at(t);
-
-                if dir.length_squared() >= 0.0001 {
-                    let color = flap_color(color_at(t));
-
-                    let (side, up_perp) = build_frame(dir);
-                    let angle = time * spin_speed + idx as f32 * 1.7;
-                    let rot = rotate_frame(side, up_perp, angle);
-                    let back = pos.add_vec3(-dir * head_len);
-
-                    verts.push(LineVtxWorld::new(pos, color));
-                    verts.push(LineVtxWorld::new(back.add_vec3(rot * head_width), color));
-
-                    verts.push(LineVtxWorld::new(pos, color));
-                    verts.push(LineVtxWorld::new(back.add_vec3(-rot * head_width), color));
-
-                    idx += 1;
-                }
-
-                t += arrow_spacing;
-            }
-        }
-
-        self.push(verts, thickness, duration, false);
+        self.pending_flowing.push(PendingFlowing {
+            segs,
+            color_a,
+            color_b,
+            band_length,
+            pattern_length,
+            thickness,
+            duration,
+            start_time: self.total_game_time,
+        });
     }
     /// Polyline from an anchor WorldPos and relative Vec3 offsets.
     /// Useful when you have data in local/relative coordinates.
@@ -2138,6 +2098,29 @@ impl Gizmo {
                 batches
                     .thin_vertices
                     .extend(render.vertices.iter().map(|v| v.to_render(eye)));
+            }
+        }
+
+        for flow in &self.pending_flowing {
+            if self.total_game_time - flow.start_time > flow.duration as f64 {
+                continue;
+            }
+
+            for &(a, b, d0, d1) in &flow.segs {
+                let start = a.to_relative_pos(eye);
+                let end = b.to_relative_pos(eye);
+
+                batches.flowing_vertices.push(FlowingThickLineVtxRender {
+                    start: start.to_array(),
+                    end: end.to_array(),
+                    thickness: flow.thickness,
+                    start_dist: d0,
+                    end_dist: d1,
+                    color_a: flow.color_a,
+                    color_b: flow.color_b,
+                    pattern_len: flow.pattern_length,
+                    band_len: flow.band_length,
+                });
             }
         }
 

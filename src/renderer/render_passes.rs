@@ -10,7 +10,9 @@ use crate::renderer::render_core::{create_color_attachment_clear, create_color_a
 use crate::renderer::textures::material_keys::*;
 use crate::renderer::ui::UiRenderer;
 use crate::renderer::ui_pipelines::multisample_state;
-use crate::ui::vertex::{TextVtxRender, ThickLineVtxRender, ThinLineVtxRender, Vertex};
+use crate::ui::vertex::{
+    FlowingThickLineVtxRender, TextVtxRender, ThickLineVtxRender, ThinLineVtxRender, Vertex,
+};
 use crate::world::buildings::building_mesher::BuildingVertex;
 use crate::world::buildings::building_renderer::BuildingRenderer;
 use crate::world::buildings::buildings::Buildings;
@@ -744,10 +746,10 @@ pub fn render_gizmo<'a>(
 ) {
     let batches = gizmo.collect_batches(camera);
 
-    let (thin_count, thick_count, filled_count) = gizmo.update_buffers(device, queue, &batches);
+    let (thin_count, thick_count, filled_count, flowing_count) =
+        gizmo.update_buffers(device, queue, &batches);
 
     let Some(gb) = gizmo.gizmo_buffers.as_mut() else {
-        gizmo.clear();
         return;
     };
 
@@ -853,6 +855,39 @@ pub fn render_gizmo<'a>(
             pass.set_vertex_buffer(0, gb.filled_buffer.slice(..));
             pass.draw(0..filled_count, 0..1);
         }
+        if flowing_count > 0 {
+            let Some(shader) = mod_manager.resource_path("shaders/flowing_thick_lines.wgsl") else {
+                error!("[Renderer] Missing shaders/flowing_thick_lines.wgsl");
+                return;
+            };
+
+            render_manager.render(
+                &[],
+                shader,
+                &PipelineOptions {
+                    topology: PrimitiveTopology::TriangleStrip,
+                    depth_stencil: Some(DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: Some(false),
+                        depth_compare: Some(Always),
+                        stencil: Default::default(),
+                        bias: Default::default(),
+                    }),
+                    multisample_state: multisample_state(msaa_samples),
+                    vertex_layouts: Vec::from([Some(FlowingThickLineVtxRender::layout())]),
+                    fragment: FragmentOption::Default {
+                        targets: color_and_normals_and_motion_targets(pipelines),
+                    },
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                &[&pipelines.buffers.camera],
+                pass,
+            );
+
+            pass.set_vertex_buffer(0, gb.flowing_buffer.slice(..));
+            pass.draw(0..4, 0..flowing_count);
+        }
     }
     let text_ready = gizmo.prepare_text(
         camera,
@@ -867,7 +902,6 @@ pub fn render_gizmo<'a>(
     );
     if text_ready {
         let Some(gb) = gizmo.gizmo_buffers.as_mut() else {
-            gizmo.clear();
             error!("[Renderer] Gizmo buffers is empty");
             return;
         };

@@ -1,15 +1,15 @@
 [package]
 name = "Rusty_Skylines"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2024"
 
 [dependencies]
 winit = { version = "0.31.0-beta.3", features = ["serde"] }
-
 wgpu = { version = "30.0.1", features = ["strict_asserts"] }
+
 pollster = "1.0.1"
 bytemuck = { version = "1.25.2", features = ["derive"] }
-glam = { version = "0.33.11", features = ["serde"] }
+glam = { version = "0.34.0", features = ["serde"] }
 toml = "1.1.6"
 serde = { version = "1.0.229", features = ["derive"] }
 anyhow = "1.0.104"
@@ -33,13 +33,13 @@ dirs = "7.0.0"
 chrono = "0.4.45"
 strum_macros = "0.28.0"
 strum = "0.28.0"
-xxhash-rust = { version = "0.8.18", features = ["xxh3"] }
+xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 rand_chacha = "0.10.0"
 gilrs = "0.11.2"
 rand_distr = "0.6.0"
 tracing = { version = "0.1.44", features = ["log"] }
 tracing-subscriber = "0.3.23"
-libc = "1.0.0-alpha.4"
+libc = "1.0.0-alpha.5"
 revision = "0.30.0"
 sysinfo = "0.39.6"
 gfxinfo = { version = "0.1.2", features = ["amd", "nvidia", "intel"] }
@@ -48,16 +48,12 @@ gfxinfo = { version = "0.1.2", features = ["amd", "nvidia", "intel"] }
 owo-colors = "4.4.0"
 unicode-segmentation = "1.13.3"
 #fontdb = "0.24.0" ඞඞඞ
-smallvec = "2.0.0-beta.1"
+smallvec = "2.0.0-beta.2"
 sluggrs_skylines = "0.3.1" # Better than you
 xz2 = "0.1.7"
 lz4_flex = "0.14.0"
-unarc-rs = "0.6.3"
+unarc-rs = "0.7.0"
 thiserror = "2.0.21"
-
-rustfft = "6.4.1"
-num-complex = "0.4.6"
-symphonia = { version = "0.6.0", features = ["all"] }
 
 [profile.fastdev]
 inherits = "release"      # start with release defaults

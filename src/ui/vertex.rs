@@ -14,8 +14,7 @@ use crate::ui::variables::Variables;
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use sluggrs_skylines::cosmic_text::Metrics;
-use sluggrs_skylines::cosmic_text::skrifa::metrics::Decoration;
-use sluggrs_skylines::{DecorationMode, TextDecoration, cosmic_text};
+use sluggrs_skylines::{DecorationMode, TextDecoration};
 use std::collections::HashMap;
 use std::fmt;
 use std::mem::size_of;
@@ -87,6 +86,41 @@ impl TextVtxRender {
         }
     }
 }
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct FlowingThickLineVtxRender {
+    pub start: [f32; 3],
+    pub end: [f32; 3],
+    pub thickness: f32,
+    pub start_dist: f32,
+    pub end_dist: f32,
+    pub color_a: [f32; 4],
+    pub color_b: [f32; 4],
+    pub pattern_len: f32,
+    pub band_len: f32,
+}
+impl FlowingThickLineVtxRender {
+    pub const ATTRIBUTES: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array![
+        0 => Float32x3,
+        1 => Float32x3,
+        2 => Float32,
+        3 => Float32,
+        4 => Float32,
+        5 => Float32x4,
+        6 => Float32x4,
+        7 => Float32,
+        8 => Float32,
+    ];
+
+    pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct LineVtxWorld {
     pub pos: WorldPos,
@@ -2321,17 +2355,13 @@ impl UiButtonText {
     pub fn from_yaml(e: UiButtonTextYaml) -> Self {
         let length = e.text.len();
         let yaml_element = Some(e.clone());
-        let decorations = e.decorations_to_runtime();
-        let decorations = match decorations {
-            Ok(decos) => decos,
-            Err(err) => {
-                error!(
-                    "[UI] Error while converting YAML text to Runtime Text: '{}'",
-                    err
-                );
-                vec![]
-            }
-        };
+        let (decorations, errors) = e.decorations_to_runtime();
+        for err in errors {
+            error!(
+                "[UI] Error while converting YAML text to Runtime Text: '{:?}' in element: {}",
+                err, e.id
+            );
+        }
         UiButtonText {
             id: e.id,
             string_actions: e.actions.clone(),
@@ -3108,25 +3138,34 @@ pub struct UiButtonTextYaml {
 }
 
 impl UiButtonTextYaml {
-    pub fn decorations_to_runtime(&self) -> anyhow::Result<Vec<TextDecoration>> {
+    pub fn decorations_to_runtime(&self) -> (Vec<TextDecoration>, Vec<(usize, String)>) {
         let mut result = Vec::with_capacity(self.decorations.len());
         let mut ring_count = 0;
-
-        for decoration in &self.decorations {
-            let decoration = decoration.to_runtime()?;
+        let mut errors = Vec::new();
+        for (idx, decoration) in self.decorations.iter().enumerate() {
+            let decoration = match decoration.to_runtime() {
+                Ok(decoration) => decoration,
+                Err(e) => {
+                    errors.push((idx, e));
+                    continue;
+                }
+            };
 
             if decoration.mode == DecorationMode::Ring {
                 ring_count += 1;
-
                 if ring_count > 1 {
-                    anyhow::bail!("At most one Ring decoration per text area!! 🖕");
+                    errors.push((
+                        idx,
+                        "At most one Ring decoration per text area!! 🖕".to_string(),
+                    ));
+                    continue;
                 }
             }
 
             result.push(decoration);
         }
 
-        Ok(result)
+        (result, errors)
     }
 }
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
@@ -3144,9 +3183,9 @@ pub struct TextDecorationYaml {
 }
 
 impl TextDecorationYaml {
-    fn to_runtime(&self) -> anyhow::Result<TextDecoration> {
+    fn to_runtime(&self) -> Result<TextDecoration, String> {
         if self.blur > 0.0 && self.spread > 0.0 {
-            anyhow::bail!("A blurred text decoration cannot also carry a spread! 😂");
+            return Err("A blurred text decoration cannot also carry a spread! 😂".to_string());
         }
 
         let mode = self.mode.unwrap_or_else(|| {

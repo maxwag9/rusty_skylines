@@ -191,6 +191,7 @@ impl Renderer {
         settings: &Settings,
         mod_manager: &ModManager,
     ) {
+        world.time.timer.checkpoint("Render", false);
         if settings.render_debug_print {
             println!("[render] start");
         }
@@ -204,11 +205,13 @@ impl Renderer {
         let time = &mut world.time;
 
         time.frame_checkpoint(FrameTimeCheckpointType::BeforeAcquireFrame);
-        time.timer.checkpoint("Render", false);
+        time.timer.checkpoint("Acquire Frame", false);
+        time.timer.checkpoint("Render", true);
         let Some(frame) = acquire_frame(&surface, &self.device, &self.config) else {
             return;
         };
-        time.timer.checkpoint("Render", true);
+        time.timer.checkpoint("Acquire Frame", true);
+        time.timer.checkpoint("Render", false);
         time.frame_checkpoint(FrameTimeCheckpointType::AfterAcquireFrame);
         if settings.render_debug_print {
             print!("[render] acquired frame");
@@ -258,7 +261,7 @@ impl Renderer {
 
         //println!("World CPU Time: {:?}", t.elapsed());
         self.profiler.resolve(&mut encoder);
-        time.timer.checkpoint("Render", true);
+
         if settings.render_debug_print {
             print!(" [render] before submit");
         }
@@ -267,12 +270,12 @@ impl Renderer {
             print!(" [render] after submit, before present");
         }
         self.queue.present(frame);
-        time.timer.checkpoint("Render", false);
         if settings.render_debug_print {
             print!(" [render] after present");
         }
         self.profiler
             .end_frame(&self.device, &self.queue, &mut ui.variables);
+        world.time.timer.checkpoint("Render", true);
     }
 
     pub fn update_render(
@@ -901,8 +904,6 @@ impl Renderer {
         let half_w = self.pipelines.post_fx.linear_depth_half.texture().width();
         let half_h = self.pipelines.post_fx.linear_depth_half.texture().height();
         let half_disp = [(half_w + 7) / 8, (half_h + 7) / 8, 1];
-
-        // ── Pass 1: Prep ────────────────────────────────────────────────────
         let prep_name = if msaa_on {
             "gtao_prep_msaa"
         } else {
@@ -917,7 +918,7 @@ impl Renderer {
                 Some(encoder),
                 prep_name,
                 vec![
-                    &self.pipelines.msaa.depth_sample, // Can be non-msaa
+                    &self.pipelines.msaa.depth_sample,
                     &self.pipelines.resolved.normal,
                 ],
                 vec![
@@ -935,8 +936,6 @@ impl Renderer {
         if !settings.gtao_enabled {
             return;
         }
-        // ── Pass 2: Generate + Temporal Accumulate ──────────────────────────
-        // ── History ping-pong ───────────────────────────────────────────────
         let read_idx = (time.frame_count % 2) as usize;
         let write_idx = 1 - read_idx;
         let hw = half_w as f32;
@@ -967,8 +966,6 @@ impl Renderer {
                 ],
             );
         });
-
-        // ── Pass 3: 2D Bilateral Blur ───────────────────────────────────────
         let blur_params = GtaoBlurParams {
             depth_sigma: 0.02,
             normal_sigma: 0.1,
@@ -980,32 +977,50 @@ impl Renderer {
             0,
             bytemuck::bytes_of(&blur_params),
         );
-        let Some(shader) = mod_manager.resource_path("shaders/compute/gtao_blur_2d.wgsl") else {
-            error!("[Renderer] Missing shader 'shaders/compute/gtao_blur_2d.wgsl'");
+        let Some(shader_h) = mod_manager.resource_path("shaders/compute/gtao_blur_h.wgsl") else {
+            error!("[Renderer] Missing shader 'shaders/compute/gtao_blur_h.wgsl'");
             return;
         };
-        gpu_timestamp!(encoder, &mut self.profiler, "GTAO_Blur", {
+        gpu_timestamp!(encoder, &mut self.profiler, "GTAO_Blur_H", {
             self.render_manager.compute(
                 Some(encoder),
-                "gtao_blur_2d",
+                "gtao_blur_h",
                 vec![
-                    &self.pipelines.post_fx.gtao_history[write_idx], // just-written accumulated AO
+                    &self.pipelines.post_fx.gtao_history[write_idx],
                     &self.pipelines.post_fx.linear_depth_half,
                     &self.pipelines.post_fx.normal_half,
                 ],
-                vec![&self.pipelines.post_fx.gtao_blurred_half],
-                shader,
+                vec![&self.pipelines.post_fx.gtao_history[read_idx]],
+                shader_h,
                 ComputePipelineOptions {
                     dispatch_size: half_disp,
                 },
                 &[BufferSet::from_uniform(&self.pipelines.buffers.gtao_blur)],
             );
         });
-
-        // ── Pass 4: Upsample + Apply (render pass — blends into msaa/resolved HDR) ──
+        let Some(shader_v) = mod_manager.resource_path("shaders/compute/gtao_blur_v.wgsl") else {
+            error!("[Renderer] Missing shader 'shaders/compute/gtao_blur_v.wgsl'");
+            return;
+        };
+        gpu_timestamp!(encoder, &mut self.profiler, "GTAO_Blur_V", {
+            self.render_manager.compute(
+                Some(encoder),
+                "gtao_blur_v",
+                vec![
+                    &self.pipelines.post_fx.gtao_history[read_idx],
+                    &self.pipelines.post_fx.linear_depth_half,
+                    &self.pipelines.post_fx.normal_half,
+                ],
+                vec![&self.pipelines.post_fx.gtao_blurred_half],
+                shader_v,
+                ComputePipelineOptions {
+                    dispatch_size: half_disp,
+                },
+                &[BufferSet::from_uniform(&self.pipelines.buffers.gtao_blur)],
+            );
+        });
         let fw = self.pipelines.resolved.hdr.texture().width() as f32;
         let fh = self.pipelines.resolved.hdr.texture().height() as f32;
-
         let upsample_apply_params = GtaoUpsampleApplyParams {
             full_size: [fw, fh],
             half_size: [hw, hh],
@@ -1013,7 +1028,7 @@ impl Renderer {
             inv_half_size: [1.0 / hw, 1.0 / hh],
             depth_threshold: 0.05,
             normal_threshold: 0.9,
-            use_normal_check: 1,
+            use_normal_check: 0,
             power: 1.5,
             apply_intensity: 1.0,
             min_ao: 0.1,
@@ -1026,19 +1041,12 @@ impl Renderer {
             bytemuck::bytes_of(&upsample_apply_params),
         );
 
-        let apply_name = if msaa_on {
-            "gtao_upsample_apply_msaa"
-        } else {
-            "gtao_upsample_apply"
-        };
-
         gpu_timestamp!(encoder, &mut self.profiler, "GTAO_Upsample_Apply", {
             let color_attachment = create_color_attachment_load(
                 &self.pipelines.msaa.hdr,
                 &self.pipelines.resolved.hdr,
                 self.msaa_samples,
             );
-
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("GTAO Upsample Apply"),
                 color_attachments: &[Some(color_attachment)],
@@ -1047,7 +1055,6 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-
             let options = PipelineOptions::default()
                 .with_topology(TriangleList)
                 .with_multisample_state(multisample_state(self.msaa_samples))
@@ -1070,10 +1077,8 @@ impl Renderer {
                 &self.pipelines.msaa.depth_sample,
                 &self.pipelines.resolved.normal,
             ];
-            let Some(shader) =
-                mod_manager.resource_path("shaders/compute/gtao_upsample_apply.wgsl")
-            else {
-                error!("[Renderer] Missing shader 'shaders/compute/gtao_upsample_apply.wgsl'");
+            let Some(shader) = mod_manager.resource_path("shaders/gtao_upsample_apply.wgsl") else {
+                error!("[Renderer] Missing shader 'shaders/gtao_upsample_apply.wgsl'");
                 return;
             };
             self.render_manager.render_with_textures(
@@ -1086,7 +1091,6 @@ impl Renderer {
                 ],
                 &mut pass,
             );
-
             pass.draw(0..3, 0..1);
         });
     }

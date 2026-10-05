@@ -587,7 +587,8 @@ pub fn build_intersection_at_node(
     gizmo: &mut Gizmo,
 ) -> HashSet<ChunkCoord> {
     let mut affected_chunks = HashSet::new();
-    if recalc_clearance {
+    let segment_count = storage.segment_count_connected_to_node(node_id);
+    if recalc_clearance && segment_count > 1 {
         if let Some(geom) =
             compute_intersection_geometry(storage, road_types, node_id, params, settings, gizmo)
         {
@@ -643,12 +644,11 @@ pub fn build_intersection_at_node(
     let node = storage.node_mut(node_id);
     node.clear_node_lanes();
 
-
-    let node_lanes = build_node_lanes_for_intersection(terrain, storage, road_types, node_id, params, gizmo);
+    let node_lanes =
+        build_node_lanes_for_intersection(terrain, storage, road_types, node_id, params, gizmo);
 
     let node = storage.node_mut(node_id);
     storage.node_mut(node_id).add_node_lanes(node_lanes);
-
 
     affected_chunks
 }
@@ -1829,7 +1829,6 @@ pub fn road_vertex(
         chunk_xz: [world_pos.chunk.x, world_pos.chunk.z],
     }
 }
-
 
 fn build_node_lanes_for_intersection(
     terrain: &Terrain,

@@ -345,7 +345,7 @@ layers:
         ap_vars:
           - "str:World Name"
           - "50"
-          - "str:set(str:new_save_name, as.text);"
+          - "str:as:[str:button_text] set(str:new_save_name, as.text);"
         x: 960
         y: 440
         scale: 1.0

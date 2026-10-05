@@ -1131,6 +1131,7 @@ impl RoadEditor {
                 to.node_id,
                 &segment_centerline,
                 chunk_coord,
+                gizmo,
             );
         }
 
@@ -1724,6 +1725,7 @@ impl RoadEditor {
         end: NodeId,
         centerline: &[WorldPos],
         chunk_coord: ChunkCoord,
+        gizmo: &mut Gizmo,
     ) {
         let (left_lanes, right_lanes) = road_type.lanes_each_direction();
         let speed = road_type.speed_limit();
@@ -1742,6 +1744,7 @@ impl RoadEditor {
                 road_type.structure,
             );
             let geom = LaneGeometry::from_polyline(poly);
+            //gizmo.polyline(geom.points.as_slice(), [0.0, 0.0, 0.2, 1.0], 0.0, false, 2.0, 10.0);
             let id = storage.alloc_lane_id();
             cmds.push(RoadCommand::AddLane {
                 id,
@@ -1769,6 +1772,7 @@ impl RoadEditor {
             );
             poly.reverse();
             let geom = LaneGeometry::from_polyline(poly);
+            //gizmo.polyline(geom.points.as_slice(), [0.0, 0.8, 0.0, 1.0], 0.0, false, 2.0, 10.0);
             let id = storage.alloc_lane_id();
             cmds.push(RoadCommand::AddLane {
                 id,
@@ -1804,10 +1808,6 @@ fn make_straight_centerline(
         })
         .collect()
 }
-
-// ============================================================================
-// Helpers
-// ============================================================================
 
 fn split_lane_geometry(geom: &LaneGeometry, split_pos: WorldPos) -> (LaneGeometry, LaneGeometry) {
     let mut best_i = 0;
@@ -1893,29 +1893,22 @@ pub fn sample_quadratic_bezier(
 
     for i in 0..=segments {
         let t = i as f32 / segments as f32;
-        let one_minus_t = 1.0 - t;
-
-        // Quadratic Bézier: B(t) = (1-t)²P0 + 2(1-t)tP1 + t²P2
-        // Compute relative to P0 for precision
-        let v1 = p1.to_relative_pos(p0);
-        let v2 = p2.to_relative_pos(p0);
-
-        let blend = v1 * (2.0 * one_minus_t * t) + v2 * (t * t);
-        let mut p = p0.add_vec3(blend);
+        let mut p = WorldPos::quadratic_bezier_xz(p0, p1, p2, t);
 
         set_point_height_with_structure_type(terrain_renderer, structure_type, &mut p, true);
         points.push(p);
     }
+
     points
 }
 fn estimate_bezier_arc_length(
-    terrain_renderer: &Terrain,
+    terrain: &Terrain,
     structure_type: StructureType,
     p0: WorldPos,
     p1: WorldPos,
     p2: WorldPos,
 ) -> f64 {
-    let samples = sample_quadratic_bezier(terrain_renderer, structure_type, p0, p1, p2, 16);
+    let samples = sample_quadratic_bezier(terrain, structure_type, p0, p1, p2, 16);
     polyline_length(&samples)
 }
 
@@ -1925,7 +1918,7 @@ fn compute_curve_segment_count(arc_length: f64) -> usize {
 
 /// Offset a polyline laterally by lane index.
 pub fn offset_polyline(
-    terrain_renderer: &Terrain,
+    terrain: &Terrain,
     center: &[WorldPos],
     lane_index: i8,
     lane_width: f32,
@@ -1935,22 +1928,11 @@ pub fn offset_polyline(
         return center.to_vec();
     }
 
-    let offset = (lane_index as f32 + if lane_index < 0 { 0.5 } else { -0.5 }) * lane_width;
-
-    center
-        .iter()
-        .enumerate()
-        .map(|(i, &pt)| {
-            let dir = if i + 1 < center.len() {
-                center[i + 1].to_relative_pos(pt)
-            } else {
-                pt.to_relative_pos(center[i - 1])
-            };
-
-            let dir_xz = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
-            let right = Vec3::new(-dir_xz.z, 0.0, dir_xz.x);
-            let mut p = pt.add_vec3(right * offset);
-            set_point_height_with_structure_type(terrain_renderer, structure_type, &mut p, true);
+    let offset = (lane_index as f32 + if lane_index < 0 { 0.5 } else { -0.5 }) * -lane_width; // Negative because the new offsetter kinda does it in reverse. Opsettah Upsetter. From Blue Ark FM!!
+    WorldPos::offset_polyline(center, offset)
+        .into_iter()
+        .map(|mut p| {
+            set_point_height_with_structure_type(terrain, structure_type, &mut p, true);
             p
         })
         .collect()
