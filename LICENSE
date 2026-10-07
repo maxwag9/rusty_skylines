@@ -1,26 +1,340 @@
-Rusty Skylines License (RSL-NC-SA)
-Copyright (c) 2025 maxwag9
+# Rusty Skylines Source License (RSL-NC-SA) v1.0
 
-1. You are free to:
-   - Use, modify, and distribute this code for non-commercial purposes.
-   - Create and distribute mods, plugins, or tools that depend on this project.
-   - Receive voluntary donations or tips for your forks, mods, or content.
+Copyright (c) 2025-2026 maxwag9
 
-2. You must:
-   - Provide clear attribution to “Rusty Skylines” and link to the original repository.
-   - License your modifications or forks under the same terms (share-alike).
+## 1. Definitions
 
-3. You may not:
-   - Sell this project, its forks, or compiled versions for profit.
-   - Include the original code or assets in any paid product or closed-source mod.
+For this License:
 
-4. Modding exception:
-   - You may sell or monetize standalone mods, expansions, or maps as long as
-     they do not redistribute any part of the original source code or assets.
+**“Project”** means the Rusty Skylines source code and other material explicitly identified as being licensed under the RSL-NC-SA, including source files, scripts, shaders, configuration, tests, build files, and other software-related material.
 
-5. Assets:
-   - All textures, sounds, and visual assets are covered separately under
-     the Creative Commons BY-NC-SA 4.0 license.
+**“Licensed Material”** means the portions of the Project covered by this License. Files or components that contain their own license notice are governed by that separate license instead.
 
-6. Warranty:
-   - Provided “as-is,” without warranty or liability.
+**“Official Repository”** means:
+https://github.com/maxwag9/rusty_skylines
+
+**“Official Release”** means any version of Rusty Skylines, including source code, binaries, assets, or other content, that is distributed by maxwag9 or by a party expressly authorized by maxwag9.
+
+**“Modification”** means a change to, adaptation of, translation of, or derivative work based upon Licensed Material.
+
+**“Fork”** means a redistributed copy or modified version of the Project that contains Licensed Material and is presented as a separate version of the Project.
+
+**“Commercial Use”** means any use primarily intended for commercial advantage or monetary compensation, including, without limitation:
+
+* selling, licensing, leasing, renting, or sublicensing Licensed Material;
+* selling or distributing a product that contains Licensed Material;
+* placing Licensed Material behind a paid download, subscription, paywall, or other payment requirement;
+* bundling Licensed Material into a paid or commercially distributed product or service;
+* providing Licensed Material as part of a paid hosting, cloud, SaaS, or other commercial service;
+* using Licensed Material to provide a paid service to third parties; or
+* accepting payment that is required in order to obtain, access, or use Licensed Material.
+
+**“Voluntary Donation”** means an optional payment that does not grant access to Licensed Material or to additional functionality that is otherwise restricted by this License.
+
+**“Mod”** means a separate work intended to extend, modify, customize, or interact with an Official Release, including mods, plugins, maps, expansions, scenarios, content packs, tools, compatibility layers, and similar works.
+
+**“Independent Material”** means material created independently of Licensed Material and which does not reproduce, contain, or constitute a Modification of Licensed Material.
+
+## 2. Copyright and Scope
+
+The Project is protected by applicable copyright and other intellectual-property laws.
+
+This License grants rights only to Licensed Material. It does not grant rights to third-party code, dependencies, libraries, trademarks, logos, names, proprietary services, or other material that is separately licensed or otherwise excluded.
+
+Where a file or component contains a separate license notice, that separate license takes precedence for that material.
+
+Nothing in this License transfers ownership of the Project or Licensed Material.
+
+## 3. Permissions
+
+Subject to the terms of this License, you are granted a worldwide, royalty-free, non-exclusive license to:
+
+1. use Licensed Material for personal, educational, research, experimental, or other non-commercial purposes;
+2. copy and distribute Licensed Material for non-commercial purposes;
+3. modify Licensed Material for non-commercial purposes;
+4. distribute non-commercial Forks and other non-commercial Modifications;
+5. create and distribute non-commercial software that uses, links to, or interacts with an Official Release;
+6. create and distribute Mods that interact with an Official Release;
+7. receive Voluntary Donations for a Fork, Mod, tool, documentation, or other work that complies with this License; and
+8. create videos, screenshots, streams, reviews, tutorials, demonstrations, and other media concerning Rusty Skylines, including monetized media, provided that the media does not redistribute Licensed Material itself.
+
+These permissions are granted only for as long as you comply with this License.
+
+## 4. Share-Alike Requirement
+
+If you distribute a Modification or Fork containing Licensed Material, the portions containing Licensed Material or modifications thereof must be made available under this same RSL-NC-SA License.
+
+You must not apply a different license to Licensed Material that removes or contradicts the permissions or restrictions of this License.
+
+This requirement applies only to Licensed Material and Modifications of Licensed Material. It does not require Independent Material or unrelated third-party code to be licensed under the RSL-NC-SA.
+
+If technical or legal circumstances prevent a particular third-party component from being distributed under this License, that component must remain under its applicable separate license.
+
+## 5. Commercial Restriction
+
+You may not make Commercial Use of Licensed Material, including by:
+
+1. selling a Fork;
+2. selling a compiled or binary version of a Fork;
+3. selling, licensing, or commercially distributing a product that contains Licensed Material;
+4. commercially redistributing the Project or any substantial portion of it;
+5. operating Licensed Material as part of a paid hosted or cloud service;
+6. using Licensed Material to create a competing commercial game or commercial software product; or
+7. otherwise obtaining payment in exchange for access to Licensed Material.
+
+This restriction applies regardless of whether Licensed Material has been modified, renamed, compiled, optimized, compressed, encrypted, or combined with other software.
+
+Changing file names, namespaces, package names, variable names, programming languages, build systems, or other implementation details does not remove Licensed Material from the scope of this License.
+
+## 6. Hard Mods, Mixins, and Patching
+
+Rusty Skylines supports modification systems that may alter or replace portions of the game at build time or runtime, including systems implemented through `rust-mixin`, mixin-style transformations, patch systems, hooks, injections, detours, method replacement, code generation, or comparable mechanisms.
+
+A **“Hard Mod”** means a Mod that modifies Licensed Material through such a mechanism rather than merely using public gameplay APIs or external interfaces.
+
+### 6.1 Commercial Hard Mods
+
+A Hard Mod may be created, distributed, licensed, and commercially sold provided that the Hard Mod itself does not redistribute the Project or a substantial portion of its source code.
+
+A Hard Mod may contain:
+
+* original source code written by the Mod author;
+* mixin declarations and patch definitions;
+* target selectors, method signatures, hooks, and injection points;
+* original replacement or injected implementations;
+* configuration and metadata required to apply the Mod;
+* small excerpts of Licensed Material reasonably necessary to identify, match, patch, or interface with a target; and
+* other material generated specifically to apply the Mod to an authorized copy of Rusty Skylines.
+
+The amount of original code in a Hard Mod is unrestricted. A Hard Mod may contain thousands or millions of lines of code written by its author.
+
+### 6.2 Copied Rusty Skylines Code
+
+A Hard Mod may not intentionally copy and redistribute substantial portions of the existing Rusty Skylines implementation as part of the Mod.
+
+In particular, the following are not permitted in a commercial Hard Mod without separate permission:
+
+* copying substantial Rusty Skylines source files into the Mod;
+* reproducing substantial game systems or implementations from the Project;
+* copying large sections of existing Rusty Skylines functions merely to avoid writing an original implementation;
+* redistributing Rusty Skylines source code as part of a Mod package; or
+* presenting copied Rusty Skylines implementation code as original Mod code.
+
+A change from one programming language, file format, namespace, package name, or build system to another does not by itself make copied Licensed Material independent material.
+
+### 6.3 Compiler-Generated Copies
+
+The temporary copying, transformation, compilation, linking, or embedding of Licensed Material that occurs automatically when `rust-mixin` or another compatible tool builds a Hard Mod for use with an authorized copy of Rusty Skylines is permitted.
+
+Such compiler-generated copies do not, by themselves, cause the Mod author's original source code to become Licensed Material.
+
+This permission exists solely to enable the technical operation of the Modding system.
+
+### 6.4 Distribution of Combined Builds
+
+A person may not sell, license, or commercially distribute a complete Rusty Skylines build containing a Hard Mod where the distributed build itself contains substantial portions of Licensed Material, unless separate written permission has been obtained from maxwag9.
+
+A commercial Hard Mod should therefore be distributed as a Mod, patch, mixin, installer, delta, plugin, or other mechanism intended to modify an authorized copy of Rusty Skylines rather than as a separately distributed copy of the entire game.
+
+Nothing in this section prevents a user from locally compiling or applying a Hard Mod to an authorized copy of Rusty Skylines.
+
+### 6.5 No Evasion
+
+A Mod does not become permissible merely because copied Rusty Skylines code is:
+
+* automatically generated;
+* reformatted;
+* renamed;
+* minified;
+* obfuscated;
+* translated to another language;
+* converted into another intermediate representation; or
+* distributed only as compiled code.
+
+The relevant question is whether the Mod is redistributing Licensed Material or merely supplying original code and instructions that cause Licensed Material to be modified on the user's authorized copy of the game.
+
+### 6.6 Separate Mod Copyright
+
+Original code written by a Mod author remains the Mod author's own material, subject to this License only to the extent that it incorporates or reproduces Licensed Material.
+
+The Mod author may choose a separate license for original Mod code.
+
+### 6.7 Compatibility
+
+Nothing in this section prevents a Mod from inspecting, targeting, calling, replacing, wrapping, or otherwise interacting with public or observable Rusty Skylines APIs, interfaces, symbols, methods, file formats, protocols, or modding interfaces.
+
+Such interaction alone does not make the Mod Licensed Material.
+
+
+## 7. No Redistribution of Official Releases
+
+This License does not permit redistribution of an Official Release except where a separate license or explicit permission from maxwag9 permits it.
+
+You may not:
+
+* repackage an Official Release as your own product;
+* redistribute Official Release binaries as part of a competing distribution;
+* extract and redistribute Official Release assets;
+* distribute modified copies of Official Release binaries;
+* bundle an Official Release with a commercial Mod or service; or
+* operate a commercial service whose purpose is to provide access to an Official Release without authorization.
+
+Nothing in this section prevents ordinary users from installing, backing up, or otherwise using an Official Release as permitted by the terms under which they obtained it.
+
+## 8. Assets
+
+Game assets, including but not limited to textures, models, sounds, music, fonts, artwork, icons, and other visual or audio material, are not covered by this software license unless a particular asset is explicitly marked as being covered by it.
+
+Assets explicitly marked as:
+
+**Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)**
+
+are licensed under that license instead.
+
+See:
+https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+Where an asset is owned by maxwag9, maxwag9 may also use, modify, reproduce, distribute, and commercially exploit that asset, including as part of an Official Release, notwithstanding the separate public license granted to other users.
+
+This clause does not grant any rights to assets owned by third parties.
+
+## 9. Official Commercial Releases
+
+Nothing in this License restricts maxwag9, the copyright holder, or a party expressly authorized by the copyright holder from:
+
+1. developing Rusty Skylines;
+2. modifying or redistributing the Project;
+3. compiling or distributing the software;
+4. selling Rusty Skylines;
+5. distributing paid or commercial Official Releases;
+6. licensing Rusty Skylines under additional or different terms;
+7. creating proprietary versions or components of Rusty Skylines; or
+8. granting additional commercial permissions to specific individuals or organizations.
+
+The RSL-NC-SA is a public license granted by the copyright holder. It does not limit rights that the copyright holder already possesses.
+
+## 10. Attribution
+
+When distributing Licensed Material, a Fork, or a Modification, you must retain all existing copyright notices and license notices.
+
+You must provide clear attribution to:
+
+**Rusty Skylines**
+Copyright (c) 2025-2026 maxwag9
+https://github.com/maxwag9/rusty_skylines
+
+The attribution and license notice must be reasonably accessible to users. Acceptable locations include a LICENSE file, README, documentation, credits section, About page, or equivalent location appropriate to the software.
+
+You must clearly identify substantial modifications that you have made to the Project.
+
+Attribution must not be presented in a way that implies that maxwag9 endorses, sponsors, or approves your Fork, Modification, Mod, or product unless such endorsement has been explicitly granted.
+
+## 11. Names, Trademarks, and Branding
+
+This License does not grant any trademark or branding rights.
+
+The names **“Rusty Skylines”**, associated logos, branding, artwork, and other marks remain reserved to their respective rights holders.
+
+Forks and derivative versions must not present themselves as the official Rusty Skylines project.
+
+You may use the name “Rusty Skylines” descriptively to indicate compatibility or origin, such as:
+
+“Mod for Rusty Skylines”
+
+or
+
+“Compatible with Rusty Skylines”.
+
+You may not use the name in a way that suggests that your Fork or product is an Official Release.
+
+## 12. Public Interfaces and Modding
+
+Nothing in this License prevents the creation of software that calls, communicates with, extends, or otherwise interfaces with an Official Release through documented or publicly observable interfaces.
+
+Using an API, interface definition, protocol, file format, save format, or other interface does not by itself make independently written code Licensed Material.
+
+However, copying source code, assets, or other protected material from the Project into such software remains subject to this License.
+
+## 13. User-Created Output
+
+This License does not claim ownership over Independent Material created by users through the use of Rusty Skylines.
+
+For example, a user-created map, screenshot, video, save, configuration, or other original work that does not contain Licensed Material remains the property of its creator, subject to any other applicable rights.
+
+Included Rusty Skylines assets and copied portions of Licensed Material remain subject to their applicable licenses.
+
+## 14. Contributions
+
+If you submit code, assets, documentation, or other material to the Project, you represent that you have the necessary rights to submit that material.
+
+By submitting a contribution for inclusion in the Project, you grant maxwag9 a perpetual, worldwide, royalty-free, non-exclusive license to use, reproduce, modify, adapt, distribute, sublicense, commercially exploit, and include that contribution in the Project and in Official Releases, including paid Official Releases.
+
+This contribution grant survives termination of this License.
+
+You must not submit third-party material unless you have the legal right to grant these permissions.
+
+## 15. No Sublicensing
+
+You may not sublicense Licensed Material separately from the permissions expressly granted by this License.
+
+Recipients of Licensed Material receive their rights directly under this License, not through a sublicense from you.
+
+## 16. Termination
+
+Any rights granted to you under this License terminate automatically if you materially violate its terms.
+
+If your violation is capable of being corrected, your rights are reinstated automatically when the violation has been completely cured, provided that maxwag9 has not expressly terminated your rights for repeated or deliberate violations.
+
+Termination does not affect the rights of recipients who obtained material from you while you were complying with this License.
+
+Sections concerning ownership, trademarks, disclaimers, limitations of liability, and other provisions intended by their nature to survive termination remain effective.
+
+## 17. No Additional Restrictions
+
+You may not impose additional legal or technological restrictions on Licensed Material that prevent another person from exercising the rights expressly granted by this License.
+
+This restriction does not prevent you from applying separate terms to your own Independent Material in a Mod, Fork, or other larger work, provided those terms do not restrict rights in Licensed Material.
+
+## 18. No Patent License
+
+No patent license is granted by this License.
+
+Any patent rights necessary to use the Project remain with their respective owners.
+
+## 19. Disclaimer of Warranty
+
+THE PROJECT AND LICENSED MATERIAL ARE PROVIDED “AS IS” AND “AS AVAILABLE”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, OR ACCURACY, TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW.
+
+YOU ARE SOLELY RESPONSIBLE FOR DETERMINING WHETHER YOUR USE OF THE PROJECT COMPLIES WITH THIS LICENSE AND APPLICABLE LAW.
+
+## 20. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, MAXWAG9 AND CONTRIBUTORS SHALL NOT BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR OTHER DAMAGES ARISING OUT OF OR RELATED TO THE PROJECT, LICENSED MATERIAL, OR THIS LICENSE.
+
+NOTHING IN THIS LICENSE EXCLUDES OR LIMITS LIABILITY THAT CANNOT LAWFULLY BE EXCLUDED OR LIMITED.
+
+## 21. Severability
+
+If any provision of this License is found to be invalid or unenforceable, that provision shall be enforced to the maximum extent permitted by law, and the remaining provisions shall remain in full force and effect.
+
+## 22. No Waiver
+
+Failure to enforce any provision of this License does not constitute a waiver of that provision or of the right to enforce it later.
+
+## 23. Future Versions
+
+maxwag9 may publish revised versions of the RSL-NC-SA.
+
+Material released under a specific version of the RSL-NC-SA remains available under that version unless the copyright holder expressly offers an alternative license.
+
+## 24. Acceptance
+
+By exercising rights granted by this License, you accept and agree to its terms.
+
+Any use of Licensed Material not expressly permitted by this License requires separate permission from the copyright holder.
+
+---
+
+**RSL-NC-SA v1.0**
+Copyright (c) 2025-2026 maxwag9
+Official repository: https://github.com/maxwag9/rusty_skylines
