@@ -1,20 +1,23 @@
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::ui::actions::style_to_u32;
 use crate::ui::helper::triangulate_polygon;
+use crate::ui::text_formatting::{
+    build_rich_spans, collect_obfuscated_replacements, format_text, replace_formatted_characters,
+};
 use crate::ui::ui_editor::Ui;
 use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::vertex::*;
 use bytemuck::Zeroable;
 use sluggrs_skylines::FontSystem;
-use sluggrs_skylines::cosmic_text::{Attrs, Metrics, Shaping};
+use sluggrs_skylines::cosmic_text::{Attrs, Metrics, Shaping, Weight};
 use unicode_segmentation::UnicodeSegmentation;
 
 pub fn rebuild_text_cache(
     font_system: &mut FontSystem,
     layer: &mut RuntimeLayer,
     rebuilt: &mut LayerDirty,
-    runtime: &UiRuntimes,
+    runtime: &mut UiRuntimes,
 ) {
     for element in &mut layer.elements {
         if !element.is_active() {
@@ -23,17 +26,71 @@ pub fn rebuild_text_cache(
 
         if let UiElement::Text(t) = element {
             let (rt, hash) = runtime_info(runtime, &t.id);
-
             let metrics = Metrics::new(t.pt, t.pt * 1.2);
             t.buffer.set_metrics(metrics);
-            //t.buffer.set_size(Some(t.width*10.0), Some(t.height*10.0));
-            let mut attrs = Attrs::new();
-            let text_deco = &mut attrs.text_decoration;
-            // text_deco.overline = true;
-            // text_deco.overline_color_opt = Some(Color::rgba(255, 0, 0, 255));
-            //attrs.style = Style::Oblique;
-            //attrs.weight = Weight::NORMAL;
-            t.buffer.set_text(&t.text, &attrs, Shaping::Basic, None);
+
+            let attrs = Attrs::new();
+
+            let visible_graphemes;
+
+            if t.being_edited {
+                t.buffer
+                    .set_text(t.text.as_str(), &attrs, Shaping::Basic, None);
+                visible_graphemes = t.text.graphemes(true).count();
+            } else {
+                let formatted_source = t.text.replace("\\n", "\n");
+                let formatted = format_text(&formatted_source);
+
+                visible_graphemes = formatted.text.graphemes(true).count();
+
+                if formatted.text.is_empty() {
+                    t.buffer.set_text("", &attrs, Shaping::Basic, None);
+                } else {
+                    let shaping = if formatted.text.is_ascii() {
+                        Shaping::Basic
+                    } else {
+                        Shaping::Advanced
+                    };
+
+                    t.buffer.set_rich_text(
+                        build_rich_spans(&formatted, &attrs),
+                        &attrs,
+                        shaping,
+                        None,
+                    );
+
+                    t.buffer.shape_until_scroll(font_system, false);
+
+                    if formatted.spans.iter().any(|span| span.style.obfuscated) {
+                        let replacements = collect_obfuscated_replacements(
+                            font_system,
+                            &t.buffer,
+                            &formatted,
+                            runtime,
+                        );
+                        // eprintln!(
+                        //     "obfuscated spans: {}, cached fonts: {}, replacements: {}",
+                        //     formatted.spans.iter().filter(|s| s.style.obfuscated).count(),
+                        //     runtime.obfuscation_fonts.len(),
+                        //     replacements.len(),
+                        // );
+                        if !replacements.is_empty() {
+                            let obfuscated =
+                                replace_formatted_characters(&formatted, &replacements);
+
+                            t.buffer.set_rich_text(
+                                build_rich_spans(&obfuscated, &attrs),
+                                &attrs,
+                                shaping,
+                                None,
+                            );
+
+                            t.buffer.shape_until_scroll(font_system, false);
+                        }
+                    }
+                }
+            }
+
             t.buffer.shape_until_scroll(font_system, false);
             let mut text_width: f32 = 0.0;
             let mut text_height: f32 = 0.0;
@@ -41,6 +98,9 @@ pub fn rebuild_text_cache(
             for run in t.buffer.layout_runs() {
                 text_width = text_width.max(run.line_w);
                 text_height = text_height.max(run.line_top + run.line_height);
+                for glyph in run.glyphs.iter() {
+                    let font = font_system.get_font(glyph.font_id, Weight::NORMAL);
+                }
             }
             //println!("{}", text_width);
             let cache = t.cache.get_or_insert_with(TextParams::default);
@@ -49,6 +109,7 @@ pub fn rebuild_text_cache(
                 pos: [t.x, t.y],
                 pt: t.pt,
                 color: t.color,
+                rotation: t.rotation,
                 id_hash: hash,
                 misc: [
                     if t.misc.active { 1.0 } else { 0.0 },
@@ -60,7 +121,7 @@ pub fn rebuild_text_cache(
                 width: text_width,
                 height: text_height,
                 id: t.id.clone(),
-                caret: t.caret.min(t.text.graphemes(true).count()),
+                caret: t.caret.min(visible_graphemes),
                 anchor: t.anchor,
                 depth: 0.0,
                 decorations: t.decorations.clone(),

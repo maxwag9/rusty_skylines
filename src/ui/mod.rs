@@ -7,6 +7,7 @@ pub mod menu;
 pub mod parser;
 pub mod selections;
 pub mod special_actions;
+pub mod text_formatting;
 pub mod ui_edit_manager;
 pub mod ui_editor;
 pub mod ui_edits;

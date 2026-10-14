@@ -331,6 +331,6 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     return vec4<f32>(
         fill * outer_alpha,
-        outer_alpha
+        outer_alpha * input.border_color.w
     );
 }

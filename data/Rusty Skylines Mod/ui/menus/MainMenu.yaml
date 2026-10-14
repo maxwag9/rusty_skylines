@@ -24,7 +24,7 @@ layers:
         roundness: 0.0
         border_thickness: 0.00
         fade: 0.0
-        blur: 5.5
+        blur: 10.5
         glow_color:
           - 0.0
           - 0.0
@@ -44,17 +44,17 @@ layers:
         rotation: 0.0
         texture: "shader:shaders/fun!/test1.wgsl"
         color:
-          - 0.01
-          - 0.01
-          - 0.01
-          - 0.08
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.00
         border_color:
           - 2.0
           - 1.0
           - 1.0
           - 1.0
-        roundness: 0.1
-        border_thickness: 3
+        roundness: 0.05
+        border_thickness: 2
         fade: 0.0
         blur: 0.0
         glow_color:
@@ -137,7 +137,25 @@ layers:
         y: 1030
         scale: 1.0
 
-    editing_tool: false
+      - !Text
+        id: splash
+        actions:
+          - on:startup, call(rust:get_new_splash); set(str:self.text, SPLASH_MESSAGE)
+          - button:"KeyA" trigger:r, call(rust:get_new_splash); set(str:self.text, SPLASH_MESSAGE)
+          - set(str:self.pt, expr:{self.pt} * ((400.0 + len({self.text}) * 2.0 + 25.0 * sin({total_time} * 8.0)) / {self.size.x}))
+        x: 1530
+        y: 200
+        pt: 30.0
+        rotation: 20.0
+        color:
+          - 1.0
+          - 0.76
+          - 0.1
+          - 1.0
+        decorations:
+          - color: [ 0.01, 0.01, 0.01, 0.9 ]
+            offset: [ 5.0, 5.0 ]
+        text: RUSTY SKYLINES SPLASH LOADING...
 #  - name: test_buttons
 #    order: 3
 #    elements:

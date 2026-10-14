@@ -62,6 +62,7 @@ pub enum CursorMode {
     Cars,
     Area,
     Destruction,
+    Utilities,
 }
 impl From<String> for CursorMode {
     fn from(string: String) -> Self {
@@ -75,12 +76,13 @@ impl From<String> for CursorMode {
             "cars" => CursorMode::Cars,
             "area" => CursorMode::Area,
             "destruction" => CursorMode::Destruction,
+            "utilities" => CursorMode::Utilities,
             _ => CursorMode::None,
         }
     }
 }
 impl CursorMode {
-    fn order() -> [CursorMode; 9] {
+    fn order() -> [CursorMode; 10] {
         [
             CursorMode::Roads,
             CursorMode::Zoning,
@@ -90,6 +92,7 @@ impl CursorMode {
             CursorMode::TerrainEditing,
             CursorMode::Cars,
             CursorMode::Destruction,
+            CursorMode::Utilities,
             CursorMode::None,
         ]
     }

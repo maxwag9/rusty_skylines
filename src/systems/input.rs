@@ -153,7 +153,7 @@ pub fn run_inputs(resources: &mut Resources) {
         let scale_step = r * 0.40;
         let zoom_step = (base_step + scale_step) * cam_ctrl.zoom_velocity * dt;
 
-        camera.orbit_radius = (r + zoom_step).clamp(camera.near * 2.0, 1000.0);
+        camera.orbit_radius = (r + zoom_step).clamp(camera.near * 2.0, 10000.0);
 
         let damping = cam_ctrl.zoom_damping * (1.0 + (r / 500.0).sqrt());
         cam_ctrl.zoom_velocity *= (1.0 - damping * dt).max(0.0);
@@ -175,7 +175,7 @@ pub fn run_inputs(resources: &mut Resources) {
             // First person needs eye-height clearance above ground, not the
             // small pivot clearance used while orbiting.
             let clearance = if camera.mode == CameraMode::FirstPerson {
-                1.7
+                5.7
             } else {
                 0.1
             };

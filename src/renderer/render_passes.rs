@@ -1,18 +1,17 @@
 use crate::data::{Settings, ShadowType};
 use crate::gpu_timestamp;
 use crate::helpers::modpack::ModManager;
+use crate::renderer::clouds::clouds::CloudSubsystem;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
 use crate::renderer::props::{GpuPropInstance, PropVertex, Props};
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
-use crate::renderer::render_core::{create_color_attachment_clear, create_color_attachment_load};
+use crate::renderer::render_core::create_color_attachment_load;
 use crate::renderer::textures::material_keys::*;
 use crate::renderer::ui::UiRenderer;
 use crate::renderer::ui_pipelines::multisample_state;
-use crate::ui::vertex::{
-    FlowingThickLineVtxRender, TextVtxRender, ThickLineVtxRender, ThinLineVtxRender, Vertex,
-};
+use crate::ui::vertex::{FlowingThickLineVtxRender, ThickLineVtxRender, ThinLineVtxRender, Vertex};
 use crate::world::buildings::building_mesher::BuildingVertex;
 use crate::world::buildings::building_renderer::BuildingRenderer;
 use crate::world::buildings::buildings::Buildings;
@@ -314,6 +313,257 @@ pub fn render_sky<'a>(
         pass.draw(0..3, 0..1);
     });
 }
+
+pub fn render_clouds(
+    encoder: &mut CommandEncoder,
+    render_manager: &mut RenderManager,
+    profiler: &mut GpuProfiler,
+    pipelines: &Pipelines,
+    clouds: &mut CloudSubsystem,
+    _msaa_samples: u32,
+    mod_manager: &ModManager,
+) {
+    if !clouds.settings.enabled {
+        clouds.invalidate_history();
+        return;
+    }
+
+    let Some(trace_shader) = mod_manager.resource_path("shaders/cloud_raymarch.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/cloud_raymarch.wgsl'");
+        return;
+    };
+    let Some(temporal_shader) = mod_manager.resource_path("shaders/cloud_temporal.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/cloud_temporal.wgsl'");
+        return;
+    };
+
+    gpu_timestamp!(encoder, profiler, "Cloud Trace", {
+        let color_attachment = RenderPassColorAttachment {
+            view: clouds.trace_view(),
+            resolve_target: None,
+            depth_slice: None,
+            ops: Operations {
+                load: LoadOp::Clear(Color::TRANSPARENT),
+                store: StoreOp::Store,
+            },
+        };
+        let depth_attachment = RenderPassColorAttachment {
+            view: clouds.trace_depth_view(),
+            resolve_target: None,
+            depth_slice: None,
+            ops: Operations {
+                load: LoadOp::Clear(Color::TRANSPARENT),
+                store: StoreOp::Store,
+            },
+        };
+
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("Cloud Trace Pass"),
+            color_attachments: &[Some(color_attachment), Some(depth_attachment)],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        let texture_views = [
+            clouds.cloud_noise.weather_map(),
+            clouds.cloud_noise.shape_noise(),
+            clouds.cloud_noise.detail_noise(),
+            &pipelines.resources.blue_noise,
+            clouds.terrain_height_view(),
+        ];
+        render_manager.render_with_textures(
+            &texture_views,
+            trace_shader,
+            &PipelineOptions {
+                topology: PrimitiveTopology::TriangleList,
+                multisample_state: MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                sampler: SamplerDescriptor {
+                    label: Some("Cloud Trace Linear Sampler"),
+                    address_mode_u: AddressMode::Repeat,
+                    address_mode_v: AddressMode::Repeat,
+                    address_mode_w: AddressMode::Repeat,
+                    mag_filter: FilterMode::Linear,
+                    min_filter: FilterMode::Linear,
+                    mipmap_filter: MipmapFilterMode::Linear,
+                    ..Default::default()
+                },
+                fragment: FragmentOption::Default {
+                    targets: vec![
+                        Some(ColorTargetState {
+                            format: clouds.trace_view().texture().format(),
+                            blend: None,
+                            write_mask: ColorWrites::ALL,
+                        }),
+                        Some(ColorTargetState {
+                            format: clouds.trace_depth_view().texture().format(),
+                            blend: None,
+                            write_mask: ColorWrites::ALL,
+                        }),
+                    ],
+                },
+                ..Default::default()
+            },
+            &[&pipelines.buffers.camera, &clouds.uniform_buffer],
+            &mut pass,
+        );
+
+        pass.draw(0..3, 0..1);
+    });
+
+    gpu_timestamp!(encoder, profiler, "Cloud Temporal", {
+        {
+            let color_attachment = RenderPassColorAttachment {
+                view: clouds.history_write_view(),
+                resolve_target: None,
+                depth_slice: None,
+                ops: Operations {
+                    load: LoadOp::Clear(Color::TRANSPARENT),
+                    store: StoreOp::Store,
+                },
+            };
+
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Cloud Temporal Pass"),
+                color_attachments: &[Some(color_attachment)],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            let texture_views = [
+                clouds.trace_view(),
+                clouds.history_read_view(),
+                clouds.trace_depth_view(),
+            ];
+
+            render_manager.render_with_textures(
+                &texture_views,
+                temporal_shader,
+                &PipelineOptions {
+                    topology: PrimitiveTopology::TriangleList,
+                    multisample_state: MultisampleState {
+                        count: 1,
+                        mask: !0,
+                        alpha_to_coverage_enabled: false,
+                    },
+                    sampler: SamplerDescriptor {
+                        label: Some("Cloud Temporal Sampler"),
+                        address_mode_u: AddressMode::ClampToEdge,
+                        address_mode_v: AddressMode::ClampToEdge,
+                        address_mode_w: AddressMode::ClampToEdge,
+                        mag_filter: FilterMode::Linear,
+                        min_filter: FilterMode::Linear,
+                        mipmap_filter: MipmapFilterMode::Nearest,
+                        ..Default::default()
+                    },
+                    fragment: FragmentOption::Default {
+                        targets: vec![Some(ColorTargetState {
+                            format: clouds.history_write_view().texture().format(),
+                            blend: None,
+                            write_mask: ColorWrites::ALL,
+                        })],
+                    },
+                    ..Default::default()
+                },
+                &[
+                    &pipelines.buffers.camera,
+                    &clouds.uniform_buffer,
+                    clouds.temporal_uniform_buffer(),
+                ],
+                &mut pass,
+            );
+
+            pass.draw(0..3, 0..1);
+        }
+        clouds.finish_temporal_frame();
+    });
+}
+
+pub fn render_cloud_composite_depth_aware(
+    encoder: &mut CommandEncoder,
+    render_manager: &mut RenderManager,
+    profiler: &mut GpuProfiler,
+    pipelines: &Pipelines,
+    clouds: &CloudSubsystem,
+    msaa_samples: u32,
+    mod_manager: &ModManager,
+) {
+    if !clouds.settings.enabled {
+        return;
+    }
+
+    let Some(shader) = mod_manager.resource_path("shaders/cloud_upsample_composite.wgsl") else {
+        error!("[Renderer] Missing shader 'shaders/cloud_upsample_composite.wgsl'");
+        return;
+    };
+
+    gpu_timestamp!(encoder, profiler, "Cloud Upsample Composite", {
+        let color_attachment = create_color_attachment_load(
+            &pipelines.msaa.hdr,
+            &pipelines.resolved.hdr,
+            msaa_samples,
+        );
+
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("Cloud Upsample Composite Pass"),
+            color_attachments: &[Some(color_attachment)],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        let texture_views = [
+            clouds.history_read_view(),
+            clouds.trace_depth_view(),
+            &pipelines.post_fx.linear_depth_full,
+        ];
+
+        render_manager.render_with_textures(
+            &texture_views,
+            shader,
+            &PipelineOptions {
+                topology: PrimitiveTopology::TriangleList,
+                multisample_state: MultisampleState {
+                    count: msaa_samples,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                fragment: FragmentOption::Default {
+                    targets: vec![Some(ColorTargetState {
+                        format: pipelines.resolved.hdr.texture().format(),
+                        blend: Some(BlendState {
+                            color: BlendComponent {
+                                src_factor: BlendFactor::One,
+                                dst_factor: BlendFactor::SrcAlpha,
+                                operation: BlendOperation::Add,
+                            },
+                            alpha: BlendComponent {
+                                src_factor: BlendFactor::Zero,
+                                dst_factor: BlendFactor::One,
+                                operation: BlendOperation::Add,
+                            },
+                        }),
+                        write_mask: ColorWrites::ALL,
+                    })],
+                },
+                ..Default::default()
+            },
+            &[&pipelines.buffers.camera, &clouds.uniform_buffer],
+            &mut pass,
+        );
+
+        pass.draw(0..3, 0..1);
+    });
+}
+
 pub fn render_terrain<'a>(
     encoder: &'a mut CommandEncoder,
     render_manager: &mut RenderManager,

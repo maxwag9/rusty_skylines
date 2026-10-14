@@ -271,6 +271,12 @@ pub const DAYS_PER_YEAR: f64 = 20.0;
 pub const HOURS_PER_YEAR: f64 = DAYS_PER_YEAR * HOURS_PER_DAY;
 const SCHOOL_YEAR_START_DAY: u32 = (DAYS_PER_YEAR * 0.75) as u32; // ~September 1
 
+pub enum TimeChangeOperation {
+    Add(f64),
+    Sub(f64),
+    Set(f64),
+}
+
 pub struct Time {
     pub timer: Timer,
     pub last_frame: Instant,
@@ -368,7 +374,19 @@ impl Time {
         self.target_fps = target_fps.max(1.0);
         self.target_frametime = 1.0 / self.target_fps;
     }
-
+    pub fn change_game_time(&mut self, op: TimeChangeOperation) {
+        match op {
+            TimeChangeOperation::Add(time) => {
+                self.total_game_time += time;
+            }
+            TimeChangeOperation::Sub(time) => {
+                self.total_game_time -= time;
+            }
+            TimeChangeOperation::Set(time) => {
+                self.total_game_time = time;
+            }
+        }
+    }
     #[inline]
     pub fn is_rewinding(&self) -> bool {
         self.current_time_speed < 0.0
@@ -591,10 +609,62 @@ pub struct Uniforms {
     pub near_far_depth: [f32; 2],
 }
 
+pub trait IntoTimerPath {
+    fn into_timer_path(self) -> Vec<String>;
+}
+
+impl IntoTimerPath for &str {
+    fn into_timer_path(self) -> Vec<String> {
+        vec![self.to_owned()]
+    }
+}
+
+impl IntoTimerPath for String {
+    fn into_timer_path(self) -> Vec<String> {
+        vec![self]
+    }
+}
+
+impl IntoTimerPath for &String {
+    fn into_timer_path(self) -> Vec<String> {
+        vec![self.clone()]
+    }
+}
+
+impl<'a> IntoTimerPath for Vec<&'a str> {
+    fn into_timer_path(self) -> Vec<String> {
+        self.into_iter().map(str::to_owned).collect()
+    }
+}
+
+impl IntoTimerPath for Vec<String> {
+    fn into_timer_path(self) -> Vec<String> {
+        self
+    }
+}
+
+impl<'a, const N: usize> IntoTimerPath for [&'a str; N] {
+    fn into_timer_path(self) -> Vec<String> {
+        self.into_iter().map(str::to_owned).collect()
+    }
+}
+
+impl<'a, const N: usize> IntoTimerPath for &'a [&'a str; N] {
+    fn into_timer_path(self) -> Vec<String> {
+        self.iter().map(|part| (*part).to_owned()).collect()
+    }
+}
+
+impl<'a> IntoTimerPath for &'a [&'a str] {
+    fn into_timer_path(self) -> Vec<String> {
+        self.iter().map(|part| (*part).to_owned()).collect()
+    }
+}
+
 #[derive(Debug)]
 pub struct Timer {
-    starts: HashMap<String, Instant>,
-    checkpoints: HashMap<String, Vec<Duration>>,
+    starts: HashMap<Vec<String>, Vec<Instant>>,
+    checkpoints: HashMap<Vec<String>, Vec<Duration>>,
     totals_started: Instant,
 }
 
@@ -609,77 +679,109 @@ impl Default for Timer {
 }
 
 impl Timer {
-    pub fn checkpoint(&mut self, name: &str, end: bool) {
-        match end {
-            false => {
-                self.starts.insert(name.to_owned(), Instant::now());
-            }
+    pub fn checkpoint<P: IntoTimerPath>(&mut self, path: P, end: bool) {
+        let path = path.into_timer_path();
 
-            true => {
-                if let Some(start) = self.starts.remove(name) {
-                    self.checkpoints
-                        .entry(name.to_owned())
-                        .or_default()
-                        .push(start.elapsed());
-                }
+        if path.is_empty() {
+            return;
+        }
+
+        if !end {
+            self.starts.entry(path).or_default().push(Instant::now());
+
+            return;
+        }
+
+        let (start, remove) = match self.starts.get_mut(&path) {
+            Some(starts) => {
+                let start = starts.pop();
+                (start, starts.is_empty())
             }
+            None => (None, false),
+        };
+
+        if remove {
+            self.starts.remove(&path);
+        }
+
+        if let Some(start) = start {
+            self.checkpoints
+                .entry(path)
+                .or_default()
+                .push(start.elapsed());
         }
     }
 
-    pub fn get(&self, name: &str) -> Option<&[Duration]> {
-        self.checkpoints.get(name).map(Vec::as_slice)
+    pub fn get<P: IntoTimerPath>(&self, path: P) -> Option<&[Duration]> {
+        let path = path.into_timer_path();
+        self.checkpoints.get(&path).map(Vec::as_slice)
     }
 
-    pub fn totals(&mut self) -> Vec<(String, Duration)> {
-        // Only produce a new set of totals every 500 ms.
+    pub fn totals(&mut self) -> Vec<(Vec<String>, Duration)> {
         if self.totals_started.elapsed() < Duration::from_millis(500) {
             return Vec::new();
         }
-        //println!("YES");
+
         self.totals_started = Instant::now();
 
-        let totals = self
+        let mut totals: Vec<(Vec<String>, Duration)> = self
             .checkpoints
             .drain()
-            .map(|(name, durations)| {
-                if durations.is_empty() {
-                    return (name, Duration::ZERO);
-                }
-
+            .map(|(path, durations)| {
                 let total: Duration = durations.iter().copied().sum();
-                let average = total / durations.len() as u32;
 
-                (name, average)
+                let average = if durations.is_empty() {
+                    Duration::ZERO
+                } else {
+                    total / durations.len() as u32
+                };
+
+                (path, average)
             })
             .collect();
+
+        totals.sort_by(|a, b| a.0.cmp(&b.0));
 
         totals
     }
 
     pub fn set_totals(&mut self, variables: &mut Variables) {
         let totals = self.totals();
-        //println!("{}", totals.len());
+
         if totals.is_empty() {
             return;
-        };
-        for (name, total) in totals.iter() {
-            variables.set_f64(name, total.as_secs_f64() * 1000.0);
         }
-        let frametimes: Vec<Value> = totals
-            .into_iter()
-            .map(|(name, duration)| {
-                let ms = duration.as_secs_f64() * 1000.0;
-                let rounded = (ms * 10.0).round() / 10.0;
 
-                Value::Array(vec![Value::String(name), Value::F64(rounded)])
-            })
+        let mut roots: BTreeMap<String, TimingNode> = BTreeMap::new();
+
+        for (path, duration) in totals {
+            if path.is_empty() {
+                continue;
+            }
+
+            let name = path.join(" / ");
+            variables.set_f64(&name, duration.as_secs_f64() * 1000.0);
+
+            let mut node = roots.entry(path[0].clone()).or_default();
+
+            for component in path.iter().skip(1) {
+                node = node.children.entry(component.clone()).or_default();
+            }
+
+            node.duration = Some(duration);
+        }
+
+        let frametimes: Vec<Value> = roots
+            .into_iter()
+            .map(|(name, node)| node.into_value(name))
             .collect();
+
         variables.set_array("cpu_frametimes", frametimes);
     }
 
-    pub fn total(&self, name: &str) -> Duration {
+    pub fn total<P: IntoTimerPath>(&self, path: P) -> Duration {
         self.checkpoints
-            .get(name)
+            .get(&path.into_timer_path())
             .map(|times| times.iter().copied().sum())
             .unwrap_or_default()
     }
@@ -688,5 +790,35 @@ impl Timer {
         self.starts.clear();
         self.checkpoints.clear();
         self.totals_started = Instant::now();
+    }
+}
+use std::collections::BTreeMap;
+
+#[derive(Default)]
+struct TimingNode {
+    duration: Option<Duration>,
+    children: BTreeMap<String, TimingNode>,
+}
+
+impl TimingNode {
+    fn duration_ms(&self) -> f64 {
+        self.duration
+            .map(|duration| duration.as_secs_f64() * 1000.0)
+            .unwrap_or_else(|| self.children.values().map(Self::duration_ms).sum())
+    }
+
+    fn into_value(self, name: String) -> Value {
+        let duration_ms = self.duration_ms();
+
+        let mut values = vec![Value::String(name)];
+
+        for (child_name, child) in self.children {
+            values.push(child.into_value(child_name));
+        }
+
+        let rounded = (duration_ms * 100.0).round() / 100.0;
+        values.push(Value::F64(rounded));
+
+        Value::Array(values)
     }
 }

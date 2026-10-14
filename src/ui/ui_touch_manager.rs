@@ -11,13 +11,13 @@
 //! - Rendering, saving/loading, undo storage, element creation/deletion
 
 use crate::data::Settings;
-use crate::renderer::ui_text_rendering::anchor_to;
 use crate::resources::Time;
 use crate::ui::input::Input;
 use crate::ui::selections::SelectionManager;
 use crate::ui::ui_editor::{GuiOptions, TouchableElement, Ui, get_element};
 use crate::ui::ui_edits::SizeProperty;
 use crate::ui::ui_runtime::UiRuntimes;
+use crate::ui::ui_text_editing::{inverse_rotate_text_point, text_top_left};
 use crate::ui::vertex::{
     ElementKind, UiButtonCircle, UiButtonHandle, UiButtonPolygon, UiButtonRect, UiButtonText,
     UiElement,
@@ -523,19 +523,20 @@ impl Touchable for UiButtonText {
     }
 
     fn hit_test(&self, point: [f32; 2]) -> Option<TouchableHit> {
-        let pos = anchor_to(self.anchor, [self.x, self.y], self.width, self.height);
-        let pad = 2f32;
-        let x0 = pos[0];
-        let y0 = pos[1];
-        let x1 = x0 + self.width + pad;
-        let y1 = y0 + self.height + pad;
+        let [mx, my] = inverse_rotate_text_point(self, point);
+        let (x0, y0, width, height) = text_top_left(self);
+        let pad = 2.0;
 
-        if point[0] >= x0 && point[0] <= x1 && point[1] >= y0 && point[1] <= y1 {
-            let cx = (x0 + x1) / 2.0;
-            let cy = (y0 + y1) / 2.0;
-            let dist = ((point[0] - cx).powi(2) + (point[1] - cy).powi(2)).sqrt();
+        let x1 = x0 + width + pad;
+        let y1 = y0 + height + pad;
+
+        if mx >= x0 && mx <= x1 && my >= y0 && my <= y1 {
+            let cx = (x0 + x1) * 0.5;
+            let cy = (y0 + y1) * 0.5;
+            let distance = ((mx - cx).powi(2) + (my - cy).powi(2)).sqrt();
+
             Some(TouchableHit {
-                distance: dist,
+                distance,
                 vertex_index: None,
             })
         } else {

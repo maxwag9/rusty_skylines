@@ -1,5 +1,6 @@
 #include "includes/shadow.wgsl"
 #include "includes/uniforms.wgsl"
+#include "includes/simple_lighting.wgsl"
 
 struct PickUniform {
     pos: vec3<f32>,
@@ -131,56 +132,9 @@ fn fs_main(in: VertexOut) -> FragmentOut {
     let n = normalize(in.world_normal);
     let up = vec3<f32>(0.0, 1.0, 0.0);
 
-    let sun_l  = normalize(uniforms.sun_direction);
-    let moon_l = normalize(uniforms.moon_direction);
-
-    let sun_elev   = dot(sun_l, up);
-    let sun_amount = smoothstep(-0.06, 0.10, sun_elev);
-    let night_amount = 1.0 - sun_amount;
-
-    let moon_elev    = dot(moon_l, up);
-    let moon_visible = smoothstep(-0.08, 0.08, moon_elev);
-
-    let hemi = saturate(dot(n, up) * 0.5 + 0.5);
-
-    let sky_ambient_day    = vec3<f32>(0.10, 0.12, 0.15);
-    let ground_ambient_day = vec3<f32>(0.05, 0.05, 0.05);
-
-    let sky_ambient_night    = vec3<f32>(0.01, 0.01, 0.01);
-    let ground_ambient_night = vec3<f32>(0.02, 0.02, 0.02);
-
-    let sky_ambient    = mix(sky_ambient_night,    sky_ambient_day,    sun_amount);
-    let ground_ambient = mix(ground_ambient_night, ground_ambient_day, sun_amount);
-
-    let moon_ambient_color = vec3<f32>(0.02, 0.03, 0.06);
-    let moon_ambient = moon_ambient_color * (0.6 * night_amount * moon_visible);
-
-    let ambient = mix(ground_ambient, sky_ambient, hemi) + moon_ambient * hemi;
-
-    let sun_ndotl = dot(n, sun_l);
-    let sun_diffuse = max(sun_ndotl, 0.0);
-    let sun_wrapped = saturate(sun_ndotl + 0.4) / 1.4;
-
     let greenness = in.color.g - max(in.color.r, in.color.b);
     let up_facing = saturate(dot(n, up));
     let grass_amount = saturate(greenness * 2.5) * up_facing * up_facing;
-
-    let sun_direct = mix(sun_diffuse, sun_wrapped, grass_amount) * sun_amount;
-
-    var sun_shadow: f32 = 1.0;
-    if (uniforms.csm_enabled != 0u && sun_amount > 0.0 && sun_direct > 0.0001) {
-        sun_shadow = fetch_shadow(in.world_pos, n, sun_l);
-    }
-
-    let moon_ndotl = dot(n, moon_l);
-    let moon_diffuse = max(moon_ndotl, 0.0);
-    let moon_wrapped = saturate(moon_ndotl + 0.15) / 1.15;
-
-    let moon_intensity: f32 = 0.22;
-    let moon_color = vec3<f32>(0.35, 0.42, 0.60);
-
-    let moon_direct = mix(moon_diffuse, moon_wrapped, grass_amount) * (moon_visible * night_amount * moon_intensity);
-
 
     let stable_world_xz = in.chunk_xz;
 
@@ -236,10 +190,13 @@ fn fs_main(in: VertexOut) -> FragmentOut {
 
     let sun_color = vec3<f32>(1.0, 0.98, 0.92);
 
-    var final_color =
-        albedo * ambient +
-        albedo * (sun_color * (sun_direct * sun_shadow)) +
-        albedo * (moon_color * moon_direct);
+    let lighting = calculate_world_lighting(
+        in.world_pos,
+        n,
+        grass_amount,
+    );
+
+    var final_color = albedo * lighting;
 
     if (pick.radius > 0.0) {
         let d = distance(in.world_pos, pick.pos);

@@ -245,6 +245,7 @@ pub struct GameState {
     pub current_save_info: Option<SaveInfo>,
     pub mod_manager: ModManager,
 }
+
 impl GameState {
     pub fn new() -> Self {
         Self {

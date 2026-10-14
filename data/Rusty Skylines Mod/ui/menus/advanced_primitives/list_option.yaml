@@ -1,0 +1,44 @@
+name: list_option
+elements:
+  - !Rect
+    id: List Option Background
+    actions:
+      - on:activated, ifvareq({ap.3}, str:compact, set(str:self.size.y, 24.0))
+      - on:activated, ifvareq({ap.3}, str:large, set(str:self.size.y, 34.0))
+      - on:hover_enter, call(rust:play_sound, str:ButtonHover)
+      - on:press, call(rust:play_sound, str:ButtonPress)
+      - call(show_interaction, [[0.02, 0.02, 0.02, 0.95], false]))
+    x: 0
+    y: 0
+    w: 300
+    h: 34
+    color:
+      - 0.02
+      - 0.02
+      - 0.02
+      - 0.95
+    border_color:
+      - 0.1
+      - 0.1
+      - 0.1
+      - 0.7
+    roundness: 0.03
+    border_thickness: 1
+
+  - !Text
+    id: List Option Text
+    x: 0
+    y: 0
+    pt: 15.0
+    border_width: 5.0
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    text: "{{ap.0}}"
+    anchor: Center
+    misc:
+      active: true
+      touchable: false
+      editable: true

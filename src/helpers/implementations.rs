@@ -119,3 +119,85 @@ where
         Ok(())
     }
 }
+
+use std::ffi::OsString;
+
+use image::{
+    ColorType, ImageDecoder, ImageError, ImageResult,
+    error::{DecodingError, ImageFormatHint},
+    hooks::register_decoding_hook,
+};
+use resvg::{tiny_skia, usvg};
+
+struct SvgDecoder {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
+
+impl ImageDecoder for SvgDecoder {
+    fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    fn color_type(&self) -> ColorType {
+        ColorType::Rgba8
+    }
+
+    fn total_bytes(&self) -> u64 {
+        self.rgba.len() as u64
+    }
+
+    fn read_image(self, buf: &mut [u8]) -> ImageResult<()> {
+        if buf.len() != self.rgba.len() {
+            return Err(ImageError::Decoding(DecodingError::new(
+                ImageFormatHint::Name("SVG".into()),
+                "output buffer has incorrect size",
+            )));
+        }
+
+        buf.copy_from_slice(&self.rgba);
+        Ok(())
+    }
+
+    fn read_image_boxed(self: Box<Self>, buf: &mut [u8]) -> ImageResult<()> {
+        (*self).read_image(buf)
+    }
+}
+
+pub fn register_svg_decoding_hook() {
+    register_decoding_hook(
+        OsString::from("svg"),
+        Box::new(|mut reader| {
+            let mut data = Vec::new();
+            reader.read_to_end(&mut data)?;
+
+            let options = usvg::Options::default();
+
+            let tree = usvg::Tree::from_data(&data, &options).map_err(|err| {
+                ImageError::Decoding(DecodingError::new(ImageFormatHint::Name("SVG".into()), err))
+            })?;
+
+            let size = tree.size().to_int_size();
+            let mut pixmap =
+                tiny_skia::Pixmap::new(size.width(), size.height()).ok_or_else(|| {
+                    ImageError::Decoding(DecodingError::new(
+                        ImageFormatHint::Name("SVG".into()),
+                        "failed to allocate SVG raster buffer",
+                    ))
+                })?;
+
+            resvg::render(
+                &tree,
+                tiny_skia::Transform::identity(),
+                &mut pixmap.as_mut(),
+            );
+
+            Ok(Box::new(SvgDecoder {
+                width: size.width(),
+                height: size.height(),
+                rgba: pixmap.take_demultiplied(),
+            }))
+        }),
+    );
+}

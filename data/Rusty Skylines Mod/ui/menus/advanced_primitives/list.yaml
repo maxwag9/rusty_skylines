@@ -1,0 +1,70 @@
+name: list
+elements:
+  - !Rect
+    id: List Header Background
+    actions:
+      - on:activated, set(str:{ap.1}_open, false)
+      - on:release on:activated as:["List Expand Indicator"], set(str:as.center.x, expr:{self.center.x}+{self.size.x}*0.45)
+      - on:release button:left, toggle(str:{ap.1}_open)
+      - on:release on:activated on:sel button:left, ifvareq({ap.1}_open, bool:false, forin({ap.0}, del_ap(self.menu, self.layer, expr:"{ap.1}_Option_"+{idx})));
+      - on:release button:left, ifvareq(var:{ap.1}_open, bool:true, forin({ap.0}, add_ap(self.menu, expr:"{ap.1}_Option_"+{idx}, "list_option", [expr:get({ap.0}, {idx}), str:{ap.1}, self.layer, str:{ap.2}], [self.center.x, expr:{self.center.y} + {self.size.y} * ({idx} + 1)], 1.0, true);))
+
+      - on:hover_enter, call(rust:play_sound, str:ButtonHover)
+      - on:press, call(rust:play_sound, str:ButtonPress)
+      - call(show_interaction, [[0.01, 0.01, 0.01, 0.95], false]))
+    x: 0
+    y: 0
+    w: 300
+    h: 34
+    color:
+      - 0.01
+      - 0.01
+      - 0.01
+      - 0.95
+    border_color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    roundness: 0.05
+    border_thickness: 1
+
+  - !Text
+    id: List Header Text
+    x: 0
+    y: 0
+    pt: 16.0
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    text: "{ap.1}"
+    anchor: Center
+    decorations:
+      - color: [ 0.0, 0.0, 0.0, 1.0 ]
+        spread: 2.0
+    misc:
+      active: true
+      touchable: false
+      editable: true
+
+  - !Text
+    id: List Expand Indicator
+    x: 0
+    y: 0
+    pt: 20.0
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    text: '{expr:{{ap.1}_open} ? "v" : ">"}'
+    anchor: Center
+    decorations:
+      - color: [ 0.3, 0.3, 0.3, 1.0 ]
+        spread: 2.0
+    misc:
+      active: true
+      touchable: false
+      editable: false

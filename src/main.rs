@@ -11,11 +11,13 @@ mod systems;
 mod ui;
 pub mod world;
 
+use crate::helpers::print_start_message;
 use app::App;
 use tracing_subscriber::FmtSubscriber;
 use winit::event_loop::{ControlFlow, EventLoop};
 
 fn main() {
+    print_start_message();
     let event_loop = EventLoop::new().expect("Failed to create event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
     let subscriber = FmtSubscriber::builder()

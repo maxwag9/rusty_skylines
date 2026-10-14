@@ -6,14 +6,17 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use winit::dpi::PhysicalSize;
 
 pub struct Variables {
+    pub window_size: PhysicalSize<f32>,
     pub vars: HashMap<String, Value>,
 }
 
 impl Variables {
     pub fn new() -> Self {
         Self {
+            window_size: PhysicalSize::new(1920.0, 1080.0),
             vars: HashMap::new(),
         }
     }

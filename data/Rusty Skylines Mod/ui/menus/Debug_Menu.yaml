@@ -8,7 +8,6 @@ layers:
         x: 0.0
         y: 0.0
         pt: 20
-        border_width: 5
         resize_behaviour:
           width: uniform
         color:
@@ -18,6 +17,9 @@ layers:
           - 1.0
         text: 'Rusty Skylines Alpha v{GAME_VERSION}'
         anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 3.0
         misc:
           touchable: false
       - !Text
@@ -25,7 +27,6 @@ layers:
         x: 0.0
         y: 25
         pt: 15
-        border_width: 5
         resize_behaviour:
           width: uniform
         color:
@@ -35,31 +36,16 @@ layers:
           - 1.0
         text: 'FPS: {expr:{fps}:.1} | Frame: {expr:({render_dt} * 1000):.2}ms | Render CPU: {expr:fix({cpu_frametime??0}:.2, 2, 2)}ms | Sim: {expr:({sim_dt} * 1000):.2}ms | {expr:{fps} > 60 ? "Smooth" : "Laggy"}'
         anchor: TopLeft
-        misc:
-          touchable: false
-      - !Text
-        id: frametime_main_pass_text
-        x: 0.0
-        y: 45
-        pt: 15
-        border_width: 5
-        resize_behaviour:
-          width: uniform
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: 'Total everything: {expr:{total_frametime??0}:.2}ms, Sky: {expr:{sky_frametime??0}:.2}ms, Stars: {expr:{stars_frametime??0}:.2}ms, Terrain: {expr:{terrain_frametime??0}:.2}ms, Water: {expr:{water_frametime??0}:.2}ms, Roads: {expr:{roads_frametime??0}:.2}ms, Reversed Depth Z: {reversed_depth_z}, MSAA: {msaa_samples}x, Present Mode: {present_mode}, CSM Shadows: {shadow_map_size}px'
-        anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
         misc:
           touchable: false
       - !Text
         id: cpu_frametime_text
         x: 0.0
-        y: 65
+        y: 45
         pt: 15
-        border_width: 5
         resize_behaviour:
           width: uniform
         color:
@@ -69,6 +55,28 @@ layers:
           - 1.0
         text: 'CPU frametimes: {cpu_frametimes}'
         anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+      - !Text
+        id: frametime_main_pass_text
+        x: 0.0
+        y: 65
+        pt: 15
+        resize_behaviour:
+          width: uniform
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'Total everything: {expr:{total_frametime??0}:.2}ms, Sky: {expr:{sky_frametime??0}:.2}ms, Stars: {expr:{stars_frametime??0}:.2}ms, Terrain: {expr:{terrain_frametime??0}:.2}ms, Water: {expr:{water_frametime??0}:.2}ms, Roads: {expr:{roads_frametime??0}:.2}ms, Reversed Depth Z: {reversed_depth_z}, MSAA: {msaa_samples}x, Present Mode: {present_mode}, CSM Shadows: {shadow_map_size}px'
+        anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
         misc:
           touchable: false
       - !Text
@@ -76,7 +84,6 @@ layers:
         x: 0.0
         y: 85
         pt: 15
-        border_width: 5
         resize_behaviour:
           width: uniform
         color:
@@ -86,6 +93,9 @@ layers:
           - 1.0
         text: 'GTAO: Total: {expr:{gtao_frametime??0}:.2}ms, Prep: {expr:{gtao_prep_frametime??0}:.2}ms, Generate: {expr:{gtao_generate_frametime??0}:.2}ms, Blur: {expr:{gtao_blur_frametime??0}:.2}ms, Upsample/Apply: {expr:{gtao_upsample_apply_frametime??0}:.2}ms'
         anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
         misc:
           touchable: false
       - !Text
@@ -93,7 +103,6 @@ layers:
         x: 0
         y: 105
         pt: 15
-        border_width: 5
         resize_behaviour:
           width: uniform
         color:
@@ -103,14 +112,35 @@ layers:
           - 1.0
         text: 'Fog: {expr:{fog_frametime??0}:.2}ms, UI: {expr:{ui_frametime??0}:.2}ms, Tonemapping: {expr:{tonemap_frametime??0}:.2}ms, Cars: {expr:{cars_frametime??0}:.2}ms, Props: {expr:{props_frametime??0}:.2}ms, Gizmo: {expr:{gizmo_frametime??0}:.2}ms'
         anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+      - !Text
+        id: clouds_frametime_text
+        x: 0
+        y: 125
+        pt: 15
+        resize_behaviour:
+          width: uniform
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'Clouds: {expr:{clouds_frametime??0}:.2}ms, Clouds Upsample: {expr:{cloud_upsample_composite_frametime??0}:.2}ms, '
+        anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
         misc:
           touchable: false
       - !Text
         id: shadows_frametime_text
         x: 0
-        y: 125
+        y: 145
         pt: 15
-        border_width: 5
         resize_behaviour:
           width: uniform
         color:
@@ -120,14 +150,16 @@ layers:
           - 1.0
         text: 'CSM Shadows: {expr:{csm_frametime??0}:.2}ms, RT Total: {expr:{rt_frametime??0}:.2}ms, RT Rays: {expr:{rt_tracing_frametime??0}:.2}ms, RT Upsampling: {expr:{rt_upsample_frametime??0}:.2}ms, RT Apply: {expr:{rt_apply_frametime??0}:.2}ms'
         anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
         misc:
           touchable: false
       - !Text
         id: sky_info_text
         x: 0
-        y: 145
+        y: 165
         pt: 15
-        border_width: 5
         resize_behaviour:
           width: uniform
         color:
@@ -137,14 +169,16 @@ layers:
           - 1.0
         text: 'Requested Time Speed: {expr:{sim_speed}:.2}x, Actual Time Speed: {expr:{achieved_time_speed}:.2}x, Total Game Time: {expr:fancy_time({total_game_time}, false, {day_length}, 3, false)}, Day length: {expr:{day_length}:.2}s, Total_days: {expr:{total_days}:.2}d, Sun declination: {expr:{sun_declination}:.2} degrees'
         anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
         misc:
           touchable: false
       - !Text
         id: player_info_text
         x: 0
-        y: 165
+        y: 185
         pt: 15
-        border_width: 5
         resize_behaviour:
           width: uniform
         color:
@@ -154,14 +188,16 @@ layers:
           - 1.0
         text: 'Player Pos: X: {expr:{target_pos.x}:.2} Y: {expr:{target_pos.y}:.2} Z: {expr:{target_pos.z}:.2} Chunk Pos: ({target_pos_cx}, {target_pos_cz})'
         anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
         misc:
           touchable: false
       - !Text
         id: world_info_text
         x: 0.0
-        y: 185
+        y: 205
         pt: 15
-        border_width: 5
         resize_behaviour:
           width: uniform
         color:
@@ -171,15 +207,17 @@ layers:
           - 1.0
         text: 'Car Count: {car_count}, Prop Count: (Total: {prop_count}, Generated: {generated_prop_count}, Manual: {manual_prop_count}), Visible Prop Count: (Total: {visible_prop_count}, Generated: {visible_generated_prop_count}, Manual: {visible_manual_prop_count}), Cursor Mode: {cursor_mode}, Color: {color_picker_color}s'
         anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
         misc:
           touchable: false
 
       - !Text
         id: save_info_text
         x: 0.0
-        y: 205
+        y: 225
         pt: 15
-        border_width: 5
         resize_behaviour:
           width: uniform
         color:
@@ -189,5 +227,8 @@ layers:
           - 1.0
         text: 'Current Save: {current_save}'
         anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
         misc:
           touchable: false

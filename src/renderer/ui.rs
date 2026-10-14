@@ -1,6 +1,5 @@
 use crate::data::Settings;
 use crate::helpers::modpack::ModManager;
-use crate::helpers::paths::data_dir;
 use crate::helpers::stupid_color_from_rgba;
 use crate::renderer::pipelines::{COLOR_FORMAT, Pipelines};
 use crate::renderer::render_core::{create_color_attachment_clear, create_color_attachment_load};
@@ -18,7 +17,6 @@ use crate::ui::vertex::{
     UiElement, UiVertexPoly, UiVertexText,
 };
 use sluggrs_skylines::*;
-use std::fs;
 use std::path::Path;
 use tracing::error;
 use wgpu::*;
@@ -161,6 +159,7 @@ pub struct TextParams {
     pub pos: [f32; 2],
     pub pt: f32,
     pub color: [f32; 4],
+    pub rotation: f32,
     pub id_hash: f32,
     pub misc: [f32; 4], // [active, touched_time, is_down, id_hash]
     pub text: String,
@@ -179,6 +178,7 @@ impl Default for TextParams {
             pos: [0.0, 0.0],
             pt: 14.0,
             color: [1.0, 1.0, 1.0, 1.0],
+            rotation: 0.0,
             id_hash: 0.0,
             misc: [0.0; 4], // active, touched_time, is_touched, id_hash
 
@@ -204,6 +204,7 @@ pub struct UiRenderer {
     pub viewport: Viewport,
 
     pub device: Device,
+    text_decoration_vbo: Option<wgpu::Buffer>,
 }
 
 impl UiRenderer {
@@ -216,7 +217,7 @@ impl UiRenderer {
     ) -> anyhow::Result<Self> {
         let pipelines = UiPipelines::new(device, config, msaa_samples, size)?;
 
-        let mut font_system = FontSystem::new();
+        let font_system = FontSystem::new();
 
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
@@ -247,45 +248,6 @@ impl UiRenderer {
                 height: config.height,
             },
         );
-        let use_system_font = true;
-        let system_font_family = "Noto Sans";
-        let font_data = if use_system_font {
-            let face_id = font_system
-                .db()
-                .faces()
-                .find(|face| {
-                    face.families
-                        .iter()
-                        .any(|(family, _)| family.eq_ignore_ascii_case(system_font_family))
-                })
-                .map(|face| face.id)
-                .ok_or_else(|| anyhow::anyhow!("System font '{}' not found", system_font_family))?;
-
-            let face = font_system
-                .db()
-                .face(face_id)
-                .ok_or_else(|| anyhow::anyhow!("Failed to retrieve system font face"))?;
-
-            match &face.source {
-                cosmic_text::fontdb::Source::Binary(data) => data.as_ref().as_ref().to_vec(),
-                cosmic_text::fontdb::Source::File(path) => fs::read(path)?,
-                cosmic_text::fontdb::Source::SharedFile(path, _) => fs::read(path)?,
-            }
-        } else {
-            let dir = data_dir("ui_data/ttf");
-
-            let font_path = fs::read_dir(dir)?
-                .filter_map(Result::ok)
-                .find(|e| e.path().extension().map(|x| x == "ttf").unwrap_or(false))
-                .ok_or_else(|| anyhow::anyhow!("No TTF found"))?
-                .path();
-
-            fs::read(font_path)?
-        };
-
-        if !use_system_font {
-            font_system.db_mut().load_font_data(font_data.clone());
-        }
 
         Ok(Self {
             pipelines,
@@ -297,6 +259,7 @@ impl UiRenderer {
             viewport,
 
             device: device.clone(),
+            text_decoration_vbo: None,
         })
     }
 
@@ -355,7 +318,7 @@ impl UiRenderer {
                     &ui.variables,
                     &mut self.font_system,
                     idx,
-                    &ui.touch_manager.runtimes,
+                    &mut ui.touch_manager.runtimes,
                     &ui.aps,
                     window_size,
                     device,
@@ -424,6 +387,23 @@ impl UiRenderer {
         self.draw_background(render_manager, mod_manager, encoder, pipelines, settings);
 
         if !ui.touch_manager.options.show_gui {
+            let color_attachment = create_color_attachment_clear(&pipelines.resolved.ui);
+
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Main Pass (UI Elements)"),
+                color_attachments: &[Some(color_attachment)],
+                depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                    view: &self.pipelines.depth_view,
+                    depth_ops: Some(Operations {
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
             return;
         }
         let Some(triangles) = mod_manager.resource_path("shaders/ui_triangles.wgsl") else {
@@ -508,14 +488,55 @@ impl UiRenderer {
                 }
 
                 if let UiElement::Text(t) = element {
-                    if let Some(texts) = self.make_text_areas(t, layer.order as usize, element_idx)
-                    {
-                        pending_text.extend(texts);
+                    if let Some(text) = self.make_text_area(t, layer.order as usize, element_idx) {
+                        pending_text.push(text);
                     }
                 }
             }
         }
         self.prepare_text_batch(encoder, queue, &mut pending_text);
+        let mut text_decoration_vertices = Vec::new();
+
+        for layer in &layers_to_render {
+            for (element_idx, element) in layer.elements.iter().enumerate() {
+                if !element.is_active() {
+                    continue;
+                }
+
+                if let UiElement::Text(text) = element {
+                    self.append_text_decoration_vertices(
+                        text,
+                        layer.order as usize,
+                        element_idx,
+                        &mut text_decoration_vertices,
+                    );
+                }
+            }
+        }
+
+        let text_decoration_vertex_count = text_decoration_vertices.len() as u32;
+
+        if text_decoration_vertex_count > 0 {
+            let bytes = bytemuck::cast_slice(&text_decoration_vertices);
+
+            let needs_new_buffer = self
+                .text_decoration_vbo
+                .as_ref()
+                .map_or(true, |buffer| buffer.size() < bytes.len() as u64);
+
+            if needs_new_buffer {
+                self.text_decoration_vbo = Some(self.device.create_buffer(&BufferDescriptor {
+                    label: Some("UI Text Decorations"),
+                    size: bytes.len() as u64,
+                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+
+            if let Some(buffer) = self.text_decoration_vbo.as_ref() {
+                queue.write_buffer(buffer, 0, bytes);
+            }
+        }
 
         let color_attachment = create_color_attachment_clear(&pipelines.resolved.ui);
 
@@ -703,6 +724,37 @@ impl UiRenderer {
             .render(&self.text_atlas, &self.viewport, &mut pass)
         {
             error!("Failed to render UI text: {}", e);
+        }
+        if text_decoration_vertex_count > 0 {
+            if let Some(vbo) = self.text_decoration_vbo.as_ref() {
+                let targets = color_target_ui(pipelines, Some(BlendState::ALPHA_BLENDING));
+
+                let options = &PipelineOptions {
+                    topology: PrimitiveTopology::TriangleList,
+                    multisample_state: multisample_state(1),
+                    depth_stencil: Some(DepthStencilState {
+                        format: UI_DEPTH_FORMAT,
+                        depth_write_enabled: Some(true),
+                        depth_compare: Some(UI_COMPARE_FUNCTION),
+                        stencil: StencilState::default(),
+                        bias: DepthBiasState::default(),
+                    }),
+                    vertex_layouts: vec![Some(UiVertexText::desc())],
+                    fragment: FragmentOption::Default { targets },
+                    ..Default::default()
+                };
+
+                render_manager.render(
+                    &[],
+                    triangles,
+                    options,
+                    &[&self.pipelines.uniform_buffer],
+                    &mut pass,
+                );
+
+                pass.set_vertex_buffer(0, vbo.slice(..));
+                pass.draw(0..text_decoration_vertex_count, 0..1);
+            }
         }
     }
 
@@ -1282,12 +1334,12 @@ impl UiRenderer {
         pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
         pass.draw(0..4, this_idx..this_idx + 1);
     }
-    fn make_text_areas<'a>(
+    fn make_text_area<'a>(
         &self,
         text: &'a UiButtonText,
         layer_order: usize,
         element_idx: usize,
-    ) -> Option<Vec<(TextArea<'a>, f32)>> {
+    ) -> Option<(TextArea<'a>, f32)> {
         let cache = text.cache.as_ref()?;
 
         let width = cache.width.max(1.0);
@@ -1306,10 +1358,26 @@ impl UiRenderer {
             right: (left + width + 2.0).ceil() as i32,
             bottom: (top + height + 2.0).ceil() as i32,
         };
+        let rotation = if cache.rotation.is_finite() {
+            cache.rotation.rem_euclid(360.0)
+        } else {
+            0.0
+        };
 
-        let mut result = Vec::with_capacity(1);
+        let (sin, cos) = rotation.to_radians().sin_cos();
 
-        result.push((
+        let rotation_origin = [left + width * 0.5, top + height * 0.5];
+
+        let rotated_width = width * cos.abs() + height * sin.abs();
+        let rotated_height = width * sin.abs() + height * cos.abs();
+
+        let bounds = TextBounds {
+            left: (rotation_origin[0] - rotated_width * 0.5 - 2.0).floor() as i32,
+            top: (rotation_origin[1] - rotated_height * 0.5 - 2.0).floor() as i32,
+            right: (rotation_origin[0] + rotated_width * 0.5 + 2.0).ceil() as i32,
+            bottom: (rotation_origin[1] + rotated_height * 0.5 + 2.0).ceil() as i32,
+        };
+        Some((
             TextArea {
                 buffer: &text.buffer,
                 left,
@@ -1318,11 +1386,11 @@ impl UiRenderer {
                 bounds,
                 default_color: stupid_color_from_rgba(cache.color),
                 decorations: cache.decorations.as_slice(),
+                rotation,
+                rotation_origin,
             },
             depth,
-        ));
-
-        Some(result)
+        ))
     }
 
     fn prepare_text_batch<'a>(
@@ -1349,6 +1417,67 @@ impl UiRenderer {
             |index| depths[index],
         ) {
             error!("Failed to prepare UI text: {}", e);
+        }
+    }
+
+    fn append_text_decoration_vertices(
+        &self,
+        text: &UiButtonText,
+        layer_order: usize,
+        element_idx: usize,
+        output: &mut Vec<UiVertexText>,
+    ) {
+        let Some(cache) = text.cache.as_ref() else {
+            return;
+        };
+
+        let width = cache.width.max(1.0);
+        let height = cache.height.max(1.0);
+        let top_left = anchor_to(cache.anchor, cache.pos, width, height);
+        let (left, top) = (top_left[0], top_left[1]);
+        let depth = depth_for(layer_order, element_idx);
+
+        let rotation = if cache.rotation.is_finite() {
+            cache.rotation.rem_euclid(360.0)
+        } else {
+            0.0
+        };
+
+        let rotation_origin = [left + width * 0.5, top + height * 0.5];
+
+        let (sin, cos) = rotation.to_radians().sin_cos();
+        let default_color = stupid_color_from_rgba(cache.color);
+
+        let mut collector = CosmicDecorationCollector::default();
+
+        for run in text.buffer.layout_runs() {
+            sluggrs_skylines::cosmic_text::render_decoration(&mut collector, &run, default_color);
+        }
+
+        for rect in collector.rectangles {
+            let x0 = left + rect.x as f32;
+            let y0 = top + rect.y as f32;
+            let x1 = x0 + rect.width as f32;
+            let y1 = y0 + rect.height as f32;
+
+            let points = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|point| {
+                let dx = point[0] - rotation_origin[0];
+                let dy = point[1] - rotation_origin[1];
+
+                [
+                    rotation_origin[0] + dx * cos - dy * sin,
+                    rotation_origin[1] + dx * sin + dy * cos,
+                ]
+            });
+
+            for index in [0usize, 1, 2, 0, 2, 3] {
+                output.push(UiVertexText {
+                    pos: points[index],
+                    color: rect.color,
+                    depth,
+                    _pad0: [0.0; 3],
+                });
+            }
         }
     }
 }
@@ -1400,4 +1529,54 @@ pub fn upload_poly_vbo(
         }));
     }
     queue.write_buffer(layer.gpu.poly_vbo.as_ref().unwrap(), 0, bytes);
+}
+
+#[derive(Default)]
+struct CosmicDecorationCollector {
+    rectangles: Vec<CosmicDecorationRect>,
+}
+
+struct CosmicDecorationRect {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    color: [f32; 4],
+}
+
+impl sluggrs_skylines::cosmic_text::Renderer for CosmicDecorationCollector {
+    fn rectangle(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        color: sluggrs_skylines::cosmic_text::Color,
+    ) {
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        let [r, g, b, a] = color.as_rgba();
+
+        self.rectangles.push(CosmicDecorationRect {
+            x,
+            y,
+            width,
+            height,
+            color: [
+                f32::from(r) / 255.0,
+                f32::from(g) / 255.0,
+                f32::from(b) / 255.0,
+                f32::from(a) / 255.0,
+            ],
+        });
+    }
+
+    fn glyph(
+        &mut self,
+        _: sluggrs_skylines::cosmic_text::PhysicalGlyph,
+        _: sluggrs_skylines::cosmic_text::Color,
+    ) {
+    }
 }

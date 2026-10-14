@@ -173,6 +173,8 @@ keys = ["Ctrl+F8"]
 keys = ["F2"]
 ["Toggle Camera Mode"]
 keys = ["F4"]
+["Cycle Clouds Debug Mode"]
+keys = ["KeyT"]
 
 ["Resume"]
 keys = ["ESC"]

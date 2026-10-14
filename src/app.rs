@@ -1,6 +1,7 @@
 use crate::data::Cycle;
 use crate::data::FullScreenMode;
 use crate::data::SettingKey;
+use crate::helpers::implementations::register_svg_decoding_hook;
 use crate::helpers::paths::data_dir;
 use crate::renderer::shadows::create_csm_shadow_texture;
 use crate::resources::{FrameTimeCheckpointType, Resources};
@@ -16,6 +17,7 @@ use crate::ui::vertex::UiElement::Circle;
 use crate::world::sound::sound::run_sounds;
 use crate::world::world::World;
 use glam::Vec2;
+use jxl_image_rs_integration::register_image_decoding_hook;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -92,6 +94,8 @@ impl ApplicationHandler for App {
                 .expect("Failed to create window"),
         );
         print!(" [app] window created");
+        register_image_decoding_hook(); // JPEG-XL
+        register_svg_decoding_hook(); // SVG
         let mut resources = Resources::new(window.clone(), event_loop);
         let world = &mut resources.world;
         let time = &mut world.time;
@@ -105,10 +109,11 @@ impl ApplicationHandler for App {
             "screen",
             vec![window.surface_size().width, window.surface_size().height],
         );
+        let pointer_rel_path = "textures/pointer.png";
         if let Some(pointer_path) = resources
             .game_state
             .mod_manager
-            .resource_path("textures/pointer.png")
+            .resource_path(pointer_rel_path)
         {
             let image = image::open(&pointer_path)
                 .expect("Failed to load cursor image")
@@ -129,7 +134,7 @@ impl ApplicationHandler for App {
                 window.set_cursor(Cursor::Custom(custom_cursor));
             }
         } else {
-            error!("[App] Missing texture 'textures/pointer.png'");
+            error!("[App] Missing texture '{pointer_rel_path}'");
             return;
         };
 
@@ -201,6 +206,10 @@ impl ApplicationHandler for App {
                 }
                 if input.action_repeat("Cycle Shadow Type") {
                     settings.shadow_type = settings.shadow_type.next();
+                }
+                if input.action_repeat("Cycle Clouds Debug Mode") {
+                    resources.render_core.clouds.settings.debug_mode =
+                        resources.render_core.clouds.settings.debug_mode.next();
                 }
                 if input.action_repeat("Toggle Reversed Depth Z") {
                     settings.reversed_depth_z = !settings.reversed_depth_z;
@@ -595,8 +604,21 @@ fn update_stuff(resources: &mut Resources) {
         ui,
         render_core,
         simulation,
+        game_state,
         ..
     } = resources;
+
+    settings.update_change_tracking();
+    //println!("{:#?}", crate::ui::parser::tokenize_expr("None.{index_of([1],2)}"));
+    update_picked_pos(
+        &mut world.terrain,
+        &world.world_state.camera,
+        settings,
+        &render_core.config,
+        &mut world.input,
+        ui,
+    );
+    world.update_panorama(game_state);
     let World {
         world_state,
         time,
@@ -605,16 +627,6 @@ fn update_stuff(resources: &mut Resources) {
         ..
     } = world;
 
-    settings.update_change_tracking();
-    //println!("{:#?}", crate::ui::parser::tokenize_expr("None.{index_of([1],2)}"));
-    update_picked_pos(
-        terrain,
-        &world_state.camera,
-        settings,
-        &render_core.config,
-        input,
-        ui,
-    );
     terrain.make_pick_uniforms(
         &render_core.queue,
         &render_core.pipelines.buffers.pick,
@@ -653,6 +665,7 @@ fn update_stuff(resources: &mut Resources) {
         ui.variables.set_f64("fps", time.render_fps);
         ui.variables.set_f64("render_dt", time.render_dt);
         ui.variables.set_f64("sim_dt", time.target_sim_dt);
+        ui.variables.set_f64("total_time", time.total_time);
 
         ui.variables
             .set_f64("total_game_time", time.total_game_time);

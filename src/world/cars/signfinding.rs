@@ -95,9 +95,9 @@ use crate::helpers::positions::{LocalPos, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::resources::Time;
 use crate::ui::variables::Variables;
-use crate::world::buildings::buildings::{Building, Buildings};
+use crate::world::buildings::buildings::{Building, BuildingId, Buildings};
 use crate::world::buildings::zoning::{
-    DistrictId, Lot, LotEntrance, LotLayout, ParkingSpot, ParkingSpotLotInfo, TilePos,
+    DistrictId, Lot, LotEntrance, LotId, LotLayout, ParkingSpot, ParkingSpotLotInfo, TilePos,
     ZoningStorage,
 };
 use crate::world::cars::car_player::sanitize_quat;
@@ -362,7 +362,7 @@ pub fn make_new_trajectory(
         // let parking_points = &path[idx + 1..];
         //
         // let traj = simulate_point_path_follow(car, parking_points, origin, now, sf_options);
-        CarMode::Parked => Err(MakeNewTrajectoryError::CarModeIsParked),
+        CarMode::Parked(..) => Err(MakeNewTrajectoryError::CarModeIsParked),
     }
 }
 
@@ -384,7 +384,10 @@ pub fn make_path_to_parking_spot(
                 return Err(ParkingPathError::LotDoesntExist);
             };
             let Some(layout) = lot.layout.as_ref() else {
-                return Err(ParkingPathError::LotLayoutDoesntExist);
+                return Err(ParkingPathError::LotLayoutDoesntExist((
+                    lot.id,
+                    building.id,
+                )));
             };
             let Some(driveway_entrance) = layout.driveway_entrances.first() else {
                 return Err(ParkingPathError::NoDriveWayEntrance);
@@ -427,7 +430,7 @@ pub fn make_path_to_parking_spot(
                 let projection = car_lane
                     .geometry()
                     .closest_point_to_xz(driveway_entrance.pos);
-                if projection.poly_idx + 4 < car_poly_idx {
+                if projection.poly_idx < car_poly_idx {
                     // If car is past the drive way point...
                     let Some(partition_id) =
                         buildings.storage.get_partition_of_building(building.id)
@@ -613,7 +616,7 @@ fn car_to_final_tile_parking(
 
     tile_path.push(start);
     if tile_path.len() < 2 {
-        return Err(ParkingPathError::PathAlreadyAtDestination);
+        return Err(ParkingPathError::PathAlreadyAtDestination); // return Err(ParkingPathError::DespawnTheCar); // 
     }
     tile_path.reverse();
 
@@ -635,7 +638,7 @@ fn car_to_final_tile_parking(
 #[derive(Debug)]
 pub enum ParkingPathError {
     LotDoesntExist,
-    LotLayoutDoesntExist,
+    LotLayoutDoesntExist((LotId, BuildingId)),
     NoPath,
     DespawnTheCar,
     NoDriveWayEntrance,

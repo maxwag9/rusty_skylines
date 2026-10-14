@@ -100,7 +100,7 @@ pub struct FlowingThickLineVtxRender {
     pub band_len: f32,
 }
 impl FlowingThickLineVtxRender {
-    pub const ATTRIBUTES: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array![
+    pub const ATTRIBUTES: [VertexAttribute; 9] = vertex_attr_array![
         0 => Float32x3,
         1 => Float32x3,
         2 => Float32,
@@ -112,10 +112,10 @@ impl FlowingThickLineVtxRender {
         8 => Float32,
     ];
 
-    pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Instance,
+    pub fn layout<'a>() -> VertexBufferLayout<'a> {
+        VertexBufferLayout {
+            array_stride: size_of::<Self>() as BufferAddress,
+            step_mode: VertexStepMode::Instance,
             attributes: &Self::ATTRIBUTES,
         }
     }
@@ -526,7 +526,7 @@ impl RectTextureType {
                 Some(Self::Shader(relative_path.to_owned()))
             }
 
-            "image" => {
+            "image" | "texture" => {
                 let Some(path) = mod_manager.resource_path(path) else {
                     error!("[Renderer] Missing shader '{path}' for UI Rect Image");
                     return None;
@@ -587,7 +587,13 @@ impl RectTextureType {
                 Some(Self::Image(view))
             }
 
-            _ => None,
+            _ => {
+                error!(
+                    "[UI] In 'texture' field of Rect UI element: {kind} isn't an option. Use 'shader', 'texture' or 'image' instead."
+                );
+
+                None
+            }
         }
     }
 }
@@ -2241,6 +2247,7 @@ pub struct UiButtonText {
     pub x: f32,
     pub y: f32,
     pub pt: f32,
+    pub rotation: f32,
     pub resize_behaviour: ResizeBehaviour,
     pub original_pt: f32,
     pub color: [f32; 4],
@@ -2372,7 +2379,7 @@ impl UiButtonText {
             y: e.y as f32,
             pt: e.pt,
             original_pt: e.pt,
-
+            rotation: e.rotation,
             resize_behaviour: e.resize_behaviour,
 
             color: e.color,
@@ -2430,6 +2437,7 @@ impl UiButtonText {
             y: y as i16,
             pt,
 
+            rotation: self.rotation,
             resize_behaviour: self.resize_behaviour,
 
             color: self.color,
@@ -2850,6 +2858,7 @@ impl Default for UiButtonText {
             x: 0.0,
             y: 0.0,
             pt: 14.0,
+            rotation: 0.0,
             resize_behaviour: Default::default(),
             original_pt: 14.0,
             color: [1.0, 1.0, 1.0, 1.0],
@@ -3117,6 +3126,8 @@ pub struct UiButtonTextYaml {
     #[serde(skip_serializing_if = "is_default")]
     pub pt: f32,
     #[serde(default, skip_serializing_if = "is_default")]
+    pub rotation: f32,
+    #[serde(default, skip_serializing_if = "is_default")]
     pub resize_behaviour: ResizeBehaviour,
     #[serde(default, skip_serializing_if = "is_default")]
     pub color: [f32; 4],
@@ -3223,6 +3234,7 @@ impl Default for UiButtonTextYaml {
             x: 0,
             y: 0,
             pt: 14.0,
+            rotation: 0.0,
             resize_behaviour: Default::default(),
             color: [1.0, 1.0, 1.0, 1.0],
             text: String::new(),

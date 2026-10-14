@@ -1,6 +1,8 @@
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
+use crate::world::buildings::zoning::ZoningStorage;
 use crate::world::cars::car_simulation::CarTrajectory;
 use crate::world::cars::car_subsystem::make_random_car;
+use crate::world::cars::parking::{ParkingSpotId, ParkingStorage};
 use crate::world::cars::partitions::Destination;
 use crate::world::cars::signfinding::{
     CarSignfindingTrajectory, SFTurnIdentification, SignFindingTrip,
@@ -406,7 +408,12 @@ impl CarStorage {
     }
 
     /// Remove a car and clean up all reverse-index maps.
-    pub fn despawn(&mut self, car_id: CarId) {
+    pub fn despawn(
+        &mut self,
+        car_id: CarId,
+        parking_storage: &mut ParkingStorage,
+        zoning_storage: &mut ZoningStorage,
+    ) {
         // Chunk index.
         if let Some(&chunk) = self.car_locations.get(&car_id) {
             self.car_chunk_storage.remove_car(chunk, car_id);
@@ -418,6 +425,10 @@ impl CarStorage {
 
         // Free the slot.
         if let Some(slot) = self.cars.get_mut(car_id as usize) {
+            if let Some(parking_spot_id) = slot.as_ref().and_then(|car| car.mode.parking_spot()) {
+                parking_storage.unpark(parking_spot_id, zoning_storage);
+            }
+
             *slot = None;
         }
         self.free_list.push(car_id);
@@ -960,13 +971,19 @@ pub struct Car {
 #[derive(Debug, Clone)]
 pub enum CarMode {
     Driving(Destination),
-    Parked,
+    Parked(ParkingSpotId),
 }
 impl CarMode {
     pub fn destination(&self) -> Option<&Destination> {
         match self {
             CarMode::Driving(destination) => Some(destination),
-            CarMode::Parked => None,
+            CarMode::Parked(..) => None,
+        }
+    }
+    pub fn parking_spot(&self) -> Option<ParkingSpotId> {
+        match self {
+            CarMode::Driving(..) => None,
+            CarMode::Parked(id) => Some(*id),
         }
     }
 }

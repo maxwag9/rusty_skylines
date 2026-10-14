@@ -11,10 +11,10 @@ use rayon::iter::ParallelIterator;
 use crate::data::Settings;
 use crate::ui::variables::Variables;
 use crate::world::buildings::buildings::Buildings;
-use crate::world::buildings::zoning::{DistrictId, ZoningStorage};
+use crate::world::buildings::zoning::{DistrictId, LotId, ZoningStorage};
 use crate::world::cars::car_simulation::CarTrajectory;
 use crate::world::cars::parking::ParkingStorage;
-use crate::world::cars::partitions::{PartitionId};
+use crate::world::cars::partitions::{Destination, PartitionId};
 use crate::world::cars::signfinding::*;
 use crate::world::roads::road_structs::SegmentId;
 use crate::world::roads::roads::{LaneRef, RoadStorage};
@@ -117,8 +117,8 @@ pub enum CarChange {
     },
     CarMode(CarMode),
     Despawn,
+    GenerateLotLayout(LotId),
 }
-
 
 fn interpolate_car(
     time: &Time,
@@ -153,24 +153,51 @@ fn interpolate_car(
                 buildings,
                 zoning,
                 parking_storage,
-                sf_options
+                sf_options,
             ) {
                 Ok(ok) => ok,
                 Err(e) => match e {
                     MakeNewTrajectoryError::CarModeIsParked
-                    | MakeNewTrajectoryError::ParkingDone => {
-                        let callback = TrajectoryCallback {
-                            is_last_turn: false,
-                            car_changes: vec![
-                                CarChange::CarMode(CarMode::Parked),
-                                CarChange::LastTurn(None),
-                            ],
-                        };
-                        (None, None, callback)
+                    | MakeNewTrajectoryError::ParkingDone
+                    | MakeNewTrajectoryError::ParkingPath(
+                        ParkingPathError::PathAlreadyAtDestination,
+                    ) => {
+                        if let Some(Destination::ParkingSpot(_, parking_spot_id, _)) =
+                            car.mode.destination()
+                        {
+                            let mut parking_changes =
+                                if let Some(parking_spot) = parking_storage.get(*parking_spot_id) {
+                                    vec![
+                                        CarChange::Position(parking_spot.pos),
+                                        CarChange::Quat(Quat::from_rotation_arc(
+                                            Vec3::NEG_Z,
+                                            parking_spot.dir.normalize(),
+                                        )),
+                                    ]
+                                } else {
+                                    vec![]
+                                };
+                            parking_changes
+                                .push(CarChange::CarMode(CarMode::Parked(*parking_spot_id)));
+                            parking_changes.push(CarChange::LastTurn(None));
+                            let callback = TrajectoryCallback {
+                                is_last_turn: false,
+                                car_changes: parking_changes,
+                            };
+                            (None, None, callback)
+                        } else {
+                            changes.push(CarChange::Despawn);
+                            (None, None, TrajectoryCallback::default())
+                        }
                     }
-
                     MakeNewTrajectoryError::ParkingPath(ParkingPathError::DespawnTheCar) => {
                         changes.push(CarChange::Despawn);
+                        (None, None, TrajectoryCallback::default())
+                    }
+                    MakeNewTrajectoryError::ParkingPath(
+                        ParkingPathError::LotLayoutDoesntExist((lot_id, _)),
+                    ) => {
+                        changes.push(CarChange::GenerateLotLayout(lot_id));
                         (None, None, TrajectoryCallback::default())
                     }
                     _ => {
@@ -181,7 +208,6 @@ fn interpolate_car(
             };
 
             changes.append(&mut callback.car_changes);
-
 
             if let Some(s) = signfinding {
                 changes.push(CarChange::SignfindingTrajectory(Some(s)));
@@ -347,7 +373,8 @@ fn interpolate_car(
         return changes;
     }
 
-    let idx = traj.points
+    let idx = traj
+        .points
         .binary_search_by(|p| {
             p.time
                 .partial_cmp(&now)
@@ -469,13 +496,13 @@ fn interpolate_car(
     changes
 }
 
-
-
 fn apply_car_changes(
     terrain: &Terrain,
     time: &Time,
     road_storage: &mut RoadStorage,
+    parking_storage: &mut ParkingStorage,
     car_storage: &mut CarStorage,
+    zoning_storage: &mut ZoningStorage,
     car_id: CarId,
     delta: Vec<CarChange>,
 ) {
@@ -587,6 +614,13 @@ fn apply_car_changes(
                 CarChange::Despawn => {
                     despawn_car = true;
                 }
+                CarChange::GenerateLotLayout(lot_id) => {
+                    let Some(lot) = zoning_storage.get_mut_lot(lot_id) else {
+                        continue;
+                    };
+                    let layout = lot.generate_layout(parking_storage);
+                    lot.layout = Some(layout); // TODO: Breaks real spawning?
+                }
             }
         }
         conform_car_to_terrain(car, terrain, time.render_dt);
@@ -595,7 +629,7 @@ fn apply_car_changes(
         car_storage.set_car_lane(car_id, lane_ref, road_storage);
     }
     if despawn_car {
-        car_storage.despawn(car_id);
+        car_storage.despawn(car_id, parking_storage, zoning_storage);
     }
 }
 
@@ -644,7 +678,9 @@ pub fn interpolate_cars(world: &mut World, variables: &Variables, settings: &Set
                 &world.terrain,
                 &world.time,
                 &mut world.roads.road_manager.roads,
+                &mut world.roads.parking,
                 car_storage,
+                &mut world.zoning.zoning_storage,
                 car_id,
                 changes,
             );

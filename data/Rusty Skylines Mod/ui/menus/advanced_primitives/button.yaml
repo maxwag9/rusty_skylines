@@ -14,6 +14,7 @@ elements:
     y: 0
     w: 150
     h: 40
+    #texture: shader:shaders/fun!/mcbutton.wgsl
     resize_behaviour:
       width: x
       height: y
@@ -21,7 +22,7 @@ elements:
       - 0.8
       - 0.8
       - 0.8
-      - 0.15
+      - 0.0
     border_color:
       - 0.1
       - 0.1
@@ -65,13 +66,8 @@ elements:
     text: '{ap.0}'
     anchor: Center
     decorations:
-      - color: [ 1.0, 0.0, 0.0, 1.0 ]
-        spread: 2.0
-        mode: Ring
-
-      - color: [ 0.0, 1.0, 0.0, 0.8 ]
+      - color: [ 0.0, 0.0, 0.0, 1.0 ]
         spread: 3.0
-        mode: Ring
     misc:
       active: true
       touchable: false

@@ -266,6 +266,7 @@ impl Ui {
                 e.rescale_to_window(old_size, new_size);
             });
         self.variables.set_array("screen", vec![new_size.width, new_size.height]);
+        self.variables.window_size = new_size;
         self.touch_manager.add_screen_resize_event = true;
     }
     pub fn handle_touches(

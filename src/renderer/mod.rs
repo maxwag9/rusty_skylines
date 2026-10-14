@@ -1,4 +1,5 @@
 pub mod benchmark;
+pub mod clouds;
 pub mod general_mesh_arena;
 pub mod gizmo;
 mod gpu_profiler;

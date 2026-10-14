@@ -1186,10 +1186,37 @@ impl CarSynth {
     }
 }
 
+#[derive(Default)]
+struct WindFilter {
+    low: f32,
+    band: f32,
+}
+
+impl WindFilter {
+    #[inline]
+    fn process(
+        &mut self,
+        input: f32,
+        cutoff_hz: f32,
+        damping: f32,
+        sample_rate: f32,
+    ) -> (f32, f32, f32) {
+        let cutoff = cutoff_hz.min(sample_rate * 0.12).max(10.0);
+        let f = (2.0 * (PI * cutoff / sample_rate).sin()).clamp(0.00001, 0.8);
+
+        self.low += f * self.band;
+        let high = input - self.low - damping * self.band;
+        self.band += f * high;
+
+        (self.low, self.band, high)
+    }
+}
+
 struct WindSynth {
     sample_rate: f32,
     rng_l: u32,
     rng_r: u32,
+    rng_shared: u32,
     rng_w1: u32,
     rng_w2: u32,
     rng_w3: u32,
@@ -1199,25 +1226,55 @@ struct WindSynth {
     k1: f32,
     k2: f32,
     k3: f32,
-    lfo_phase: f32,
-    lfo_inc: f32,
-    svf_low_l: f32,
-    svf_band_l: f32,
-    svf_low_r: f32,
-    svf_band_r: f32,
+    walk1_scale: f32,
+    walk2_scale: f32,
+    walk3_scale: f32,
+    gust_low: f32,
+    gust_mid: f32,
+    gust_air: f32,
+    gust_follow_low: f32,
+    gust_follow_mid: f32,
+    gust_follow_air: f32,
+    low_l: WindFilter,
+    low_r: WindFilter,
+    body_l: WindFilter,
+    body_r: WindFilter,
+    air_l: WindFilter,
+    air_r: WindFilter,
     prev_l: f32,
     prev_r: f32,
+
+    rng_buffet_events: u32,
+    rng_buffet_sway: u32,
+    rng_buffet_l: u32,
+    rng_buffet_r: u32,
+    rng_buffet_shared: u32,
+    buffet_sub_l: WindFilter,
+    buffet_sub_r: WindFilter,
+    buffet_body_l: WindFilter,
+    buffet_body_r: WindFilter,
+    buffet_sway: f32,
+    buffet_sway_k: f32,
+    buffet_sway_scale: f32,
+    buffet_puff: f32,
 }
 
 impl WindSynth {
     fn new(sample_rate: f32) -> Self {
-        let k1 = 1.0 - (-2.0 * PI * 0.025 / sample_rate).exp();
-        let k2 = 1.0 - (-2.0 * PI * 0.18 / sample_rate).exp();
-        let k3 = 1.0 - (-2.0 * PI * 1.1 / sample_rate).exp();
+        let coefficient =
+            |hz: f32| (1.0 - (-2.0 * PI * hz / sample_rate).exp()).clamp(0.000001, 0.999);
+
+        let k1 = coefficient(0.035);
+        let k2 = coefficient(0.22);
+        let k3 = coefficient(0.85);
+
+        let noise_scale = |k: f32| (3.0 * (2.0 - k) / k).sqrt();
+        let buffet_sway_k = coefficient(0.55);
         Self {
             sample_rate,
             rng_l: 0x1234_5678,
             rng_r: 0x8765_4321,
+            rng_shared: 0xC001_D00D,
             rng_w1: 0xABCD_1234,
             rng_w2: 0xDEAD_BEEF,
             rng_w3: 0xF00D_CAFE,
@@ -1227,14 +1284,37 @@ impl WindSynth {
             k1,
             k2,
             k3,
-            lfo_phase: 0.0,
-            lfo_inc: 2.0 * PI * 0.032 / sample_rate,
-            svf_low_l: 0.0,
-            svf_band_l: 0.0,
-            svf_low_r: 0.0,
-            svf_band_r: 0.0,
+            walk1_scale: noise_scale(k1),
+            walk2_scale: noise_scale(k2),
+            walk3_scale: noise_scale(k3),
+            gust_low: 0.5,
+            gust_mid: 0.5,
+            gust_air: 0.5,
+            gust_follow_low: coefficient(0.14),
+            gust_follow_mid: coefficient(0.30),
+            gust_follow_air: coefficient(0.55),
+            low_l: WindFilter::default(),
+            low_r: WindFilter::default(),
+            body_l: WindFilter::default(),
+            body_r: WindFilter::default(),
+            air_l: WindFilter::default(),
+            air_r: WindFilter::default(),
             prev_l: 0.0,
             prev_r: 0.0,
+
+            rng_buffet_events: 0xBADA_5510,
+            rng_buffet_sway: 0x7193_AE25,
+            rng_buffet_l: 0x5EED_1237,
+            rng_buffet_r: 0xA17C_90F3,
+            rng_buffet_shared: 0xC0FF_EE17,
+            buffet_sub_l: WindFilter::default(),
+            buffet_sub_r: WindFilter::default(),
+            buffet_body_l: WindFilter::default(),
+            buffet_body_r: WindFilter::default(),
+            buffet_sway: 0.0,
+            buffet_sway_k,
+            buffet_sway_scale: noise_scale(buffet_sway_k),
+            buffet_puff: 0.0,
         }
     }
 
@@ -1254,56 +1334,125 @@ impl WindSynth {
     }
 
     #[inline]
-    fn svf(input: f32, f: f32, q: f32, low: &mut f32, band: &mut f32) -> (f32, f32, f32) {
-        *low += f * *band;
-        let high = input - *low - q * *band;
-        *band += f * high;
-        (*low, *band, high)
-    }
-
-    #[inline]
     fn generate(&mut self, height: f32) -> (f32, f32) {
-        let h = (height / 1000.0).clamp(0.0, 1.0);
+        let h = (height / 2500.0).clamp(0.0, 1.0);
+        let gain = 0.08;
         let intensity = h * h;
 
         let n1 = Self::white(&mut self.rng_w1);
-        self.walk1 += (n1 - self.walk1) * self.k1;
         let n2 = Self::white(&mut self.rng_w2);
-        self.walk2 += (n2 - self.walk2) * self.k2;
         let n3 = Self::white(&mut self.rng_w3);
+
+        self.walk1 += (n1 - self.walk1) * self.k1;
+        self.walk2 += (n2 - self.walk2) * self.k2;
         self.walk3 += (n3 - self.walk3) * self.k3;
 
-        self.lfo_phase += self.lfo_inc;
-        if self.lfo_phase > 2.0 * PI {
-            self.lfo_phase -= 2.0 * PI;
+        let slow = self.walk1 * self.walk1_scale;
+        let mid = self.walk2 * self.walk2_scale;
+        let fast = self.walk3 * self.walk3_scale;
+
+        let drive = (slow * 0.70 + mid * 0.23 + fast * 0.07).clamp(-2.5, 2.5);
+
+        let gust = (0.5 + drive.tanh() * 0.34).clamp(0.10, 0.95);
+
+        self.gust_low += (gust - self.gust_low) * self.gust_follow_low;
+        self.gust_mid += (gust - self.gust_mid) * self.gust_follow_mid;
+        self.gust_air += (gust - self.gust_air) * self.gust_follow_air;
+
+        let gl = self.gust_low;
+        let gm = self.gust_mid;
+        let ga = self.gust_air;
+
+        let low_cutoff = 95.0 + gl * 190.0;
+        let body_cutoff = 220.0 + gm * 650.0;
+        let air_cutoff = 700.0 + ga * 2400.0;
+
+        let body_damping = 1.22 - gm * 0.18;
+        let air_damping = 1.55 - ga * 0.22;
+
+        let shared = Self::white(&mut self.rng_shared);
+        let nl = Self::white(&mut self.rng_l) * 0.86 + shared * 0.51;
+        let nr = Self::white(&mut self.rng_r) * 0.86 + shared * 0.51;
+
+        let (low_l, _, _) = self.low_l.process(nl, low_cutoff, 1.25, self.sample_rate);
+        let (low_r, _, _) = self.low_r.process(nr, low_cutoff, 1.25, self.sample_rate);
+
+        let (_, body_l, _) = self
+            .body_l
+            .process(nl, body_cutoff, body_damping, self.sample_rate);
+        let (_, body_r, _) = self
+            .body_r
+            .process(nr, body_cutoff, body_damping, self.sample_rate);
+
+        let (_, air_l, _) = self
+            .air_l
+            .process(nl, air_cutoff, air_damping, self.sample_rate);
+        let (_, air_r, _) = self
+            .air_r
+            .process(nr, air_cutoff, air_damping, self.sample_rate);
+
+        let low_gain = 1.1 + gl * 0.5;
+        let body_gain = 1.35 + gm * 0.8;
+        let air_gain = 0.45 + ga * 0.5;
+
+        let amp = intensity * (0.10 + gust * 0.60);
+
+        let sig_l = (low_l * low_gain + body_l * body_gain + air_l * air_gain) * amp;
+
+        let sig_r = (low_r * low_gain + body_r * body_gain + air_r * air_gain) * amp;
+
+        let sway_noise = Self::white(&mut self.rng_buffet_sway);
+        self.buffet_sway += (sway_noise - self.buffet_sway) * self.buffet_sway_k;
+
+        let sway = (self.buffet_sway * self.buffet_sway_scale).clamp(-2.2, 2.2);
+
+        let event_rate = 0.25 + gust * 0.95;
+
+        if Self::white(&mut self.rng_buffet_events) > 1.0 - 2.0 * event_rate / self.sample_rate {
+            let kick = 0.4 + Self::white(&mut self.rng_buffet_events).abs();
+
+            self.buffet_puff = (self.buffet_puff + kick).min(2.2);
         }
-        let swell = self.lfo_phase.sin() * 0.5 + 0.5;
 
-        let raw = self.walk1 * 0.5 + self.walk2 * 0.32 + self.walk3 * 0.18;
-        let g = ((raw * 0.5 + 0.5) * 0.82 + swell * 0.18).clamp(0.0, 1.0);
-        let gust = g.powf(1.7);
+        let puff_decay = (-1.0 / (self.sample_rate * (0.12 + gust * 0.28))).exp();
 
-        let cutoff_hz = (140.0 + intensity * 700.0 + gust * (500.0 + intensity * 1400.0))
-            .clamp(60.0, self.sample_rate * 0.16);
-        let f = 2.0 * (PI * cutoff_hz / self.sample_rate).sin();
-        let q = (1.9 - gust * 1.1).clamp(0.55, 1.9);
+        self.buffet_puff *= puff_decay;
 
-        let nl = Self::white(&mut self.rng_l);
-        let nr = Self::white(&mut self.rng_r);
+        let sub_cutoff = (18.0 + gust * 38.0 + sway * 8.0).clamp(12.0, 75.0);
 
-        let (low_l, band_l, high_l) =
-            Self::svf(nl, f, q, &mut self.svf_low_l, &mut self.svf_band_l);
-        let (low_r, band_r, high_r) =
-            Self::svf(nr, f, q, &mut self.svf_low_r, &mut self.svf_band_r);
+        let body_cutoff = (65.0 + gust * 95.0 + sway * 25.0).clamp(35.0, 240.0);
 
-        let amp = intensity * (0.12 + gust * 0.9);
+        let shared = Self::white(&mut self.rng_buffet_shared);
 
-        let sig_l = (low_l * 0.85 + band_l * 1.35 + high_l * 0.35) * amp;
-        let sig_r = (low_r * 0.85 + band_r * 1.35 + high_r * 0.35) * amp;
+        let buff_nl = Self::white(&mut self.rng_buffet_l) * 0.72 + shared * 0.68;
 
-        self.prev_l += (sig_l - self.prev_l) * 0.35;
-        self.prev_r += (sig_r - self.prev_r) * 0.35;
+        let buff_nr = Self::white(&mut self.rng_buffet_r) * 0.72 + shared * 0.68;
 
-        (self.prev_l.tanh() * 0.95, self.prev_r.tanh() * 0.95)
+        let (sub_l, _, _) = self
+            .buffet_sub_l
+            .process(buff_nl, sub_cutoff, 1.2, self.sample_rate);
+
+        let (sub_r, _, _) = self
+            .buffet_sub_r
+            .process(buff_nr, sub_cutoff, 1.2, self.sample_rate);
+
+        let (body_l, band_l, _) =
+            self.buffet_body_l
+                .process(buff_nl, body_cutoff, 1.2, self.sample_rate);
+
+        let (body_r, band_r, _) =
+            self.buffet_body_r
+                .process(buff_nr, body_cutoff, 1.2, self.sample_rate);
+
+        let mic_gain = intensity * (0.018 + gust * 0.095) * (0.30 + self.buffet_puff * 1.10) * 60.0;
+
+        let mic_wind_l = (sub_l * 1.30 + body_l * 0.24 + band_l * 0.35) * mic_gain;
+
+        let mic_wind_r = (sub_r * 1.30 + body_r * 0.24 + band_r * 0.35) * mic_gain;
+
+        self.prev_l += (sig_l + mic_wind_l - self.prev_l) * gain;
+        self.prev_r += (sig_r + mic_wind_r - self.prev_r) * gain;
+
+        (self.prev_l.tanh() * 0.86, self.prev_r.tanh() * 0.86)
     }
 }

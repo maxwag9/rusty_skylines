@@ -112,16 +112,15 @@ fn handle_mouse_caret_selection(
     input: &Input,
     t: &mut UiButtonText,
 ) -> bool {
-    let mx = input.mouse.pos.x;
-    let my = input.mouse.pos.y;
-    let pos = anchor_to(t.anchor, [t.x, t.y], t.width, t.height);
-    let x0 = pos[0];
-    let y0 = pos[1];
-    let x1 = x0 + t.width;
-    let y1 = y0 + t.height;
+    let mouse = [input.mouse.pos.x, input.mouse.pos.y];
+    let [mx, my] = inverse_rotate_text_point(t, mouse);
+
+    let (x0, y0, width, height) = text_top_left(t);
+    let x1 = x0 + width;
+    let y1 = y0 + height;
 
     if input.mouse.buttons.just_pressed() && mx >= x0 && mx <= x1 && my >= y0 && my <= y1 {
-        let new_caret = pick_caret(t, mx, my);
+        let new_caret = pick_caret_visual(t, mx, my);
         t.caret = new_caret;
         t.sel_start = new_caret;
         t.sel_end = new_caret;
@@ -131,7 +130,7 @@ fn handle_mouse_caret_selection(
     }
 
     if editor.dragging_text_selection && input.mouse.buttons.pressed() {
-        let new_pos = pick_caret(t, mx, my);
+        let new_pos = pick_caret_visual(t, mx, my);
         t.sel_end = new_pos;
         t.has_selection = t.sel_end != t.sel_start;
         t.caret = new_pos;
@@ -460,7 +459,7 @@ pub fn line_start_grapheme_index(text: &str, line_i: usize) -> usize {
 }
 
 fn navigate_vertical(text: &UiButtonText, up: bool) -> Option<usize> {
-    let (caret_x, caret_y) = get_caret_position(text);
+    let (caret_x, caret_y) = get_caret_position_local(text);
     let (_, _, _, _) = text_top_left(text);
 
     let mut lines: Vec<(usize, f32, f32)> = Vec::new(); // (line_i, absolute_top, line_height)
@@ -508,9 +507,12 @@ fn navigate_vertical(text: &UiButtonText, up: bool) -> Option<usize> {
     find_caret_at_x_on_line(text, caret_x, target_line_top)
 }
 
-pub fn get_caret_position(t: &UiButtonText) -> (f32, f32) {
+pub fn get_caret_position_local(t: &UiButtonText) -> (f32, f32) {
+    get_caret_position_local_at(t, t.caret)
+}
+
+fn get_caret_position_local_at(t: &UiButtonText, caret: usize) -> (f32, f32) {
     let (text_left, text_top, _, _) = text_top_left(t);
-    let caret = t.caret;
 
     let mut last_pos = (text_left, text_top);
 
@@ -624,34 +626,58 @@ fn handle_selection_collapse(input: &mut Input, text: &mut UiButtonText, dirty: 
     }
 }
 
-fn pick_caret(text: &UiButtonText, mx: f32, my: f32) -> usize {
-    let (text_left, text_top, _, _) = text_top_left(text);
+fn distance_squared_to_segment(point: [f32; 2], start: [f32; 2], end: [f32; 2]) -> f32 {
+    let dx = end[0] - start[0];
+    let dy = end[1] - start[1];
+    let length_squared = dx * dx + dy * dy;
 
-    let mut best_line_top: Option<f32> = None;
-    let mut best_dist = f32::MAX;
+    if length_squared <= f32::EPSILON {
+        let px = point[0] - start[0];
+        let py = point[1] - start[1];
+        return px * px + py * py;
+    }
 
-    for run in text.buffer.layout_runs() {
-        let line_top = text_top + run.line_top;
-        let line_bottom = line_top + run.line_height;
+    let t = (((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length_squared)
+        .clamp(0.0, 1.0);
 
-        if my >= line_top && my <= line_bottom {
-            best_line_top = Some(line_top);
-            break;
-        }
+    let nearest_x = start[0] + t * dx;
+    let nearest_y = start[1] + t * dy;
+    let px = point[0] - nearest_x;
+    let py = point[1] - nearest_y;
 
-        let center_y = line_top + run.line_height * 0.5;
-        let dist = (my - center_y).abs();
+    px * px + py * py
+}
+
+fn pick_caret_visual(text: &UiButtonText, mx: f32, my: f32) -> usize {
+    let (_, text_top, _, _) = text_top_left(text);
+    let mouse = [mx, my];
+    let grapheme_count = text.text.graphemes(true).count();
+
+    let mut best_caret = 0;
+    let mut best_dist = f32::INFINITY;
+
+    for caret in 0..=grapheme_count {
+        let (x, y) = get_caret_position_local_at(text, caret);
+
+        let height = text
+            .buffer
+            .layout_runs()
+            .find(|run| (text_top + run.line_top - y).abs() < 0.5)
+            .map(|run| run.line_height)
+            .unwrap_or(text.pt * 1.2);
+
+        let start = rotate_text_point(text, [x + 1.0, y]);
+        let end = rotate_text_point(text, [x + 1.0, y + height]);
+
+        let dist = distance_squared_to_segment(mouse, start, end);
+
         if dist < best_dist {
             best_dist = dist;
-            best_line_top = Some(line_top);
+            best_caret = caret;
         }
     }
 
-    let Some(line_top) = best_line_top else {
-        return 0;
-    };
-
-    find_caret_at_x_on_line(text, mx, line_top).unwrap_or(0)
+    best_caret
 }
 
 fn caret_to_byte(s: &str, caret: usize) -> usize {
@@ -668,4 +694,54 @@ fn logical_to_byte(char_spans: &[Range<usize>], logical: usize) -> usize {
     } else {
         char_spans[logical].start
     }
+}
+
+pub fn normalized_text_rotation(text: &UiButtonText) -> f32 {
+    if text.rotation.is_finite() {
+        text.rotation.rem_euclid(360.0)
+    } else {
+        0.0
+    }
+}
+
+pub fn text_rotation_origin(text: &UiButtonText) -> [f32; 2] {
+    let (left, top, width, height) = text_top_left(text);
+
+    [left + width * 0.5, top + height * 0.5]
+}
+
+pub fn rotate_text_point(text: &UiButtonText, point: [f32; 2]) -> [f32; 2] {
+    let degrees = -normalized_text_rotation(text);
+
+    if degrees == 0.0 {
+        return point;
+    }
+
+    let origin = text_rotation_origin(text);
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    let dx = point[0] - origin[0];
+    let dy = point[1] - origin[1];
+
+    [
+        origin[0] + cos * dx + sin * dy,
+        origin[1] - sin * dx + cos * dy,
+    ]
+}
+
+pub fn inverse_rotate_text_point(text: &UiButtonText, point: [f32; 2]) -> [f32; 2] {
+    let degrees = normalized_text_rotation(text);
+
+    if degrees == 0.0 {
+        return point;
+    }
+
+    let origin = text_rotation_origin(text);
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    let dx = point[0] - origin[0];
+    let dy = point[1] - origin[1];
+
+    [
+        origin[0] + cos * dx + sin * dy,
+        origin[1] - sin * dx + cos * dy,
+    ]
 }

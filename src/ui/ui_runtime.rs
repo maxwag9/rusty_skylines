@@ -1,15 +1,20 @@
+use crate::ui::text_formatting::ObfuscationFontCache;
 use crate::ui::vertex::*;
+use sluggrs_skylines::cosmic_text::Weight;
+use sluggrs_skylines::cosmic_text::fontdb::ID;
 use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct UiRuntimes {
     pub elements: HashMap<String, ButtonRuntime>,
+    pub obfuscation_fonts: HashMap<(ID, Weight), ObfuscationFontCache>,
 }
 
 impl UiRuntimes {
     pub fn new() -> Self {
         Self {
             elements: HashMap::new(),
+            obfuscation_fonts: HashMap::new(),
         }
     }
 

@@ -3,6 +3,7 @@ use crate::gpu_timestamp;
 use crate::helpers::modpack::ModManager;
 use crate::helpers::paths::next_screenshot_path;
 use crate::helpers::positions::WorldPos;
+use crate::renderer::clouds::clouds::CloudSubsystem;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::gtao::gtao::{GtaoBlurParams, GtaoUpsampleApplyParams};
@@ -79,6 +80,7 @@ pub struct Renderer {
     pub building_renderer: BuildingRenderer,
     pub gizmo: Gizmo,
     pub props: Props,
+    pub clouds: CloudSubsystem,
 }
 
 impl Renderer {
@@ -121,6 +123,7 @@ impl Renderer {
             settings,
         )
         .expect("Failed to create render pipelines");
+        let clouds = CloudSubsystem::new(device, config, queue, &mut render_manager, mod_manager);
         Self {
             adapter,
             device: device.clone(),
@@ -141,6 +144,7 @@ impl Renderer {
             props,
             building_renderer,
             screenshot_sender: make_screenshot_thread(),
+            clouds,
         }
     }
 
@@ -171,6 +175,7 @@ impl Renderer {
         }
         surface.configure(&self.device, &self.config);
         self.pipelines.resize(&self.config, self.msaa_samples);
+        self.clouds.resize(&self.device, &self.config);
         self.ui_renderer.pipelines.resize(&self.config);
         self.render_manager.invalidate_bind_groups();
         ui.resize(self.old_window_size, new_size.cast::<f32>());
@@ -191,7 +196,7 @@ impl Renderer {
         settings: &Settings,
         mod_manager: &ModManager,
     ) {
-        world.time.timer.checkpoint("Render", false);
+        world.time.timer.checkpoint("Render Update", false);
         if settings.render_debug_print {
             println!("[render] start");
         }
@@ -206,12 +211,12 @@ impl Renderer {
 
         time.frame_checkpoint(FrameTimeCheckpointType::BeforeAcquireFrame);
         time.timer.checkpoint("Acquire Frame", false);
-        time.timer.checkpoint("Render", true);
+        time.timer.checkpoint("Render Update", true);
         let Some(frame) = acquire_frame(&surface, &self.device, &self.config) else {
             return;
         };
         time.timer.checkpoint("Acquire Frame", true);
-        time.timer.checkpoint("Render", false);
+        time.timer.checkpoint("Render render", false);
         time.frame_checkpoint(FrameTimeCheckpointType::AfterAcquireFrame);
         if settings.render_debug_print {
             print!("[render] acquired frame");
@@ -275,7 +280,7 @@ impl Renderer {
         }
         self.profiler
             .end_frame(&self.device, &self.queue, &mut ui.variables);
-        world.time.timer.checkpoint("Render", true);
+        world.time.timer.checkpoint("Render render", true);
     }
 
     pub fn update_render(
@@ -351,13 +356,13 @@ impl Renderer {
         astronomy: &Astronomy,
         time: &Time,
         aspect: f32,
-        terrain_subsystem: &Terrain,
+        terrain: &Terrain,
         settings: &Settings,
         variables: &mut Variables,
     ) {
         let mut updater = UniformUpdater::new(&self.queue, &mut self.pipelines);
         updater.update_camera_uniforms(
-            terrain_subsystem,
+            terrain,
             astronomy,
             camera,
             time,
@@ -375,6 +380,21 @@ impl Renderer {
             variables,
         );
         updater.update_ssao_uniforms(time, settings, camera.prev_view_proj);
+
+        let camera_world = camera.eye_world();
+        self.clouds
+            .update_terrain_height_map(&self.queue, terrain, camera_world);
+        let (terrain_map_origin_relative, terrain_map_valid) =
+            self.clouds.terrain_height_origin(camera_world);
+
+        self.clouds.update_uniforms(
+            &self.queue,
+            time.total_game_time as f32,
+            time.frame_count as u32,
+            camera_world.local.y,
+            terrain_map_origin_relative,
+            terrain_map_valid,
+        );
     }
 
     fn update_subsystems(
@@ -399,6 +419,7 @@ impl Renderer {
         ui.variables.set_i64("target_pos_cz", camera.target.chunk.z);
         ui.variables
             .set_array("target_pos", target_pos_render.to_array());
+
         buildings.update(
             camera,
             terrain,
@@ -414,6 +435,7 @@ impl Renderer {
             zoning,
             sounds,
         );
+
         zoning.update(
             camera,
             terrain,
@@ -614,12 +636,29 @@ impl Renderer {
             settings,
             aspect,
             mod_manager,
+            time,
         );
 
         gpu_timestamp!(encoder, &mut self.profiler, "GTAO", {
             self.execute_gtao_pass(encoder, settings, time, mod_manager);
         });
-
+        gpu_timestamp!(encoder, &mut self.profiler, "Cloud_Upsample_Composite", {
+            time.timer
+                .checkpoint(["Render", "Pass", "Cloud Upsample"], false);
+            if settings.show_world && self.clouds.settings.enabled {
+                render_cloud_composite_depth_aware(
+                    encoder,
+                    &mut self.render_manager,
+                    &mut self.profiler,
+                    &self.pipelines,
+                    &self.clouds,
+                    self.msaa_samples,
+                    mod_manager,
+                );
+            }
+            time.timer
+                .checkpoint(["Render", "Pass", "Cloud Upsample"], true);
+        });
         gpu_timestamp!(encoder, &mut self.profiler, "RT", {
             let sun_up = time.astronomy.sun_dir.y > 0.0;
             if sun_up && (settings.shadow_type == ShadowType::RT) {
@@ -636,6 +675,26 @@ impl Renderer {
             }
         });
         self.execute_fog_pass(encoder, settings, mod_manager);
+
+        // 8. Gizmo
+        gpu_timestamp!(encoder, &mut self.profiler, "Gizmo", {
+            time.timer.checkpoint(["Render", "Pass", "Gizmo"], false);
+            render_gizmo(
+                encoder,
+                &mut self.render_manager,
+                &self.pipelines,
+                settings,
+                config,
+                self.msaa_samples,
+                &mut self.gizmo,
+                camera,
+                &self.device,
+                &self.queue,
+                mod_manager,
+                &mut self.ui_renderer,
+            );
+            time.timer.checkpoint(["Render", "Pass", "Gizmo"], true);
+        });
 
         time.timer.checkpoint("UI Render", false);
         gpu_timestamp!(encoder, &mut self.profiler, "UI", {
@@ -748,6 +807,7 @@ impl Renderer {
         settings: &Settings,
         aspect: f32,
         mod_manager: &ModManager,
+        time: &mut Time,
     ) {
         create_world_pass(encoder, &self.pipelines, config, self.msaa_samples, true); // Just Clear the frame
         if !settings.show_world {
@@ -756,19 +816,36 @@ impl Renderer {
 
         // 1. Sky
         // All frame time names must be lowercase, I decided. (Doesn't matter anyway, cuz I .lowercase() anyway.)
-        render_sky(
-            encoder,
-            &mut self.render_manager,
-            &mut self.profiler,
-            &self.pipelines,
-            settings,
-            config,
-            self.msaa_samples,
-            mod_manager,
-        );
-
+        gpu_timestamp!(encoder, &mut self.profiler, "Sky", {
+            time.timer.checkpoint(["Render", "Pass", "Sky"], false);
+            render_sky(
+                encoder,
+                &mut self.render_manager,
+                &mut self.profiler,
+                &self.pipelines,
+                settings,
+                config,
+                self.msaa_samples,
+                mod_manager,
+            );
+            time.timer.checkpoint(["Render", "Pass", "Sky"], true);
+        });
+        gpu_timestamp!(encoder, &mut self.profiler, "Clouds", {
+            time.timer.checkpoint(["Render", "Pass", "Clouds"], false);
+            render_clouds(
+                encoder,
+                &mut self.render_manager,
+                &mut self.profiler,
+                &self.pipelines,
+                &mut self.clouds,
+                self.msaa_samples,
+                mod_manager,
+            );
+            time.timer.checkpoint(["Render", "Pass", "Clouds"], true);
+        });
         // 2. Terrain
         gpu_timestamp!(encoder, &mut self.profiler, "Terrain", {
+            time.timer.checkpoint(["Render", "Pass", "Terrain"], false);
             render_terrain(
                 encoder,
                 &mut self.render_manager,
@@ -782,10 +859,12 @@ impl Renderer {
                 aspect,
                 mod_manager,
             );
+            time.timer.checkpoint(["Render", "Pass", "Terrain"], true);
         });
 
         // 3. Water
         gpu_timestamp!(encoder, &mut self.profiler, "Water", {
+            time.timer.checkpoint(["Render", "Pass", "Water"], false);
             render_water(
                 encoder,
                 &mut self.render_manager,
@@ -795,9 +874,12 @@ impl Renderer {
                 self.msaa_samples,
                 mod_manager,
             );
+            time.timer.checkpoint(["Render", "Pass", "Water"], true);
         });
+
         // 4. Roads
         gpu_timestamp!(encoder, &mut self.profiler, "Roads", {
+            time.timer.checkpoint(["Render", "Pass", "Roads"], false);
             render_roads(
                 encoder,
                 &mut self.render_manager,
@@ -808,10 +890,13 @@ impl Renderer {
                 self.msaa_samples,
                 mod_manager,
             );
+            time.timer.checkpoint(["Render", "Pass", "Roads"], true);
         });
 
         // 5. Buildings
         gpu_timestamp!(encoder, &mut self.profiler, "Buildings", {
+            time.timer
+                .checkpoint(["Render", "Pass", "Buildings"], false);
             render_buildings(
                 encoder,
                 &mut self.render_manager,
@@ -824,10 +909,12 @@ impl Renderer {
                 self.msaa_samples,
                 mod_manager,
             );
+            time.timer.checkpoint(["Render", "Pass", "Buildings"], true);
         });
 
-        // 6
+        // 6. Cars
         gpu_timestamp!(encoder, &mut self.profiler, "Cars", {
+            time.timer.checkpoint(["Render", "Pass", "Cars"], false);
             render_cars(
                 encoder,
                 &mut self.render_manager,
@@ -840,9 +927,12 @@ impl Renderer {
                 config,
                 mod_manager,
             );
+            time.timer.checkpoint(["Render", "Pass", "Cars"], true);
         });
-        // 7
+
+        // 7. Props
         gpu_timestamp!(encoder, &mut self.profiler, "Props", {
+            time.timer.checkpoint(["Render", "Pass", "Props"], false);
             render_props(
                 encoder,
                 &mut self.render_manager,
@@ -856,25 +946,9 @@ impl Renderer {
                 config,
                 mod_manager,
             );
+            time.timer.checkpoint(["Render", "Pass", "Props"], true);
         });
 
-        // 8. Gizmo
-        gpu_timestamp!(encoder, &mut self.profiler, "Gizmo", {
-            render_gizmo(
-                encoder,
-                &mut self.render_manager,
-                &self.pipelines,
-                settings,
-                config,
-                self.msaa_samples,
-                &mut self.gizmo,
-                camera,
-                &self.device,
-                &self.queue,
-                mod_manager,
-                &mut self.ui_renderer,
-            );
-        });
         // let pass = &mut create_id_pass(encoder, &self.pipelines);
         // render_instance_ids(
         //     pass,
@@ -897,7 +971,7 @@ impl Renderer {
         if !settings.show_world {
             return;
         }
-        if settings.is_gtao_prep_off() {
+        if settings.is_gtao_prep_off() && !self.clouds.settings.enabled {
             return;
         }
         let msaa_on = settings.msaa_samples > 1;

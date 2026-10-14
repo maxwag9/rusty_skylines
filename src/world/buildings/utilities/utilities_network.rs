@@ -323,7 +323,7 @@ impl UtilityNetwork {
             }
         }
         println!("[Utilities] Loaded {} Utility files", utilities.len());
-        println!("{:?}", utilities);
+        //println!("{:?}", utilities);
         self.utilities = utilities;
     }
     pub fn add_endpoint(&mut self, endpoint: UtilityEndpoint) -> UtilityEndpointId {

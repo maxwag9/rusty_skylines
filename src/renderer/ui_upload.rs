@@ -321,6 +321,7 @@ pub fn upload_text(
 
         if is_selected && !t.being_edited {
             render_corner_brackets(
+                t,
                 pos[0],
                 pos[1],
                 pos[0] + t.width,
@@ -340,6 +341,7 @@ pub fn upload_text(
             let pad = 2.0;
             let start = vertices.len();
             render_editor_outline(
+                t,
                 pos[0],
                 pos[1],
                 pos[0] + t.width,

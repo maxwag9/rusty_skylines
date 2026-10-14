@@ -1,0 +1,31 @@
+name: UtilitiesInfo
+layers:
+  - name: gui
+    order: 2
+    elements:
+      - !Text
+        id: header_text
+        x: 1140
+        y: 600
+        pt: 18.0
+        rotation: -10
+        resize_behaviour:
+          width: uniform
+          height: uniform
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'let formatter_test = "§b§Bold§rb§ | §i§Italic§ri§ | §s§Strikethrough§rs§ | §u§Underline§ru§ | §o§Obfuscated ABC 123 !?§ro§ \\n §[b, i]§Array bold+italic§[rb, ri]§ | §[r, u]§Array reset-all then underline§ru§\n§b§Bold survives §cRED§red§rc§ default color, still bold§rb§\n§#AAFF00§Hex RGB§r#§ | §#AAFF00/F0§Hex RGBA alpha F0§rc§ | §#000000/00§Fully transparent§r§\n§cBLACK§Black§rc§ §cDARK_BLUE§Dark blue§rc§ §cDARK_GREEN§Dark green§rc§ §cDARK_AQUA§Dark aqua§rc§ §cDARK_RED§Dark red§rc§ §cDARK_PURPLE§Dark purple§rc§ §cGOLD§Gold§rc§ §cGRAY§Gray§rc§\n§cDARK_GRAY§Dark gray§rc§ §cBLUE§Blue§rc§ §cGREEN§Green§rc§ §cAQUA§Aqua§rc§ §cRED§Red§rc§ §cLIGHT_PURPLE§Light purple§rc§ §cYELLOW§Yellow§rc§ §cWHITE§White§rc§\n§cORANGE§Orange§rc§ §cPINK§Pink§rc§ §cLIME§Lime§rc§ §cTURQUOISE§Turquoise§rc§ §cCYAN§Cyan§rc§ §cMAGENTA§Magenta§rc§ §cPURPLE§Purple§rc§ §cVIOLET§Violet§rc§ §cINDIGO§Indigo§rc§\n§cNAVY§Navy§rc§ §cTEAL§Teal§rc§ §cOLIVE§Olive§rc§ §cMAROON§Maroon§rc§ §cCORAL§Coral§rc§ §cSALMON§Salmon§rc§ §cBEIGE§Beige§rc§ §cBROWN§Brown§rc§ §cCHOCOLATE§Chocolate§rc§ §cCRIMSON§Crimson§rc§ §cKHAKI§Khaki§rc§ §cMINT§Mint§rc§ §cSKY_BLUE§Sky blue§rc§ §cROYAL_BLUE§Royal blue§rc§ §cFOREST_GREEN§Forest green§rc§ §cSEA_GREEN§Sea green§rc§ §cSLATE_GRAY§Slate gray§rc§ §cSILVER§Silver§rc§ §cCHARCOAL§Charcoal§rc§ §cTRANSPARENT§Transparent§rc§\nLiteral sign: §§; literal format sequence: §§b§; literal hex sequence: §§#FF0000§§\nUnknown preset stays visible: §cNOT_A_COLOR§ | invalid hex stays visible: §#GGZZ00§\nUnicode survives: 你好 Καλημέρα Привет café 🙂 | reset everything: §b§§i§Bold italic §r§normal'
+        anchor: TopLeft
+      - !Advanced
+        name: list_thingie
+        ap_name: list
+        ap_vars:
+          - "[ [str:Electricity, 85.3, 126.1], [str:Clean Water, 801.4, 1026.1] ]"
+          - "str:Utilities Info"
+          - "str:large"
+        x: 1240
+        y: 600
+        scale: 1.0

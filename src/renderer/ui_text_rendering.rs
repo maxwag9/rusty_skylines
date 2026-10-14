@@ -1,6 +1,8 @@
 use crate::renderer::ui::UiRenderer;
 use crate::resources::Time;
-use crate::ui::ui_text_editing::{get_caret_position, line_start_grapheme_index, text_top_left};
+use crate::ui::ui_text_editing::{
+    get_caret_position_local, line_start_grapheme_index, rotate_text_point, text_top_left,
+};
 use crate::ui::vertex::{UiButtonText, UiVertexText};
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
@@ -69,6 +71,51 @@ fn push_quad(
             _pad0: [0.0; 3],
         },
     ]);
+}
+
+fn push_quad_points(
+    text_vertices: &mut Vec<UiVertexText>,
+    points: [[f32; 2]; 4],
+    col: [f32; 4],
+    depth: f32,
+) {
+    let [a, b, c, d] = points;
+
+    let vertex = |pos| UiVertexText {
+        pos,
+        color: col,
+        depth,
+        _pad0: [0.0; 3],
+    };
+
+    text_vertices.extend_from_slice(&[
+        vertex(a),
+        vertex(b),
+        vertex(c),
+        vertex(a),
+        vertex(c),
+        vertex(d),
+    ]);
+}
+
+fn push_rotated_quad(
+    t: &UiButtonText,
+    text_vertices: &mut Vec<UiVertexText>,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    col: [f32; 4],
+    depth: f32,
+) {
+    let points = [
+        rotate_text_point(t, [x0, y0]),
+        rotate_text_point(t, [x1, y0]),
+        rotate_text_point(t, [x1, y1]),
+        rotate_text_point(t, [x0, y1]),
+    ];
+
+    push_quad_points(text_vertices, points, col, depth);
 }
 
 pub fn render_selection(t: &UiButtonText, text_vertices: &mut Vec<UiVertexText>, depth: f32) {
@@ -149,7 +196,8 @@ pub fn render_selection(t: &UiButtonText, text_vertices: &mut Vec<UiVertexText>,
         let y0 = text_top + run.line_top;
         let y1 = y0 + run.line_height;
 
-        push_quad(
+        push_rotated_quad(
+            t,
             text_vertices,
             text_left + x0,
             y0,
@@ -161,6 +209,7 @@ pub fn render_selection(t: &UiButtonText, text_vertices: &mut Vec<UiVertexText>,
     }
 }
 pub fn render_editor_outline(
+    t: &UiButtonText,
     min_x: f32,
     min_y: f32,
     max_x: f32,
@@ -177,15 +226,16 @@ pub fn render_editor_outline(
 
     let base_alpha = if being_hovered { 0.30 } else { 0.01 };
     let col = [0.9, 0.9, 1.0, base_alpha];
-    let t = 1.5;
+    let thickness = 1.5;
 
-    push_quad(text_vertices, x0, y0, x1, y0 + t, col, depth);
-    push_quad(text_vertices, x0, y1 - t, x1, y1, col, depth);
-    push_quad(text_vertices, x0, y0, x0 + t, y1, col, depth);
-    push_quad(text_vertices, x1 - t, y0, x1, y1, col, depth);
+    push_rotated_quad(t, text_vertices, x0, y0, x1, y0 + thickness, col, depth);
+    push_rotated_quad(t, text_vertices, x0, y1 - thickness, x1, y1, col, depth);
+    push_rotated_quad(t, text_vertices, x0, y0, x0 + thickness, y1, col, depth);
+    push_rotated_quad(t, text_vertices, x1 - thickness, y0, x1, y1, col, depth);
 }
 
 pub fn render_corner_brackets(
+    t: &UiButtonText,
     min_x: f32,
     min_y: f32,
     max_x: f32,
@@ -196,10 +246,10 @@ pub fn render_corner_brackets(
 ) {
     let base_len = 6.0;
     let base_pad = 4.0;
-    let thick = 2.0;
+    let thickness = 2.0;
     let hover_factor = if being_hovered { 1.6 } else { 1.0 };
 
-    let br = base_len * hover_factor;
+    let bracket = base_len * hover_factor;
     let pad = base_pad * hover_factor;
 
     let x0 = min_x - pad;
@@ -209,17 +259,89 @@ pub fn render_corner_brackets(
 
     let col = [1.0, 0.85, 0.2, 1.0];
 
-    push_quad(text_vertices, x0, y0, x0 + br, y0 + thick, col, depth);
-    push_quad(text_vertices, x0, y0, x0 + thick, y0 + br, col, depth);
+    push_rotated_quad(
+        t,
+        text_vertices,
+        x0,
+        y0,
+        x0 + bracket,
+        y0 + thickness,
+        col,
+        depth,
+    );
+    push_rotated_quad(
+        t,
+        text_vertices,
+        x0,
+        y0,
+        x0 + thickness,
+        y0 + bracket,
+        col,
+        depth,
+    );
 
-    push_quad(text_vertices, x1 - br, y0, x1, y0 + thick, col, depth);
-    push_quad(text_vertices, x1 - thick, y0, x1, y0 + br, col, depth);
+    push_rotated_quad(
+        t,
+        text_vertices,
+        x1 - bracket,
+        y0,
+        x1,
+        y0 + thickness,
+        col,
+        depth,
+    );
+    push_rotated_quad(
+        t,
+        text_vertices,
+        x1 - thickness,
+        y0,
+        x1,
+        y0 + bracket,
+        col,
+        depth,
+    );
 
-    push_quad(text_vertices, x0, y1 - thick, x0 + br, y1, col, depth);
-    push_quad(text_vertices, x0, y1 - br, x0 + thick, y1, col, depth);
+    push_rotated_quad(
+        t,
+        text_vertices,
+        x0,
+        y1 - thickness,
+        x0 + bracket,
+        y1,
+        col,
+        depth,
+    );
+    push_rotated_quad(
+        t,
+        text_vertices,
+        x0,
+        y1 - bracket,
+        x0 + thickness,
+        y1,
+        col,
+        depth,
+    );
 
-    push_quad(text_vertices, x1 - br, y1 - thick, x1, y1, col, depth);
-    push_quad(text_vertices, x1 - thick, y1 - br, x1, y1, col, depth);
+    push_rotated_quad(
+        t,
+        text_vertices,
+        x1 - bracket,
+        y1 - thickness,
+        x1,
+        y1,
+        col,
+        depth,
+    );
+    push_rotated_quad(
+        t,
+        text_vertices,
+        x1 - thickness,
+        y1 - bracket,
+        x1,
+        y1,
+        col,
+        depth,
+    );
 }
 pub fn render_editor_caret(
     _ui_renderer: &UiRenderer,
@@ -230,7 +352,7 @@ pub fn render_editor_caret(
 ) {
     let caret_width = 2.0;
 
-    let (x, y) = get_caret_position(t);
+    let (x, y) = get_caret_position_local(t);
 
     let (_, text_top, _, _) = text_top_left(t);
 
@@ -248,7 +370,8 @@ pub fn render_editor_caret(
     let blink_t = time_system.total_time * 3.0;
     let caret_alpha = (0.5 + 0.5 * blink_t.cos()).clamp(0.0, 1.0) as f32;
 
-    push_quad(
+    push_rotated_quad(
+        t,
         text_vertices,
         x,
         y,

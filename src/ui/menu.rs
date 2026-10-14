@@ -63,7 +63,7 @@ impl Menu {
         variables: &Variables,
         font_system: &mut FontSystem,
         layer_index: usize,
-        runtime: &UiRuntimes,
+        runtime: &mut UiRuntimes,
         aps: &HashMap<String, UiLayerYaml>,
         window_size: PhysicalSize<f32>,
         device: &Device,

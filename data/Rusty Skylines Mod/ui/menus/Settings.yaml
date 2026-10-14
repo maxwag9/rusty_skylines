@@ -18,14 +18,12 @@ layers:
         name: settings_to_main_menu_button
         ap_name: button
         ap_vars:
-          - "str:<- To Main Menu"
+          - 'str:<- To {expr:is_some({current_save}) == true ? "Pause" : "Main"} Menu'
           - "25"
-          - "str:on:r call(open_main_menus)"
+          - "str:on:r if(expr:is_some({current_save}), call(open_pause_menus), call(open_main_menus))"
         x: 100
         y: 50
         scale: 1.0
-
-        editing_tool: false
       - !Advanced
         name: checkbox_render_chunk_bounds
         ap_name: checkbox

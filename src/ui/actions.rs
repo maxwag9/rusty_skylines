@@ -3,6 +3,7 @@ pub mod drag_hue_point;
 
 use crate::data::{SettingKey, SettingOp, Settings};
 use crate::helpers::paths::rusty_skylines_dir;
+use crate::helpers::{get_splash_message, print_exit_message};
 use crate::renderer::props::Props;
 use crate::renderer::render_core::Renderer;
 use crate::simulation::Simulation;
@@ -570,20 +571,39 @@ impl CommandQueue {
 
             UiCommand::MenuActive { menu_name } => {
                 let element_ctx = &ctx.element_ctx.clone();
-                let menu_name = string_to_value(ctx, menu_name);
-                let Some(menu_name) = menu_name.as_string() else {
-                    return CommandResult::Error(
+                let menu_names = string_to_value(ctx, menu_name);
+                if let Some(menu_name) = menu_names.as_string() {
+                    let is_active = ctx
+                        .ui
+                        .menus
+                        .get(menu_name)
+                        .map(|m| m.active)
+                        .unwrap_or(false);
+                    ctx.ui.variables.set_bool("_result", is_active);
+                    CommandResult::Ok
+                } else if let Some(menu_names) = menu_names.as_array() {
+                    let mut is_active = false;
+                    for menu_name in menu_names {
+                        let Some(menu_name) = menu_name.as_string() else {
+                            return CommandResult::Error(
+                                "Menu name in menu_active() in array wasn't resolved to string"
+                                    .to_string(),
+                            );
+                        };
+                        is_active |= ctx
+                            .ui
+                            .menus
+                            .get(menu_name)
+                            .map(|m| m.active)
+                            .unwrap_or(false);
+                    }
+                    ctx.ui.variables.set_bool("_result", is_active);
+                    CommandResult::Ok
+                } else {
+                    CommandResult::Error(
                         "Menu name in menu_active() wasn't resolved to string".to_string(),
-                    );
-                };
-                let is_active = ctx
-                    .ui
-                    .menus
-                    .get(menu_name)
-                    .map(|m| m.active)
-                    .unwrap_or(false);
-                ctx.ui.variables.set_bool("_result", is_active);
-                CommandResult::Ok
+                    )
+                }
             }
 
             // ===== LAYER COMMANDS =====
@@ -977,6 +997,7 @@ impl CommandQueue {
                 else_branch,
             } => {
                 let element_ctx = &ctx.element_ctx.clone();
+                //println!("{} {}", var_name, value);
                 //println!("{:?} {:?}", then, else_branch);
                 let var_value = string_to_value(ctx, var_name);
                 //let Some(var_value) = var_name.as_string() else { return CommandResult::Error(format!("Var Name in ifvareq() wasn't resolved to string, instead to: {}", var_name)) };
@@ -988,8 +1009,9 @@ impl CommandQueue {
                 // };
 
                 let compare_value = string_to_value(ctx, value);
-                //println!("{} {}", var_value, compare_value);
+                //println!("{:?} {:?}", var_value, compare_value);
                 if var_value == compare_value {
+                    //println!("{:#?}", then);
                     self.execute_multiple(then, ctx);
                 } else {
                     self.execute_multiple(else_branch, ctx);
@@ -1606,6 +1628,18 @@ fn call_rust(ctx: &mut CommandContext, function_name: &str, args: Vec<Value>) {
         "stop_sounds" => {
             ctx.world.sounds.clear_sfx_queue();
         }
+        "get_new_splash" => {
+            let splash_message = get_splash_message();
+            ctx.ui
+                .variables
+                .set_string("SPLASH_MESSAGE", splash_message);
+        }
+        "start_panorama" => {
+            ctx.world.start_panorama(&ctx.game_state);
+        }
+        "end_panorama" => {
+            ctx.world.end_panorama();
+        }
         // "convert_song" => {
         //     let path = args.get(0).and_then(|s| s.as_string());
         //     let Some(path) = path else {
@@ -1798,6 +1832,7 @@ pub fn exit_game(
     save_game(game_state, world, props, settings, variables, false);
 
     event_loop.exit();
+    print_exit_message()
     //std::process::exit(69); // Die.
 }
 pub fn save_game(
@@ -1933,6 +1968,14 @@ pub fn set_element_property(
             }
             ctx.ui.variables.set_string(name, road_mode);
         }
+        // "cloud_debug_mode" => {
+        //     let road_mode = new_val.to_string();
+        //     //println!("Road Mode: {}", road_mode);
+        //     if let Ok(road_mode) = BuildMode::from_str(road_mode.as_str()) {
+        //         ctx.world.roads.road_editor.style.set_mode(road_mode);
+        //     }
+        //     ctx.ui.variables.set_string(name, road_mode);
+        // }
         // "road_type" => {
         //     let road_type = new_val.to_string();
         //     ctx.world.terrain.cursor.road_type = road_type;
@@ -2308,10 +2351,10 @@ pub fn set_element_property(
 
                             if idx != target_idx {
                                 let element = layer.elements.remove(idx);
-                                layer.elements.insert(target_idx, element); // TODO: Sus?
-                            }
+                                layer.elements.insert(target_idx, element); // TO/DO: Sus?
 
-                            layer.dirty.mark_all();
+                                layer.dirty.mark_all();
+                            }
                         }
                     }
                 }

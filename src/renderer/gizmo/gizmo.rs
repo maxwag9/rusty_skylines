@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use crate::data::Settings;
-use crate::helpers::hsv::{HSV, depth_to_color, hsv_to_rgb};
+use crate::helpers::hsv::{HSV, depth_to_color, hsv_to_rgb, lerp};
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 
 use crate::helpers::stupid_color_from_rgba;
@@ -20,7 +20,7 @@ use crate::world::cars::partitions::PartitionId;
 use crate::world::cars::signfinding::{SFTurnType, get_last_turn};
 use crate::world::roads::road_structs::SnapPreview;
 use crate::world::roads::roads::{RoadManager, RoadStorage};
-use crate::world::terrain::terrain_subsystem::Terrain;
+use crate::world::terrain::terrain_subsystem::{Cursor, CursorMode, Terrain};
 use glam::Vec3;
 use sluggrs_skylines::cosmic_text::{Attrs, Family, Metrics, Shaping};
 use sluggrs_skylines::{
@@ -322,7 +322,11 @@ impl Gizmo {
         buildings: &mut Buildings,
         zoning: &ZoningStorage,
         camera: &Camera,
+        cursor: &Cursor,
     ) {
+        if !(cursor.mode == CursorMode::Roads || cursor.mode == CursorMode::Utilities) {
+            return;
+        }
         for segment_id in road_manager
             .roads
             .segment_ids_touching_chunks(&camera.target.chunk.get_chunks_in_chunk_distance(5))
@@ -370,12 +374,23 @@ impl Gizmo {
                         * road_type.lane_width;
 
                     let points = WorldPos::offset_polyline(geometry.points.as_slice(), lane_offset);
+                    let saturation = (utility_rail.usage
+                        / utility.amount_per_rail.max(f32::EPSILON))
+                    .clamp(0.0, 1.0);
+                    let thickness = lerp(0.06, 0.3, saturation);
                     let (a_color, b_color) = if local_rail_index % 2 == 0 {
                         (utility.rail_color, utility.second_rail_color)
                     } else {
                         (utility.second_rail_color, utility.rail_color)
                     };
-                    self.polyline_flowing(points.as_slice(), a_color, b_color, false, 0.3, 0.0);
+                    self.polyline_flowing(
+                        points.as_slice(),
+                        a_color,
+                        b_color,
+                        false,
+                        thickness,
+                        0.0,
+                    );
 
                     rail_index += 1;
                 }
@@ -414,7 +429,7 @@ impl Gizmo {
                 );
             }
             self.text(
-                format!("Util Endpoint {idx}, {:?}", usages),
+                format!("Util Endp {idx}, {:?}", usages),
                 lot.entrance.pos,
                 0.5,
                 [0.1, 0.5, 0.05, 1.0],
@@ -928,7 +943,7 @@ impl Gizmo {
     ) {
         self.axes(origin, scale, thickness, duration);
         let cs = chunk_size() as f32;
-        let sun_end = origin.add_vec3(sun_dir.normalize_or_zero() * scale);
+        let sun_end = origin.add_vec3(-sun_dir.normalize_or_zero() * scale);
         self.arrow(
             origin,
             sun_end,
@@ -938,7 +953,7 @@ impl Gizmo {
             thickness,
             duration,
         );
-        let moon_end = origin.add_vec3(moon_dir.normalize_or_zero() * scale);
+        let moon_end = origin.add_vec3(-moon_dir.normalize_or_zero() * scale);
         self.arrow(
             origin,
             moon_end,
@@ -1391,7 +1406,7 @@ impl Gizmo {
 
     pub fn update(
         &mut self,
-        terrain_subsystem: &Terrain,
+        terrain: &Terrain,
         rt_subsystem: &RTSubsystem,
         total_game_time: f64,
         road_manager: &RoadManager,
@@ -1423,7 +1438,7 @@ impl Gizmo {
                 0.0,
             );
         }
-        self.visualize_utilities(road_manager, buildings, zoning, camera);
+        self.visualize_utilities(road_manager, buildings, zoning, camera, &terrain.cursor);
         if settings.render_partitions_gizmo {
             self.visualize_partitions(buildings);
             self.visualize_regions(&road_manager.roads, 0.0, 0.0);
@@ -1446,11 +1461,11 @@ impl Gizmo {
             );
         }
         if settings.render_chunk_bounds {
-            if terrain_subsystem.chunks.contains_key(&target.chunk) {
+            if terrain.chunks.contains_key(&target.chunk) {
                 let cs = chunk_size() as f32;
                 let corner = WorldPos::new(
                     target.chunk,
-                    LocalPos::new(0.0, terrain_subsystem.get_height_at(target, false), 0.0),
+                    LocalPos::new(0.0, terrain.get_height_at(target, false), 0.0),
                 );
                 self.square(
                     corner.add_vec3(Vec3::new(cs * 0.5, 0.0, cs * 0.5)),
@@ -2579,6 +2594,8 @@ impl Gizmo {
                 bounds,
                 default_color: stupid_color_from_rgba(text.color),
                 decorations: text.decorations.as_slice(),
+                rotation: 0.0,
+                rotation_origin: [0.0, 0.0],
             });
         }
 

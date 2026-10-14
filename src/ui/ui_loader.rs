@@ -341,6 +341,7 @@ fn synth_text(rng: &mut SimpleRng) -> UiButtonTextYaml {
         x: rng.next_i32_range(0, 1920) as i16,
         y: rng.next_i32_range(0, 1080) as i16,
         pt: rng.next_f32_range(0.1, 50.1),
+        rotation: rng.next_f32_range(-560.1, 500.1),
         resize_behaviour: Default::default(), // TODO: Random resize behaviour is fun!!
         color: [
             rng.next_f32_range(0.0, 2.0),

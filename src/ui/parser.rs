@@ -269,7 +269,11 @@ impl Value {
         if let Ok(f) = s.parse::<f64>() {
             return Value::F64(f);
         }
-
+        match s.to_ascii_lowercase().as_str() {
+            "true" => return Value::Bool(true),
+            "false" => return Value::Bool(false),
+            _ => {}
+        };
         Value::String(s.to_string())
     }
     pub fn from_str_pure(s: &str) -> Self {
@@ -1196,11 +1200,20 @@ fn format_custom_time(
         result
     }
 }
-type BuiltinFn = fn(Vec<Value>) -> Result<Value, FunctionError>;
+type BuiltinFn<'a> = Box<dyn Fn(Vec<Value>) -> Result<Value, FunctionError> + 'a>;
 
-pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
+fn boxed_builtin<'a>(f: impl Fn(Vec<Value>) -> Result<Value, FunctionError> + 'a) -> BuiltinFn<'a> {
+    Box::new(f)
+}
+
+pub fn get_builtin<'a>(
+    name: &'a str,
+    menus: &'a Menus,
+    element_ctx: &'a ElementContext,
+    vars: &'a Variables,
+) -> Option<BuiltinFn<'a>> {
     Some(match name {
-        "fix" => |args| {
+        "fix" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "fix")?;
             let n = val.as_f64().ok_or(FunctionError::ConversionFailed {
                 from: val.type_name(),
@@ -1232,8 +1245,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 format!("{}{}", sign, padded_int)
             };
             Ok(Value::String(result))
-        },
-        "abs" => |args| {
+        }),
+        "abs" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "abs")?;
             match val {
                 Value::F64(n) => Ok(Value::F64(n.abs())),
@@ -1244,109 +1257,109 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "abs",
                 }),
             }
-        },
-        "floor" => |args| {
+        }),
+        "floor" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "floor")?;
             Ok(Value::F64(n.floor()))
-        },
-        "ceil" => |args| {
+        }),
+        "ceil" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "ceil")?;
             Ok(Value::F64(n.ceil()))
-        },
-        "round" => |args| {
+        }),
+        "round" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "round")?;
             let decimals = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as i32;
             let factor = 10f64.powi(decimals);
             Ok(Value::F64((n * factor).round() / factor))
-        },
-        "trunc" => |args| {
+        }),
+        "trunc" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "trunc")?;
             Ok(Value::F64(n.trunc()))
-        },
-        "sqrt" => |args| {
+        }),
+        "sqrt" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "sqrt")?;
             Ok(Value::F64(n.sqrt()))
-        },
-        "cbrt" => |args| {
+        }),
+        "cbrt" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "cbrt")?;
             Ok(Value::F64(n.cbrt()))
-        },
-        "pow" => |args| {
+        }),
+        "pow" => boxed_builtin(move |args| {
             let base = arg_f64(&args, 0, "pow")?;
             let exp = arg_f64(&args, 1, "pow")?;
             Ok(Value::F64(base.powf(exp)))
-        },
-        "exp" => |args| {
+        }),
+        "exp" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "exp")?;
             Ok(Value::F64(n.exp()))
-        },
-        "ln" => |args| {
+        }),
+        "ln" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "ln")?;
             Ok(Value::F64(n.ln()))
-        },
-        "log" => |args| {
+        }),
+        "log" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "log")?;
             let base = args.get(1).and_then(|v| v.as_f64()).unwrap_or(10.0);
             Ok(Value::F64(n.log(base)))
-        },
-        "log2" => |args| {
+        }),
+        "log2" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "log2")?;
             Ok(Value::F64(n.log2()))
-        },
-        "log10" => |args| {
+        }),
+        "log10" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "log10")?;
             Ok(Value::F64(n.log10()))
-        },
-        "sin" => |args| {
+        }),
+        "sin" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "sin")?;
             Ok(Value::F64(n.sin()))
-        },
-        "cos" => |args| {
+        }),
+        "cos" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "cos")?;
             Ok(Value::F64(n.cos()))
-        },
-        "tan" => |args| {
+        }),
+        "tan" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "tan")?;
             Ok(Value::F64(n.tan()))
-        },
-        "asin" => |args| {
+        }),
+        "asin" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "asin")?;
             Ok(Value::F64(n.asin()))
-        },
-        "acos" => |args| {
+        }),
+        "acos" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "acos")?;
             Ok(Value::F64(n.acos()))
-        },
-        "atan" => |args| {
+        }),
+        "atan" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "atan")?;
             Ok(Value::F64(n.atan()))
-        },
-        "atan2" => |args| {
+        }),
+        "atan2" => boxed_builtin(move |args| {
             let y = arg_f64(&args, 0, "atan2")?;
             let x = arg_f64(&args, 1, "atan2")?;
             Ok(Value::F64(y.atan2(x)))
-        },
-        "sinh" => |args| {
+        }),
+        "sinh" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "sinh")?;
             Ok(Value::F64(n.sinh()))
-        },
-        "cosh" => |args| {
+        }),
+        "cosh" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "cosh")?;
             Ok(Value::F64(n.cosh()))
-        },
-        "tanh" => |args| {
+        }),
+        "tanh" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "tanh")?;
             Ok(Value::F64(n.tanh()))
-        },
-        "degrees" => |args| {
+        }),
+        "degrees" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "degrees")?;
             Ok(Value::F64(n.to_degrees()))
-        },
-        "radians" => |args| {
+        }),
+        "radians" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "radians")?;
             Ok(Value::F64(n.to_radians()))
-        },
-        "min" => |args| {
+        }),
+        "min" => boxed_builtin(move |args| {
             let mut min_val: Option<f64> = None;
             for arg in &args {
                 if let Some(n) = arg.as_f64() {
@@ -1357,8 +1370,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 message: "no numeric arguments provided".to_string(),
                 function: "min",
             })
-        },
-        "max" => |args| {
+        }),
+        "max" => boxed_builtin(move |args| {
             let mut max_val: Option<f64> = None;
             for arg in &args {
                 if let Some(n) = arg.as_f64() {
@@ -1369,24 +1382,24 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 message: "no numeric arguments provided".to_string(),
                 function: "max",
             })
-        },
-        "clamp" => |args| {
+        }),
+        "clamp" => boxed_builtin(move |args| {
             let val = arg_f64(&args, 0, "clamp")?;
             let min = arg_f64(&args, 1, "clamp")?;
             let max = arg_f64(&args, 2, "clamp")?;
             Ok(Value::F64(val.clamp(min, max)))
-        },
-        "saturate" => |args| {
+        }),
+        "saturate" => boxed_builtin(move |args| {
             let val = arg_f64(&args, 0, "saturate")?;
             Ok(Value::F64(val.clamp(0.0, 1.0)))
-        },
-        "lerp" => |args| {
+        }),
+        "lerp" => boxed_builtin(move |args| {
             let a = arg_f64(&args, 0, "lerp")?;
             let b = arg_f64(&args, 1, "lerp")?;
             let t = arg_f64(&args, 2, "lerp")?;
             Ok(Value::F64(a + (b - a) * t))
-        },
-        "sign" => |args| {
+        }),
+        "sign" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "sign")?;
             Ok(Value::F64(if n > 0.0 {
                 1.0
@@ -1395,12 +1408,12 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             } else {
                 0.0
             }))
-        },
-        "fract" => |args| {
+        }),
+        "fract" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "fract")?;
             Ok(Value::F64(n.fract()))
-        },
-        "mod" => |args| {
+        }),
+        "mod" => boxed_builtin(move |args| {
             let a = arg_f64(&args, 0, "mod")?;
             let b = arg_f64(&args, 1, "mod")?;
             if b == 0.0 {
@@ -1410,30 +1423,30 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 });
             }
             Ok(Value::F64(a % b))
-        },
-        "hypot" => |args| {
+        }),
+        "hypot" => boxed_builtin(move |args| {
             let a = arg_f64(&args, 0, "hypot")?;
             let b = arg_f64(&args, 1, "hypot")?;
             Ok(Value::F64(a.hypot(b)))
-        },
-        "pi" => |_| Ok(Value::F64(std::f64::consts::PI)),
-        "e" => |_| Ok(Value::F64(std::f64::consts::E)),
-        "tau" => |_| Ok(Value::F64(std::f64::consts::TAU)),
-        "inf" => |_| Ok(Value::F64(f64::INFINITY)),
-        "nan" => |_| Ok(Value::F64(f64::NAN)),
-        "isnan" => |args| {
+        }),
+        "pi" => boxed_builtin(move |args| Ok(Value::F64(std::f64::consts::PI))),
+        "e" => boxed_builtin(move |args| Ok(Value::F64(std::f64::consts::E))),
+        "tau" => boxed_builtin(move |args| Ok(Value::F64(std::f64::consts::TAU))),
+        "inf" => boxed_builtin(move |args| Ok(Value::F64(f64::INFINITY))),
+        "nan" => boxed_builtin(move |args| Ok(Value::F64(f64::NAN))),
+        "isnan" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "isnan")?;
             Ok(Value::Bool(n.is_nan()))
-        },
-        "isinf" => |args| {
+        }),
+        "isinf" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "isinf")?;
             Ok(Value::Bool(n.is_infinite()))
-        },
-        "isfinite" => |args| {
+        }),
+        "isfinite" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "isfinite")?;
             Ok(Value::Bool(n.is_finite()))
-        },
-        "len" => |args| {
+        }),
+        "len" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "len")?;
             match val {
                 Value::String(s) => Ok(Value::F64(s.len() as f64)),
@@ -1444,16 +1457,16 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "len",
                 }),
             }
-        },
-        "upper" => |args| {
+        }),
+        "upper" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "upper")?;
             Ok(Value::String(val.to_string().to_uppercase()))
-        },
-        "lower" => |args| {
+        }),
+        "lower" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "lower")?;
             Ok(Value::String(val.to_string().to_lowercase()))
-        },
-        "capitalize" => |args| {
+        }),
+        "capitalize" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "capitalize")?;
             match val {
                 Value::String(s) => {
@@ -1470,8 +1483,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "capitalize",
                 }),
             }
-        },
-        "title" => |args| {
+        }),
+        "title" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "title")?;
             match val {
                 Value::String(s) => {
@@ -1497,8 +1510,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "title",
                 }),
             }
-        },
-        "trim" => |args| {
+        }),
+        "trim" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "trim")?;
             match val {
                 Value::String(s) => Ok(Value::String(s.trim().to_string())),
@@ -1508,8 +1521,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "trim",
                 }),
             }
-        },
-        "ltrim" => |args| {
+        }),
+        "ltrim" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "ltrim")?;
             match val {
                 Value::String(s) => Ok(Value::String(s.trim_start().to_string())),
@@ -1519,8 +1532,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "ltrim",
                 }),
             }
-        },
-        "rtrim" => |args| {
+        }),
+        "rtrim" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "rtrim")?;
             match val {
                 Value::String(s) => Ok(Value::String(s.trim_end().to_string())),
@@ -1530,8 +1543,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "rtrim",
                 }),
             }
-        },
-        "reverse" => |args| {
+        }),
+        "reverse" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "reverse")?;
             match val {
                 Value::String(s) => Ok(Value::String(s.chars().rev().collect())),
@@ -1542,8 +1555,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "reverse",
                 }),
             }
-        },
-        "repeat" => |args| {
+        }),
+        "repeat" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "repeat")?;
             let s = match val {
                 Value::String(s) => s.clone(),
@@ -1551,8 +1564,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             };
             let n = arg_f64(&args, 1, "repeat")? as usize;
             Ok(Value::String(s.repeat(n)))
-        },
-        "replace" => |args| {
+        }),
+        "replace" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "replace")?;
             match val {
                 Value::String(s) => {
@@ -1572,8 +1585,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "replace",
                 }),
             }
-        },
-        "split" => |args| {
+        }),
+        "split" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "split")?;
             match val {
                 Value::String(s) => {
@@ -1593,8 +1606,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "split",
                 }),
             }
-        },
-        "join" => |args| {
+        }),
+        "join" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "join")?;
             match val {
                 Value::Array(arr) => {
@@ -1611,8 +1624,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "join",
                 }),
             }
-        },
-        "substr" => |args| {
+        }),
+        "substr" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "substr")?;
             match val {
                 Value::String(s) => {
@@ -1634,8 +1647,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "substr",
                 }),
             }
-        },
-        "contains" => |args| {
+        }),
+        "contains" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "contains")?;
             match val {
                 Value::String(s) => {
@@ -1655,8 +1668,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "contains",
                 }),
             }
-        },
-        "startswith" => |args| {
+        }),
+        "startswith" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "startswith")?;
             match val {
                 Value::String(s) => {
@@ -1672,8 +1685,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "startswith",
                 }),
             }
-        },
-        "endswith" => |args| {
+        }),
+        "endswith" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "endswith")?;
             match val {
                 Value::String(s) => {
@@ -1689,8 +1702,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "endswith",
                 }),
             }
-        },
-        "indexof" => |args| {
+        }),
+        "indexof" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "indexof")?;
             match val {
                 Value::String(s) => {
@@ -1717,8 +1730,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "indexof",
                 }),
             }
-        },
-        "get" => |args| {
+        }),
+        "get" => boxed_builtin(move |args| {
             let arr = match args.get(0) {
                 Some(Value::Array(arr)) => arr,
                 _ => {
@@ -1737,8 +1750,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     len: arr.len(),
                     function: "get",
                 })
-        },
-        "padleft" => |args| {
+        }),
+        "padleft" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "padleft")?;
             let s = val.to_string();
             let width = arg_f64(&args, 1, "padleft")? as usize;
@@ -1752,8 +1765,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 let padding: String = std::iter::repeat(pad_char).take(width - s.len()).collect();
                 Ok(Value::String(padding + &s))
             }
-        },
-        "padright" => |args| {
+        }),
+        "padright" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "padright")?;
             match val {
                 Value::String(s) => {
@@ -1776,8 +1789,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "padright",
                 }),
             }
-        },
-        "center" => |args| {
+        }),
+        "center" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "center")?;
             match val {
                 Value::String(s) => {
@@ -1803,8 +1816,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "center",
                 }),
             }
-        },
-        "char" => |args| {
+        }),
+        "char" => boxed_builtin(move |args| {
             let code = arg_f64(&args, 0, "char")? as u32;
             char::from_u32(code)
                 .map(|c| Value::String(c.to_string()))
@@ -1812,8 +1825,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     message: format!("invalid unicode codepoint: {}", code),
                     function: "char",
                 })
-        },
-        "ord" => |args| {
+        }),
+        "ord" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "ord")?;
             match val {
                 Value::String(s) => {
@@ -1831,20 +1844,20 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "ord",
                 }),
             }
-        },
-        "hex" => |args| {
+        }),
+        "hex" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "hex")? as i64;
             Ok(Value::String(format!("{:x}", n)))
-        },
-        "bin" => |args| {
+        }),
+        "bin" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "bin")? as i64;
             Ok(Value::String(format!("{:b}", n)))
-        },
-        "oct" => |args| {
+        }),
+        "oct" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "oct")? as i64;
             Ok(Value::String(format!("{:o}", n)))
-        },
-        "first" => |args| {
+        }),
+        "first" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "first")?;
             match val {
                 Value::Array(arr) => arr
@@ -1862,8 +1875,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "first",
                 }),
             }
-        },
-        "last" => |args| {
+        }),
+        "last" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "last")?;
             match val {
                 Value::Array(arr) => arr
@@ -1881,8 +1894,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "last",
                 }),
             }
-        },
-        "sum" => |args| {
+        }),
+        "sum" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "sum")?;
             match val {
                 Value::Array(arr) => {
@@ -1894,8 +1907,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     Ok(Value::F64(sum))
                 }
             }
-        },
-        "avg" => |args| {
+        }),
+        "avg" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "avg")?;
             match val {
                 Value::Array(arr) => {
@@ -1915,8 +1928,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     }
                 }
             }
-        },
-        "nearest" => |args| {
+        }),
+        "nearest" => boxed_builtin(move |args| {
             let choices_arr = match args.get(1) {
                 Some(Value::Array(arr)) => arr,
                 _ => return Ok(args.get(0).cloned().unwrap_or(Value::None)),
@@ -1940,8 +1953,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "nearest",
                 })?;
             Ok(Value::F64(nearest))
-        },
-        "nearest_index" => |args| {
+        }),
+        "nearest_index" => boxed_builtin(move |args| {
             let choices_arr = match args.get(0) {
                 Some(Value::Array(arr)) => arr,
                 _ => {
@@ -1973,8 +1986,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "nearest_index",
                 })?;
             Ok(Value::I64(index as i64))
-        },
-        "array_get" => |args| {
+        }),
+        "array_get" => boxed_builtin(move |args| {
             let arr = match args.get(0) {
                 Some(Value::Array(arr)) => arr,
                 _ => {
@@ -1993,8 +2006,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     len: arr.len(),
                     function: "array_get",
                 })
-        },
-        "index_of" => |args| {
+        }),
+        "index_of" => boxed_builtin(move |args| {
             let array = match args.get(0) {
                 Some(Value::Array(arr)) => arr,
                 _ => {
@@ -2024,16 +2037,16 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 })?;
 
             Ok(Value::I64(index as i64))
-        },
-        "count" => |args| {
+        }),
+        "count" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "count")?;
             match val {
                 Value::Array(arr) => Ok(Value::I64(arr.len() as i64)),
                 Value::String(s) => Ok(Value::I64(s.chars().count() as i64)),
                 _ => Ok(Value::I64(args.len() as i64)),
             }
-        },
-        "range" => |args| {
+        }),
+        "range" => boxed_builtin(move |args| {
             let start = arg_f64(&args, 0, "range")? as i64;
             let end = arg_f64(&args, 1, "range")? as i64;
             let step = args.get(2).and_then(|v| v.as_f64()).unwrap_or(1.0) as i64;
@@ -2057,8 +2070,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 }
             }
             Ok(Value::Array(result))
-        },
-        "slice" => |args| {
+        }),
+        "slice" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "slice")?;
             match val {
                 Value::Array(arr) => {
@@ -2106,38 +2119,48 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "slice",
                 }),
             }
-        },
-        "type" => |args| {
+        }),
+        "type" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "type")?;
             Ok(Value::String(val.type_name().to_string()))
-        },
-        "isnone" => |args| {
+        }),
+        "isnone" => boxed_builtin(move |args| {
             Ok(Value::Bool(
                 args.first().map(|v| v.is_none()).unwrap_or(true),
             ))
-        },
-        "isfloat" => |args| Ok(Value::Bool(matches!(args.first(), Some(Value::F64(_))))),
-        "isint" => |args| Ok(Value::Bool(matches!(args.first(), Some(Value::I64(_))))),
-        "isstr" => |args| Ok(Value::Bool(matches!(args.first(), Some(Value::String(_))))),
-        "isbool" => |args| Ok(Value::Bool(matches!(args.first(), Some(Value::Bool(_))))),
-        "isarray" => |args| Ok(Value::Bool(matches!(args.first(), Some(Value::Array(_))))),
-        "str" => |args| {
+        }),
+        "isfloat" => {
+            boxed_builtin(move |args| Ok(Value::Bool(matches!(args.first(), Some(Value::F64(_))))))
+        }
+        "isint" => {
+            boxed_builtin(move |args| Ok(Value::Bool(matches!(args.first(), Some(Value::I64(_))))))
+        }
+        "isstr" => boxed_builtin(move |args| {
+            Ok(Value::Bool(matches!(args.first(), Some(Value::String(_)))))
+        }),
+        "isbool" => {
+            boxed_builtin(move |args| Ok(Value::Bool(matches!(args.first(), Some(Value::Bool(_))))))
+        }
+        "isarray" => boxed_builtin(move |args| {
+            Ok(Value::Bool(matches!(args.first(), Some(Value::Array(_)))))
+        }),
+        "str" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "str")?;
             Ok(Value::String(val.clone().into_string()))
-        },
-        "bool" => |args| {
+        }),
+        "bool" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "bool")?;
             Ok(Value::Bool(val.is_truthy()))
-        },
-        "int" => |args| {
+        }),
+        "int" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "int")?;
             Ok(val.clone().to_i64())
-        },
-        "float" => |args| {
+        }),
+        "float" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "float")?;
             Ok(val.clone().to_f64())
-        },
-        "format" => |args| {
+        }),
+        "format" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "format")?;
             let precision = args.get(1).and_then(|v| v.as_f64()).map(|n| n as usize);
             if let (Some(n), Some(p)) = (val.as_f64(), precision) {
@@ -2145,8 +2168,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             } else {
                 Ok(Value::String(val.to_string()))
             }
-        },
-        "comma" => |args| {
+        }),
+        "comma" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "comma")?;
             let decimals = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
             let formatted = if decimals > 0 {
@@ -2169,13 +2192,13 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 Some(frac) => Ok(Value::String(format!("{}.{}", result, frac))),
                 None => Ok(Value::String(result)),
             }
-        },
-        "percent" => |args| {
+        }),
+        "percent" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "percent")?;
             let decimals = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
             Ok(Value::String(format!("{:.*}%", decimals, n * 100.0)))
-        },
-        "currency" => |args| {
+        }),
+        "currency" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "currency")?;
             let symbol = match args.get(1) {
                 Some(Value::String(s)) => s.clone(),
@@ -2201,8 +2224,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             } else {
                 Ok(Value::String(format!("{}{}", symbol, num_str)))
             }
-        },
-        "ordinal" => |args| {
+        }),
+        "ordinal" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "ordinal")? as i64;
             let suffix = match (n % 10, n % 100) {
                 (1, 11) => "th",
@@ -2214,8 +2237,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 _ => "th",
             };
             Ok(Value::String(format!("{}{}", n, suffix)))
-        },
-        "bytes" => |args| {
+        }),
+        "bytes" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "bytes")?;
             let decimals = args.get(1).and_then(|v| v.as_f64()).unwrap_or(2.0) as usize;
             let units = ["B", "KB", "MB", "GB", "TB", "PB"];
@@ -2230,38 +2253,38 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 "{}{:.*} {}",
                 sign, decimals, value, units[unit_idx]
             )))
-        },
-        "if" => |args| {
+        }),
+        "if" => boxed_builtin(move |args| {
             let cond = get_arg(&args, 0, "if")?.is_truthy();
             let yes = get_arg(&args, 1, "if")?.clone();
             let no = args.get(2).cloned().unwrap_or(Value::None);
             Ok(if cond { yes } else { no })
-        },
-        "ifnone" => |args| {
+        }),
+        "ifnone" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "ifnone")?;
             if val.is_none() {
                 Ok(args.get(1).cloned().unwrap_or(Value::None))
             } else {
                 Ok(val.clone())
             }
-        },
-        "default" => |args| {
+        }),
+        "default" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "default")?;
             if val.is_none() || matches!(val, Value::String(s) if s.is_empty()) {
                 Ok(args.get(1).cloned().unwrap_or(Value::None))
             } else {
                 Ok(val.clone())
             }
-        },
-        "coalesce" => |args| {
+        }),
+        "coalesce" => boxed_builtin(move |args| {
             for arg in &args {
                 if !arg.is_none() {
                     return Ok(arg.clone());
                 }
             }
             Ok(Value::None)
-        },
-        "choose" => |args| {
+        }),
+        "choose" => boxed_builtin(move |args| {
             let idx = arg_f64(&args, 0, "choose")? as usize;
             args.get(idx + 1)
                 .cloned()
@@ -2270,8 +2293,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     len: args.len().saturating_sub(1),
                     function: "choose",
                 })
-        },
-        "switch" => |args| {
+        }),
+        "switch" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "switch")?;
             let pairs = &args[1..];
             let mut i = 0;
@@ -2286,8 +2309,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             } else {
                 Ok(Value::None)
             }
-        },
-        "map" => |args| {
+        }),
+        "map" => boxed_builtin(move |args| {
             let val = arg_f64(&args, 0, "map")?;
             let in_min = arg_f64(&args, 1, "map")?;
             let in_max = arg_f64(&args, 2, "map")?;
@@ -2295,12 +2318,12 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             let out_max = arg_f64(&args, 4, "map")?;
             let t = (val - in_min) / (in_max - in_min);
             Ok(Value::F64(out_min + t * (out_max - out_min)))
-        },
-        "duration" => |args| {
+        }),
+        "duration" => boxed_builtin(move |args| {
             let secs = arg_time_seconds(args.as_slice(), 0, "duration")?;
             Ok(Value::String(format_duration(secs)))
-        },
-        "elapsed" => |args| {
+        }),
+        "elapsed" => boxed_builtin(move |args| {
             let timestamp = arg_time_seconds(args.as_slice(), 0, "elapsed")?;
 
             let now = SystemTime::now()
@@ -2321,8 +2344,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             };
 
             Ok(Value::String(result))
-        },
-        "fancy_time" => |args| {
+        }),
+        "fancy_time" => boxed_builtin(move |args| {
             let secs = arg_time_seconds(&args, 0, "fancy_time")?;
             let day_seconds = arg_f64(&args, 2, "fancy_time")?;
             let max_parts = arg_i64(&args, 3, "fancy_time")? as usize;
@@ -2333,8 +2356,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 max_parts,
                 use_day_seconds,
             )))
-        },
-        "datetime" => |args| {
+        }),
+        "datetime" => boxed_builtin(move |args| {
             let timestamp = arg_time_seconds(&args, 0, "datetime")?;
 
             let dt = DateTime::<Utc>::from_timestamp(
@@ -2350,27 +2373,27 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
             Ok(Value::String(
                 dt.format("%A, %d %B %Y, %H:%M:%S UTC").to_string(),
             ))
-        },
-        "debug" => |args| {
+        }),
+        "debug" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "debug")?;
             Ok(Value::String(format!("{:?}", val)))
-        },
-        "typeof" => |args| {
+        }),
+        "typeof" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "typeof")?;
             Ok(Value::String(val.type_name().to_string()))
-        },
-        "defined" => |args| {
+        }),
+        "defined" => boxed_builtin(move |args| {
             Ok(Value::Bool(
                 !args.first().map(|v| v.is_none()).unwrap_or(true),
             ))
-        },
-        "empty" => |args| match args.first() {
+        }),
+        "empty" => boxed_builtin(move |args| match args.first() {
             Some(Value::String(s)) => Ok(Value::Bool(s.is_empty())),
             Some(Value::Array(arr)) => Ok(Value::Bool(arr.is_empty())),
             Some(Value::None) => Ok(Value::Bool(true)),
             _ => Ok(Value::Bool(false)),
-        },
-        "is_some" => |args| {
+        }),
+        "is_some" => boxed_builtin(move |args| {
             //println!("In is_some(xyz): {:?}", args.first());
             match args.first() {
                 Some(v) => Ok(Value::Bool(value_exists(v))),
@@ -2379,8 +2402,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     function: "is_some",
                 }),
             }
-        },
-        "hsv_to_rgb" => |args| match args.first() {
+        }),
+        "hsv_to_rgb" => boxed_builtin(move |args| match args.first() {
             Some(Value::Array(hsv)) => {
                 if hsv.len() < 3 {
                     return Err(FunctionError::InvalidValue {
@@ -2423,8 +2446,8 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 index: 0,
                 function: "hsv_to_rgb",
             }),
-        },
-        "random" => |args| {
+        }),
+        "random" => boxed_builtin(move |args| {
             let mut rng = ThreadRng::default();
             match args.first() {
                 Some(Value::Array(array)) => {
@@ -2474,7 +2497,27 @@ pub fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 Some(Value::None) => Ok(Value::F64(rng.random())),
                 None => Ok(Value::F64(rng.random())),
             }
-        },
+        }),
+        "scaled_pt" => boxed_builtin(move |args| {
+            let pt = arg_f64(&args, 0, "scaled_pt")? as f32;
+            let element_ref = element_ctx
+                .self_element
+                .as_ref()
+                .or_else(|| element_ctx.as_element.as_ref());
+            let element_ref = element_ref.ok_or(FunctionError::Other { message: format!("[Parser] Tried running expr builtin function '{name}' in empty element somehow, I seriously don't know how the hell you did this."), function: "scaled_pt" })?;
+            let element = get_element_borrowed(menus, element_ref).ok_or(FunctionError::Other { message: format!("[Parser] Tried getting element '{element_ref:?}', element doesn't seem to exist, not to my knowledge."), function: "scaled_pt" })?;
+
+            let x_scale = vars.window_size.width / 1920.0;
+            let y_scale = vars.window_size.height / 1080.0;
+            let uniform_scale = x_scale.min(y_scale);
+
+            let scale = element
+                .resize_behaviour()
+                .uniform_scale(x_scale, y_scale, uniform_scale);
+
+            let scaled_pt = pt * scale;
+            Ok(Value::F64(scaled_pt as f64))
+        }),
         _ => return None,
     })
 }
@@ -2530,7 +2573,7 @@ pub enum AnnoyingError {
 use crate::renderer::ui_text_rendering::anchor_to;
 use crate::ui::actions::ElementContext;
 use crate::ui::ui_edit_manager::ColorComponent;
-use crate::ui::ui_editor::Menus;
+use crate::ui::ui_editor::{Menus, get_element_borrowed};
 use crate::ui::ui_touch_manager::{ElementRef, Touchable};
 use owo_colors::OwoColorize;
 
@@ -3543,11 +3586,16 @@ pub fn tokenize_expr(input: &str) -> Result<Vec<Token>, ParseError> {
 struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
+    source: String,
 }
 
 impl<'a> Parser<'a> {
-    fn new(tokens: &'a [Token]) -> Self {
-        Self { tokens, pos: 0 }
+    fn new(tokens: &'a [Token], original_source: String) -> Self {
+        Self {
+            tokens,
+            pos: 0,
+            source: original_source,
+        }
     }
 
     fn peek(&self) -> Token {
@@ -3815,6 +3863,18 @@ impl<'a> Parser<'a> {
                 if let TokenKind::Ident(mut name) = next.kind {
                     self.pos += 1;
 
+                    // Allow spaces in variable names: {Utilities Info_open}
+                    // Keep concatenating consecutive Idents with a space
+                    while matches!(self.peek().kind, TokenKind::Ident(_)) {
+                        if let TokenKind::Ident(part) = self.peek().kind.clone() {
+                            name.push(' ');
+                            name.push_str(&part);
+                            self.pos += 1;
+                        } else {
+                            break;
+                        }
+                    }
+
                     while self.peek().kind == TokenKind::Dot {
                         self.pos += 1;
                         match self.peek().kind {
@@ -3897,8 +3957,20 @@ impl<'a> Parser<'a> {
 
                         // Accept bare identifiers inside arrays as string literals
                         let item = if let TokenKind::Ident(name) = &item_tok.kind {
+                            let start = item_tok.span.start;
                             self.pos += 1;
-                            Expr::String(name.clone(), item_tok.span.clone())
+
+                            while matches!(self.peek().kind, TokenKind::Ident(_)) {
+                                self.pos += 1;
+                            }
+
+                            let end = self
+                                .tokens
+                                .get(self.pos - 1)
+                                .map(|t| t.span.end)
+                                .unwrap_or(item_tok.span.end);
+
+                            Expr::String(self.source[start..end].to_string(), Span { start, end })
                         } else {
                             self.parse_expr_bp(0)?
                         };
@@ -4025,7 +4097,7 @@ pub fn type_check_and_resolve(
             }
         }
         Expr::FunctionCall { name, args, span } => {
-            if get_builtin(name).is_none() {
+            if get_builtin(name, menus, element_ctx, vars).is_none() {
                 return Err(ParseError::UndefinedFunction {
                     name: name.clone(),
                     pos: span.start,
@@ -4131,10 +4203,12 @@ pub fn eval_ast(
             for arg in args {
                 arg_vals.push(eval_ast(arg, vars, settings, menus, element_ctx)?);
             }
-            let function = get_builtin(name).ok_or(ParseError::UndefinedFunction {
-                name: name.clone(),
-                pos: span.start,
-            })?;
+            let function = get_builtin(name, menus, element_ctx, vars).ok_or(
+                ParseError::UndefinedFunction {
+                    name: name.clone(),
+                    pos: span.start,
+                },
+            )?;
             function(arg_vals.clone()).map_err(|e| ParseError::ErrorInFunction {
                 name: name.clone(),
                 args: arg_vals,
@@ -4437,7 +4511,7 @@ pub fn eval_expr(
         }
     };
     //println!("TOKENS: {tokens:?}");
-    let mut parser = Parser::new(&tokens);
+    let mut parser = Parser::new(&tokens, expr.to_string());
     let ast = match parser.parse() {
         Ok(a) => a,
         Err(e) => {

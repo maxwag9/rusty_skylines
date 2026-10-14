@@ -1,5 +1,5 @@
 use crate::helpers::positions::ChunkCoord;
-use crate::world::buildings::zoning::ParkingSpot;
+use crate::world::buildings::zoning::{ParkingSpot, ZoningStorage};
 use serde::{Deserialize, Serialize};
 use std::slice::{Iter, IterMut};
 
@@ -81,5 +81,32 @@ impl ParkingStorage {
     {
         let id = id.into()?;
         self.parking_spots.get_mut(id as usize)?.as_mut()
+    }
+
+    pub fn unpark(&mut self, parking_spot_id: ParkingSpotId, zoning_storage: &mut ZoningStorage) {
+        let Some(parking_spot) = self.get_mut(parking_spot_id) else {
+            return;
+        };
+
+        parking_spot.occupied = None;
+
+        let Some(lot_info) = parking_spot.lot_info.as_ref() else {
+            return;
+        };
+
+        let Some(layout) = zoning_storage
+            .get_mut_lot(lot_info.lot_id)
+            .and_then(|lot| lot.layout.as_mut())
+        else {
+            return;
+        };
+
+        layout
+            .occupied_parking_spots
+            .retain(|&id| id != parking_spot_id);
+
+        if !layout.unoccupied_parking_spots.contains(&parking_spot_id) {
+            layout.unoccupied_parking_spots.push(parking_spot_id);
+        }
     }
 }

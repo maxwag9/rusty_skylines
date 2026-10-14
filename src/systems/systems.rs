@@ -331,11 +331,14 @@ pub fn run_ui(resources: &mut Resources, event_loop: &dyn ActiveEventLoop) {
 }
 
 pub fn run_interpolation(resources: &mut Resources) {
-    interpolate_cars(
-        &mut resources.world,
-        &resources.ui.variables,
-        &resources.settings,
-    );
+    if resources.simulation.running() {
+        interpolate_cars(
+            &mut resources.world,
+            &resources.ui.variables,
+            &resources.settings,
+        );
+    }
+
     if resources.settings.render_signfinding_gizmo {
         resources
             .render_core

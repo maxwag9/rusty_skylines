@@ -17,6 +17,7 @@ macro_rules! setting_options {
     };
 }
 
+#[macro_export]
 macro_rules! impl_cycle {
     ($ty:ty : $($variant:expr),+ $(,)?) => {
         impl Cycle for $ty {
