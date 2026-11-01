@@ -78,12 +78,12 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: Ping Pong in Rusty Skylines UI!
+        text: "{lang.pingpong.title}"
       - !Advanced
         name: to_main_menu_button
         ap_name: button
         ap_vars:
-          - "str:<- To Minigames"
+          - "str:{lang.pingpong.to_menu}"
           - "25"
           - "str:on:r close_all_menus; open_menu(str:MiniGames);"
         x: 100
@@ -102,7 +102,7 @@ layers:
           - 1.0
           - 0.1
           - 1.0
-        text: Make ball faster!
+        text: "{lang.pingpong.ball_faster}"
       - !Text
         id: slower_text
         actions:
@@ -116,7 +116,7 @@ layers:
           - 0.1
           - 0.1
           - 1.0
-        text: Make ball slower...
+        text: "{lang.pingpong.ball_slower}"
       - !Text
         id: faster_paddle_text
         actions:
@@ -130,7 +130,7 @@ layers:
           - 1.0
           - 0.1
           - 1.0
-        text: Make paddle faster!
+        text: "{lang.pingpong.paddles_faster}"
       - !Text
         id: slower_paddle_text
         actions:
@@ -144,7 +144,7 @@ layers:
           - 0.1
           - 0.1
           - 1.0
-        text: Make paddle slower...
+        text: "{lang.pingpong.paddles_slower}"
       - !Text
         id: home_score_text
         x: 100
@@ -156,7 +156,7 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: 'Home Score: {ball.home_score}'
+        text: "{lang.pingpong.home_score}"
         misc:
           active: true
           touchable: false
@@ -172,7 +172,7 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: 'Visitor Score: {ball.visitor_score}'
+        text: "{lang.pingpong.visitor_score}"
         misc:
           active: true
           touchable: false

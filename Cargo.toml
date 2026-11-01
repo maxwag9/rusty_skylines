@@ -1,32 +1,32 @@
 [package]
 name = "Rusty_Skylines"
-version = "0.9.2"
+version = "0.9.3"
 edition = "2024"
 
 [dependencies]
-winit = { version = "0.31.0-beta.3", features = ["serde"] }
+winit = { version = "0.31.0-beta.4", features = ["serde"] }
 wgpu = { version = "30.0.1", features = ["strict_asserts"] }
 
 pollster = "1.0.1"
 bytemuck = { version = "1.25.2", features = ["derive"] }
-glam = { version = "0.34.0", features = ["serde"] }
+glam = { version = "0.34.2", features = ["serde"] }
 toml = "1.1.8"
 serde = { version = "1.0.229", features = ["derive"] }
 anyhow = "1.0.104"
-notify = "9.0.0-rc.5"
+notify = "9.0.0-rc.7"
 num_cpus = "1.17.0"
 crossbeam-channel = "0.5.17"
 fastnoise-lite = "1.1.1"
 rand = "0.10.3"
-zstd = "0.14.1"
+zstd = "0.14.3"
 postcard = { version = "1.1.3", features = ["use-std"] }
 serde_yaml = { version = "0.9.34" }
-wgpu_render_manager = "30.0.7"                          # HERE!
+wgpu_render_manager = "30.0.9"                          # HERE!
 earcutr = "0.5.0"
 clipper2-rust = "1.2.0"
 rayon = "1.12.0"
 cpal = "0.18.2"
-arboard = { version = "3.6.1", features = ["wayland-data-control"] }
+arboard = { version = "3.7.0", features = ["wayland-data-control"] }
 sanitize-filename = "0.8.0-beta"
 image = "0.25.10"
 dirs = "7.0.0"
@@ -41,25 +41,25 @@ tracing = { version = "0.1.44", features = ["log"] }
 tracing-subscriber = "0.3.23"
 libc = "1.0.0-alpha.5"
 revision = "0.30.0"
-sysinfo = "0.39.6"
+sysinfo = "0.40.1"
 gfxinfo = { version = "0.1.2", features = ["amd", "nvidia", "intel"] }
 #glyphon = "0.12.0" ඞ
 #wgpu_text = "30.0.1" ඞvඞ
 owo-colors = "4.4.0"
 unicode-segmentation = "1.13.3"
 #fontdb = "0.24.0" ඞඞඞ
-smallvec = "2.0.0-beta.2"
+smallvec = "2.0.0-beta.4"
 sluggrs_skylines = "0.3.4" # Better than you
 xz2 = "0.1.7"
 lz4_flex = "0.14.0"
-unarc-rs = "0.7.0"
+unarc-rs = "0.8.1"
 thiserror = "2.0.21"
-jxl-image-rs-integration = "0.7.4"
-resvg = "0.48.1"
+jxl-image-rs-integration = "0.8.0"
+resvg = "0.49.0"
 tiny-skia = "0.12.0"
-usvg = "0.48.1"
+usvg = "0.49.0"
 phf = { version = "0.14", features = ["macros"] }
-emojis = "0.9.0"
+emojis = "0.9.1"
 whoami = "2.1.3"
 
 [profile.fastdev]

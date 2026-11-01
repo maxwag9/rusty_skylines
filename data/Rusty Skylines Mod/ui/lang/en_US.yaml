@@ -1,0 +1,138 @@
+en_US: English
+main_menu:
+  play: "Play"
+  settings: "Settings"
+  minigames: "Mini Games"
+  exit: "Exit game"
+
+pause_menu:
+  return: "Return to City"
+  settings: "Settings"
+  save_to_menu: "Exit World and Save"
+  exit: "Exit Game and Save"
+
+saves_menu:
+  title: "Saves"
+  to_main_menu: "<- To Main Menu"
+  delete_save: "Delete Save (forever!)"
+  enter_empty_save: "-> Enter temporary, empty save <-"
+  reload_saves: "Reload Saves"
+  create_save: "Create Save"
+  play_save: "Play Save"
+
+create_save:
+  world_name: "World Name"
+  create_finally: "postvar:repvar:Create Save: '{new_save_name}'"
+  slider:
+    difficulty:
+      name: "Difficulty"
+      options:
+        easy: "Easy"
+        hard: "Hard"
+  enter_easy: ">Enter chill<"
+  enter_hard: ">Enter hell<"
+  easy_description: "lorem ipsum solemifasolemi fsol"
+  hard_description: "Lorem ipsum il samet mohammmed"
+  easy_title: "EASY"
+  hard_title: "HARD"
+
+minigames:
+  title: "MINI GAMES"
+  to_main_menu: "<- To Main Menu"
+  description: "Welcome to the Rusty Skylines Minigames!
+                 
+                 
+                 All these games were made using purely the UI system.
+                 
+                 Enjoy!"
+  ping_pong: "Ping Pong!"
+
+pingpong:
+  title: "Ping Pong in Rusty Skylines UI!"
+  to_menu: "<- To Minigames"
+  ball_faster: "Make ball faster!"
+  ball_slower: "Make ball slower..."
+  paddles_faster: "Make paddle faster!"
+  paddles_slower: "Make paddle slower..."
+  home_score: "postvar:repvar:Home Score: {ball.home_score}"
+  visitor_score: "postvar:repvar:Visitor Score: {ball.visitor_score}"
+
+
+settings:
+  return_to_main_menu: "<- To Main Menu"
+  return_to_pause_menu: "<- To Pause Menu"
+
+  dropdown:
+    present_mode:
+      name: "Present Mode"
+      options:
+        Mailbox: "Mailbox (Low Latency V-Sync, BEST)"
+        Immediate: "Immediate (No V-Sync)"
+        Fifo: "Fifo (V-Sync)"
+    tonemapping:
+      name: "Tonemapping"
+      options:
+        SunnyDay: "Sunny Day"
+        GoldenHour: "Golden Hour"
+        Overcast: "Overcast"
+        Night: "Night"
+        Cinematic: "Cinematic"
+        Mexico: "Mexico"
+        Off: "Off"
+
+    color_grade:
+      name: "Color Grade"
+      options:
+        Off: "Off"
+        Mexico: "Mexico"
+        Cold: "Cold"
+        Vintage: "Vintage"
+        HighContrast: "High Contrast"
+
+    shadow_type:
+      name: "Shadow Type"
+      options:
+        OFF: "Off"
+        CSM: "Cascaded Shadow Maps"
+        RT: "Ray Tracing"
+
+    fullscreen:
+      name: "Fullscreen Mode"
+      options:
+        Windowed: "Windowed"
+        Fullscreen: "Fullscreen"
+        Borderless: "Borderless"
+
+    cloud_quality:
+      name: "Cloud Quality"
+      options:
+        Performance: "Performance"
+        High: "High"
+        Ultra: "Ultra"
+
+  slider:
+    render_distance: "Render Distance"
+    generation_distance: "Generation Distance"
+    msaa: "MSAA"
+    shadow_quality: "Shadow Quality"
+    fps_limit: "FPS Limit"
+    exposure: "Exposure"
+    brightness: "Brightness"
+    contrast: "Contrast"
+    saturation: "Saturation"
+    vignette_strength: "Vignette Strength"
+    vignette_radius: "Vignette Radius"
+    vignette_softness: "Vignette Softness"
+
+    shadow_quality_options:
+      potato: "Potato"
+      low: "Low"
+      medium: "Medium"
+      high: "High"
+      insane: "Insane"
+
+languages:
+  title: "Languages"
+  language: "Language"
+
+audio_jungle: "Audio Jungle"

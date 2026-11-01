@@ -23,37 +23,39 @@ elements:
       - on:hover_enter, call(rust:play_sound, str:ButtonHover)
       - on:press, call(rust:play_sound, str:ButtonPress)
       #- on:release button:left, print(After:, {split("{ap}", ".").0}_open)Haha you got the rabbit hide and I got the rabbit meat
-      - call(show_interaction, [[0.2, 0.2, 0.2, 1.0], false]))
+      - call(show_interaction, [[0.0, 0.761, 0.820, 0.7], false]))
     x: 0
     y: 0
     w: 240
     h: 60
     color:
-      - 0.2
-      - 0.2
-      - 0.2
+      - 0.0
+      - 0.761
+      - 0.820
       - 1.0
     border_color:
+      - 0.2
+      - 0.4
       - 1.0
-      - 1.0
-      - 1.0
-      - 0.5
+      - 0.8
     roundness: 0.1
-    border_thickness: 4
+    border_thickness: 3
 
   - !Text
     id: Option Text
     x: 0
     y: 0
     pt: 16.0
-    border_width: 5.0
     color:
       - 1.0
       - 1.0
       - 1.0
       - 1.0
-    text: "{{ap}}"
+    text: "{{ap.3}}"
     anchor: Center
+    decorations:
+      - color: [ 0.149, 0.049, 0.047, 1.0 ]
+        offset: [ 1, 1 ]
     misc:
       active: true
       touchable: false

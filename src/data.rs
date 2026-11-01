@@ -1,3 +1,4 @@
+use crate::renderer::clouds::clouds::CloudQuality;
 use crate::renderer::pipelines::{ColorGradeState, ToneMappingState};
 use crate::ui::parser::Value;
 use serde::{Deserialize, Serialize};
@@ -180,6 +181,7 @@ pub enum SettingValue {
     Vec4([f32; 4]),
     /// Serialized enum/struct as TOML string
     Enum(String),
+    String(String),
 }
 impl SettingValue {
     pub fn to_string(&self) -> String {
@@ -193,6 +195,7 @@ impl SettingValue {
             SettingValue::Enum(f) => f.to_string(),
             SettingValue::U16(u) => u.to_string(),
             SettingValue::U32(u) => u.to_string(),
+            SettingValue::String(v) => v.clone(),
         }
     }
     pub fn to_value(&self) -> Value {
@@ -208,6 +211,7 @@ impl SettingValue {
                 Value::String(format!("[{}, {}, {}, {}]", v[0], v[1], v[2], v[3]))
             }
             SettingValue::Enum(v) => Value::String(v.clone()),
+            SettingValue::String(v) => Value::String(v.clone()),
         }
     }
 
@@ -248,7 +252,7 @@ impl SettingValue {
                 ((v[2] as f64) * f) as f32,
                 ((v[3] as f64) * f) as f32,
             ])),
-            SettingValue::Enum(_) => None,
+            SettingValue::Enum(_) | SettingValue::String(_) => None,
         }
     }
 
@@ -295,7 +299,7 @@ impl SettingValue {
                 (*v.get(2).unwrap() as f64).max(lo).min(hi) as f32,
                 (*v.get(3).unwrap() as f64).max(lo).min(hi) as f32,
             ])),
-            SettingValue::Enum(_) => None,
+            SettingValue::Enum(_) | SettingValue::String(_) => None,
         }
     }
 
@@ -330,7 +334,7 @@ impl SettingValue {
                 ((*v.get(2).unwrap() as f64) + a) as f32,
                 ((*v.get(3).unwrap() as f64) + a) as f32,
             ])),
-            SettingValue::Enum(_) => None,
+            SettingValue::Enum(_) | SettingValue::String(_) => None,
         }
     }
 
@@ -479,6 +483,26 @@ impl SettingConvert for [f32; 4] {
     }
 }
 
+impl SettingConvert for String {
+    fn to_setting_value(&self) -> SettingValue {
+        SettingValue::String(self.clone())
+    }
+
+    fn from_setting_value(value: SettingValue) -> Option<Self> {
+        match value {
+            SettingValue::String(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    fn from_value(value: &Value) -> Option<Self> {
+        match value {
+            Value::String(v) => Some(v.clone()),
+            _ => None,
+        }
+    }
+}
+
 // Enums and complex types
 macro_rules! impl_setting_convert_enum {
     ($($ty:ty),* $(,)?) => {
@@ -513,7 +537,8 @@ impl_setting_convert_enum!(
     LodCenterType,
     ToneMappingState,
     ColorGradeState,
-    FullScreenMode
+    FullScreenMode,
+    CloudQuality
 );
 
 // ============ Settings Macros ============
@@ -726,6 +751,15 @@ macro_rules! define_settings {
 
                 changed
             }
+            pub fn get_all_keys(&mut self) -> Vec<SettingKey> {
+                let mut changed = Vec::new();
+
+                for key in SettingKey::all() {
+                    changed.push(*key);
+                }
+
+                changed
+            }
         }
     };
 }
@@ -735,6 +769,11 @@ define_settings! {
     TargetTps => target_tps: f32 = 60.0; Val,
     FullScreenMode => fullscreen_mode: FullScreenMode = FullScreenMode::Borderless; Cycle,
     PresentMode => present_mode: PresentModeSetting = PresentModeSetting::Mailbox; Cycle,
+    RenderDistance => render_distance: u32 = 30; Val,
+    GenerationDistance => generation_distance: u32 = 30; Val,
+    RenderClouds => render_clouds: bool = true; Bool,
+    RenderExposure => render_exposure: bool = false; Bool,
+    CloudQuality => cloud_quality: CloudQuality = CloudQuality::High; Cycle,
     EditorMode => editor_mode: bool = false; Bool,
     OverrideMode => override_mode: bool = false; Bool,
     ShowGui => show_gui: bool = true; Bool,
@@ -761,7 +800,7 @@ define_settings! {
     LodCenter => lod_center: LodCenterType = LodCenterType::default(); Cycle,
     ReversedDepthZ => reversed_depth_z: bool = true; Bool,
     ShowFog => show_fog: bool = true; Bool,
-    DriveCar => drive_car: bool = false; Bool,
+    //DriveCar => drive_car: bool = false; Bool, // TODO: Add proper car driving
     SimpleCarFollowing => simple_car_following: bool = false; Bool,
     RenderRtGizmo => render_rt_gizmo: bool = false; Bool,
     Noclip => noclip: bool = false; Bool,
@@ -780,6 +819,8 @@ define_settings! {
     VignetteSoftness => vignette_softness: f64 = 0.70; Val,
     ForestClusterStrength => forest_cluster_strength: f32 = 0.8; Val,
     DenseForests => dense_forests: bool = false; Bool,
+
+    Locale => locale: String = "en_US".to_string(); Val,
 }
 
 impl Settings {

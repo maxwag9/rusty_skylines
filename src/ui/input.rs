@@ -244,6 +244,7 @@ pub struct Input {
     pub now: f64,
     pub clipboard: Clipboard,
     pub gilrs: Gilrs,
+    keybinds_blocked: bool,
 }
 
 impl Input {
@@ -280,6 +281,7 @@ impl Input {
             now: 0.0,
             clipboard,
             gilrs: Gilrs::new().expect("Failed to initialize gilrs"),
+            keybinds_blocked: false,
         }
     }
 
@@ -456,6 +458,51 @@ impl Input {
         }
     }
 
+    pub fn set_keybinds_blocked(&mut self, blocked: bool) {
+        if self.keybinds_blocked == blocked {
+            return;
+        }
+
+        self.keybinds_blocked = blocked;
+        self.mark_changed();
+
+        let generation = self.generation;
+
+        let actions: Vec<String> = self.action_cache.keys().cloned().collect();
+
+        for action in actions {
+            let down = self.action_down_raw(&action);
+
+            if let Some(entry) = self.action_cache.get_mut(&action) {
+                entry.generation = generation;
+                entry.down = down;
+                entry.pressed_once = false;
+                entry.released = false;
+            }
+        }
+
+        let combos: Vec<String> = self.combo_cache.keys().cloned().collect();
+
+        for combo in combos {
+            let down = self.combo_down(&combo);
+
+            if let Some(entry) = self.combo_cache.get_mut(&combo) {
+                entry.generation = generation;
+                entry.down = down;
+                entry.pressed_once = false;
+                entry.released = false;
+            }
+        }
+    }
+
+    pub fn block_keybinds(&mut self) {
+        self.set_keybinds_blocked(true);
+    }
+
+    pub fn unblock_keybinds(&mut self) {
+        self.set_keybinds_blocked(false);
+    }
+
     pub fn set_physical(&mut self, key: PhysicalKey, down: bool) {
         let old = self.physical.get(&key).copied().unwrap_or(false);
 
@@ -587,10 +634,15 @@ impl Input {
         };
 
         for combo in combos {
+            if self.keybinds_blocked && !combo.allow_while_blocked {
+                continue;
+            }
+
             if combo.matches(self) {
                 return true;
             }
         }
+
         false
     }
 
@@ -682,6 +734,10 @@ impl Input {
     /// without needing it defined in keybinds
     pub fn combo_down(&self, combo_str: &str) -> bool {
         if let Some(combo) = parse_combo(combo_str) {
+            if self.keybinds_blocked && !combo.allow_while_blocked {
+                return false;
+            }
+
             combo.matches(self)
         } else {
             println!("Parsing failed, Invalid combo: {}", combo_str);
@@ -730,6 +786,7 @@ struct ParsedKeyCombo {
     require_mouse_back: bool,
     require_mouse_forward: bool,
     strict: bool,
+    allow_while_blocked: bool,
     key: BindingKey,
 }
 
@@ -824,12 +881,21 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
         return None;
     }
 
-    let strict = !trimmed.ends_with('!');
-    let combo = if strict {
-        trimmed
-    } else {
-        trimmed[..trimmed.len() - 1].trim_end()
-    };
+    let mut combo = trimmed;
+    let mut strict = true;
+    let mut allow_while_blocked = false;
+
+    loop {
+        if let Some(stripped) = combo.strip_suffix('*') {
+            allow_while_blocked = true;
+            combo = stripped.trim_end();
+        } else if let Some(stripped) = combo.strip_suffix('!') {
+            strict = false;
+            combo = stripped.trim_end();
+        } else {
+            break;
+        }
+    }
 
     if combo.is_empty() {
         return None;
@@ -912,6 +978,7 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
         require_mouse_forward,
         strict,
         key,
+        allow_while_blocked,
     })
 }
 

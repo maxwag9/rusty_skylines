@@ -1,5 +1,6 @@
 #include "includes/shadow.wgsl"
 #include "includes/uniforms.wgsl"
+#include "includes/simple_lighting.wgsl"
 
 @group(0) @binding(0) var texture_sampler: sampler;
 @group(0) @binding(2) var tex1: texture_2d<f32>;
@@ -114,7 +115,6 @@ fn vs_main(
 fn fs_main(in: VertexOutput) -> FragmentOut {
     var out: FragmentOut;
 
-    // Sample texture based on texture_id, multiply by instance color
     var tex_color: vec4<f32>;
 
     switch (in.texture_id) {
@@ -131,15 +131,12 @@ fn fs_main(in: VertexOutput) -> FragmentOut {
             tex_color = textureSample(tex4, texture_sampler, in.uv);
         }
         default: {
-            // texture_id 0: flat color, no texture
             tex_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
         }
     }
 
-    // Combine texture with vertex and instance colors
     let base_color = tex_color * in.vertex_color * in.instance_color;
 
-    // Alpha test for leaf cards and other transparent textures
     if (base_color.a < 0.25) {
         discard;
     }
@@ -150,25 +147,21 @@ fn fs_main(in: VertexOutput) -> FragmentOut {
         1.0 + sin(2.3 + seed) * 0.1,
         1.0 + sin(3.7 + seed) * 0.05
     );
+
     let varied_color = base_color.rgb * color_variation;
-
     let N = normalize(in.world_normal);
-    let L = normalize(uniforms.sun_direction);
-    let n_dot_l = max(dot(N, L), 0.0);
-    let shadow = fetch_shadow(in.render_pos, N, L);
-    let horizon_fade = smoothstep(0.0, 0.1, saturate(L.y));
-    let ambient = 0.2*horizon_fade;
-    let diffuse = n_dot_l * 0.5;
-    let light_factor = diffuse * shadow * horizon_fade + ambient;
-    let lit_color = varied_color * light_factor;
+
+    let lighting = calculate_world_lighting(
+        in.render_pos,
+        N,
+        0.0,
+        uniforms.solar_eclipse_coverage
+    );
+
+    let lit_color = varied_color * lighting;
+
     out.color = vec4<f32>(lit_color, base_color.a);
-
-    out.normal = vec4<f32>(in.world_normal * 0.5 + 0.5, 1.0);
-
-//    let curr_ndc = in.curr_pos_cs.xy / in.curr_pos_cs.w;
-//    let prev_ndc = in.prev_pos_cs.xy / in.prev_pos_cs.w;
-//    let velocity = (curr_ndc - prev_ndc) * 0.5;
-//    out.motion = velocity;
+    out.normal = vec4<f32>(N * 0.5 + 0.5, 1.0);
     out.motion = vec2<f32>(0.0, 0.0);
 
     return out;

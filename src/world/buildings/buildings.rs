@@ -19,12 +19,13 @@ use crate::world::buildings::utilities::utilities_network::{
     EndpointType, UtilityEndpoint, UtilityEndpointId, UtilityNetwork,
 };
 use crate::world::buildings::zoning::{Lot, LotEntrance, LotId, Zoning, ZoningType};
-use crate::world::camera::Camera;
+use crate::world::camera::camera::Camera;
 use crate::world::cars::car_structs::{ChunkDistance, SimTime};
 use crate::world::cars::partitions::{PartitionId, PartitionManager};
 use crate::world::roads::road_mesh_manager::RoadMeshManager;
 use crate::world::roads::road_structs::SegmentId;
 use crate::world::roads::road_subsystem::Roads;
+use crate::world::roads::roads::RoadStorage;
 use crate::world::sound::sound::Sounds;
 use crate::world::statisticals::demands::{JobOccupancy, ZoningDemand};
 use crate::world::statisticals::demography::{Groups, LifeStage, Person, WORKHORSE_AGE_RANGE};
@@ -531,7 +532,7 @@ pub enum BuildingDesignSource {
 impl Default for BuildingDesignSource {
     fn default() -> Self {
         BuildingDesignSource::BuildingParams {
-            levels: RevisionedSmallVec(SmallVec::from_vec(vec![BuildingParams::default(); 6])),
+            levels: RevisionedSmallVec(SmallVec::from(vec![BuildingParams::default(); 6])),
         }
     }
 }
@@ -590,7 +591,7 @@ impl Buildings {
         pos: WorldPos,
         zoning: &mut Zoning,
         variables: &mut Variables,
-        roads: &Roads,
+        roads: &mut Roads,
         road_mesh_manager: &RoadMeshManager,
     ) {
         let snap = gather_closest_lot_point(roads, road_mesh_manager, pos)
@@ -646,7 +647,9 @@ impl Buildings {
             building_id: None,
             land_value: 0.0,
         };
-        let lot_id = zoning.zoning_storage.spawn_lot(lot);
+        let lot_id = zoning
+            .zoning_storage
+            .spawn_lot(lot, &mut roads.road_manager.roads);
         let building = Building {
             id: 0,
             pos: center,
@@ -687,9 +690,10 @@ impl Buildings {
         terrain_editor: &mut TerrainEditor,
         props: &mut Props,
         variables: &mut Variables,
+        roads: &mut RoadStorage,
     ) {
         if let Some(pb) = cursor.preview_building.take() {
-            zoning.zoning_storage.despawn_lot(pb.lot_id);
+            zoning.zoning_storage.despawn_lot(pb.lot_id, roads);
             BuildingStorage::despawn(self, zoning, terrain_editor, props, pb.building_id);
             cursor.mode = CursorMode::None;
             variables.set_string("cursor_mode", "None");
@@ -833,6 +837,7 @@ impl Buildings {
                 &mut terrain.terrain_editor,
                 props,
                 variables,
+                &mut roads.road_manager.roads,
             );
             return;
         }
@@ -844,6 +849,7 @@ impl Buildings {
                 &mut terrain.terrain_editor,
                 props,
                 variables,
+                &mut roads.road_manager.roads,
             );
             return;
         }
@@ -1641,7 +1647,7 @@ impl BuildingsCatalog {
         catalog.load(mod_manager);
         catalog
     }
-    fn load(&mut self, mod_manager: &ModManager) {
+    pub fn load(&mut self, mod_manager: &ModManager) {
         let mut ploppables = HashMap::new();
 
         let paths = mod_manager.building_paths(); // I TRUST you will give me only Files and they are Yaml.!!!!!

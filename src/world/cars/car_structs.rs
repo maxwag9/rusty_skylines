@@ -972,18 +972,19 @@ pub struct Car {
 pub enum CarMode {
     Driving(Destination),
     Parked(ParkingSpotId),
+    None,
 }
 impl CarMode {
     pub fn destination(&self) -> Option<&Destination> {
         match self {
             CarMode::Driving(destination) => Some(destination),
-            CarMode::Parked(..) => None,
+            _ => None,
         }
     }
     pub fn parking_spot(&self) -> Option<ParkingSpotId> {
         match self {
-            CarMode::Driving(..) => None,
             CarMode::Parked(id) => Some(*id),
+            _ => None,
         }
     }
 }

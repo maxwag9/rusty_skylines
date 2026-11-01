@@ -80,14 +80,14 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: Saves
+        text: "{lang.saves_menu.title}"
         misc:
           touchable: false
       - !Advanced
         name: back_to_main_menu_text
         ap_name: button
         ap_vars:
-          - "str:<- To Main Menu"
+          - "str:{lang.saves_menu.to_main_menu}"
           - "40"
           - "str:on:r call(open_main_menus)"
         x: 100
@@ -97,7 +97,7 @@ layers:
         name: delete_save_text
         ap_name: button
         ap_vars:
-          - "str:Delete Save (forever!)"
+          - "str:{lang.saves_menu.delete_save}"
           - "40"
           - "str:on:r call(open_main_menus)"
         x: 340
@@ -107,7 +107,7 @@ layers:
         name: empty_save_text
         ap_name: button
         ap_vars:
-          - "str:-> Enter temporary, empty save <-"
+          - "str:{lang.saves_menu.enter_empty_save}"
           - "40"
           - "str:on:r call(open_main_menus)"
         x: 340
@@ -118,7 +118,7 @@ layers:
         name: reload_saves_text
         ap_name: button
         ap_vars:
-          - "str:Reload Saves"
+          - "str:{lang.saves_menu.reload_saves}"
           - "40"
           - "str:on:press on:activated call(var:reload_saves)"
         x: 340
@@ -128,7 +128,7 @@ layers:
         name: create_save_text
         ap_name: button
         ap_vars:
-          - "str:Create Save"
+          - "str:{lang.saves_menu.create_save}"
           - "40"
           - str:on:press set(str:prev_menus, active_menus); close_all_menus(); close_all_layers("CreateSave"); open_layer("CreateSave", "Difficulty")
         x: 340
@@ -138,7 +138,7 @@ layers:
         name: play_save_text
         ap_name: button
         ap_vars:
-          - "str:Play Save"
+          - "str:{lang.saves_menu.play_save}"
           - "40"
           - "str:on:r set(str:show_world, true); set(str:editor_mode, false); set(str:override_mode, false); load_save(selected_save.0, false); call(open_play_menus);"
         x: 340

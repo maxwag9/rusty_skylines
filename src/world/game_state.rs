@@ -3,6 +3,7 @@ use crate::helpers::modpack::ModManager;
 use crate::helpers::paths::saves_dir;
 use crate::helpers::positions::{ChunkSize, WorldPos, chunk_size, set_chunk_size};
 use crate::renderer::props::{Props, SavedProps};
+use crate::resources::Time;
 use crate::ui::parser::Value;
 use crate::ui::variables::Variables;
 use crate::world::buildings::buildings::BuildingStorage;
@@ -552,9 +553,10 @@ pub struct SaveState {
     pub city_state: CityState,
 }
 impl SaveState {
-    pub fn new() -> Self {
+    pub fn new(time: &Time) -> Self {
         Self {
             chunk_size: chunk_size(),
+            total_game_time: time.get_spring(),
             ..Default::default()
         }
     }

@@ -33,6 +33,7 @@ impl Value {
         menus: &Menus,
         element_ctx: &ElementContext,
         s: &str,
+        no_ap: bool,
     ) -> Self {
         //println!("Before Replace: '{}'", s);
         //let s = Self::replace_inline_variables(variables, settings, s);
@@ -57,8 +58,13 @@ impl Value {
             }
             _ => (s, None),
         };
-        let value = Self::from_str_unrounded(settings, variables, menus, element_ctx, s);
-
+        let value = Self::from_str_unrounded(settings, variables, menus, element_ctx, s, no_ap);
+        if let Some(s) = value.as_string() {
+            if s.starts_with("postvar:") {
+                let s = s.trim_start_matches("postvar:");
+                return Self::from_str(settings, variables, menus, element_ctx, s, no_ap);
+            }
+        }
         match precision {
             Some(decimals) => Self::apply_precision(value, decimals),
             None => value,
@@ -70,6 +76,7 @@ impl Value {
         menus: &Menus,
         element_ctx: &ElementContext,
         s: &str,
+        no_ap: bool,
     ) -> Value {
         // Auto-detect array (bracket notation)
         if s.starts_with('[') && s.ends_with(']') {
@@ -81,7 +88,7 @@ impl Value {
 
         // Auto-detect string
         if let Some(stripped) = s.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-            return Value::String(stripped.to_string());
+            return Value::String(Self::unescape_escaped_chars(stripped));
         }
         // Explicit type prefix
         if let Some((ty, value)) = s.split_once(':') {
@@ -111,7 +118,7 @@ impl Value {
                         };
                     }
                     "string" | "str" => {
-                        return Value::String(value.to_string());
+                        return Value::String(value.to_string()); //return Value::String(Self::unescape_escaped_chars(value));
                     }
                     // "strexpr" => {
                     //     //println!("strexpr was given: {}", value);
@@ -149,37 +156,24 @@ impl Value {
                             menus,
                             element_ctx,
                             expr_value.as_str(),
+                            false,
                         );
-                        println!(
-                            "exprvar gets: '{value}' and returns: '{expr_value}', then returns '{:?}'",
-                            post_value
-                        );
+                        // println!(
+                        //     "exprvar gets: '{value}' and returns: '{expr_value}', then returns '{:?}'",
+                        //     post_value
+                        // );
                         return post_value;
                     }
                     "setting" => {
-                        match value.split_once(".") {
-                            None => {
-                                let key = SettingKey::from_str(value);
-                                if let Some(key) = key {
-                                    let value = settings.read_setting(key).to_value();
-                                    //println!("{:?} {:?}", key, value);
-                                    return value;
-                                }
-                            }
-                            Some((l, r)) => {
-                                let key = SettingKey::from_str(l);
-                                if let Some(key) = key {
-                                    match r {
-                                        "options" => {
-                                            return key.options();
-                                        }
-                                        _ => {}
-                                    }
-                                    let value = settings.read_setting(key).to_value();
-                                    //println!("{:?} {:?}", key, value);
-                                    return value;
-                                }
-                            }
+                        if let Some(value) = get_setting_opt(settings, value) {
+                            return value;
+                        }
+                    }
+                    "ap" => {
+                        if let Some(value) =
+                            get_dynamic_ap_opt(variables, settings, menus, element_ctx, value)
+                        {
+                            return value;
                         }
                     }
                     "var" | "variable" => {
@@ -190,9 +184,22 @@ impl Value {
                             &value.to_string(),
                         ) {
                             Some(value) => value,
-                            None => Value::String(format!("'{}' variable doesn't exist yet!", s)),
+                            None => Value::String(format!(
+                                "The variable >>{}<< doesn't exist yet!",
+                                value.to_string()
+                            )),
                         };
                     }
+                    "repvar" => {
+                        return Value::String(Self::replace_inline_variables(
+                            variables,
+                            settings,
+                            menus,
+                            element_ctx,
+                            value,
+                        ));
+                    }
+
                     "array" | "list" | "vec" | "slice" => {
                         if let Some(arr) =
                             Self::parse_array(settings, variables, menus, element_ctx, value)
@@ -202,6 +209,12 @@ impl Value {
                     }
                     "none" => {
                         return Value::None;
+                    }
+                    "postvar" => {
+                        // let val = Self::from_str(settings, variables, menus, element_ctx, value);
+                        // if let Some(str) = val.as_str() {
+                        //     return Self::from_str(settings, variables, menus, element_ctx, str);
+                        // }
                     }
                     _ => {
                         return Value::String(format!(
@@ -213,52 +226,11 @@ impl Value {
             }
         }
 
-        // Might be setting key?
-        match s.split_once(".") {
-            None => {
-                let key = SettingKey::from_str(s);
-                if let Some(key) = key {
-                    let value = settings.read_setting(key).to_value();
-                    //println!("{:?} {:?}", key, value);
-                    return value;
-                }
-            }
-            Some((l, r)) => {
-                let key = SettingKey::from_str(l);
-                if let Some(key) = key {
-                    match r {
-                        "options" => {
-                            return key.options();
-                        }
-                        _ => {
-                            match r.split_once(".") {
-                                None => {
-                                    return key.options();
-                                }
-                                Some((l, r)) => {
-                                    if let Ok(idx) = r.parse::<usize>() {
-                                        if let Some(array) = key.options().as_array() {
-                                            if let Some(val) = array.get(idx) {
-                                                //println!("HOLY JESUS0, {:?}, {}", array, idx);
-                                                return val.to_owned();
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    let value = settings.read_setting(key).to_value();
-                    //println!("{:?} {:?}", key, value);
-                    return value;
-                }
-            }
-        }
+        // Might be setting key? OBEJECTION! IRRELEVANT! RELEVANBCE? RELEVANCE? I hate writing on a keayboard, an I am a programmer... See? That's what I mean! I kan't even write key correctly! WTF? How did I get to 'k' when 'c' is correct and 'k' is genuinly 15.6 lightyears away?! Buzz lightyears!
 
-        match Self::load_variable(variables, menus, element_ctx, &s.to_string()) {
-            Some(value) => return value,
-            None => {}
-        };
+        if let Some(value) = get_var_opt(variables, settings, menus, element_ctx, s, no_ap) {
+            return value;
+        }
 
         // Auto-detect integer
         if let Ok(i) = s.parse::<i64>() {
@@ -274,7 +246,7 @@ impl Value {
             "false" => return Value::Bool(false),
             _ => {}
         };
-        Value::String(s.to_string())
+        Value::String(s.to_string()) //Self::unescape_escaped_chars(s)
     }
     pub fn from_str_pure(s: &str) -> Self {
         let s = s.trim();
@@ -345,6 +317,9 @@ impl Value {
                     }
                     "string" | "str" => {
                         return Value::String(value.to_string());
+                    }
+                    "repvar" => {
+                        return Value::String(Self::replace_inline_variables_pure(s));
                     }
                     "array" | "list" | "vec" | "slice" => {
                         if let Some(arr) = Self::parse_array_pure(value) {
@@ -662,7 +637,13 @@ impl Value {
             _ => None,
         }
     }
-    pub fn as_string(&self) -> Option<&str> {
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Value::String(str) => Some(str),
+            _ => None,
+        }
+    }
+    pub fn as_string(&self) -> Option<&String> {
         match self {
             Value::String(str) => Some(str),
             _ => None,
@@ -771,14 +752,22 @@ impl Value {
     pub fn split_array_elements(s: &str) -> Vec<&str> {
         let mut elements = Vec::new();
         let mut start = 0;
-        let mut bracket_depth: i32 = 0i32;
+        let mut bracket_depth: i32 = 0;
         let mut in_quotes = false;
         let mut chars = s.char_indices().peekable();
-        let mut prev_char = '\0';
 
         while let Some((i, c)) = chars.next() {
+            if c == '\\' {
+                if let Some((_, next)) = chars.peek().copied() {
+                    if matches!(next, '"' | ',' | '\\') {
+                        chars.next();
+                        continue;
+                    }
+                }
+            }
+
             match c {
-                '"' if prev_char != '\\' => {
+                '"' => {
                     in_quotes = !in_quotes;
                 }
                 '[' | '(' | '{' if !in_quotes => {
@@ -793,14 +782,11 @@ impl Value {
                 }
                 _ => {}
             }
-            prev_char = c;
         }
 
-        // Add the remaining element
         if start < s.len() {
             elements.push(&s[start..]);
         } else if start == s.len() && !s.is_empty() && s.ends_with(',') {
-            // Handle trailing comma - add empty element
             elements.push("");
         }
 
@@ -848,6 +834,7 @@ impl Value {
                     menus,
                     element_ctx,
                     elem,
+                    false,
                 ));
             }
         }
@@ -889,49 +876,108 @@ impl Value {
 
         Some(result)
     }
-    // fn replace_inline_variables(variables: &Variables, settings: &Settings, menus: &Menus, element_ctx: &ElementContext, s: &str) -> String {
-    //     let mut result = String::with_capacity(s.len());
-    //     let mut chars = s.chars().peekable();
-    //
-    //     while let Some(c) = chars.next() {
-    //         if c == '{' {
-    //             let mut var_name = String::new();
-    //             let mut found_end = false;
-    //
-    //             // Consume characters until we find the closing '}'
-    //             for inner_c in chars.by_ref() {
-    //                 if inner_c == '}' {
-    //                     found_end = true;
-    //                     break;
-    //                 }
-    //                 var_name.push(inner_c);
-    //             }
-    //
-    //             if found_end && !var_name.is_empty() {
-    //                 // Try to load the variable
-    //                 if let Some(value) = get_var_opt(variables, settings, var_name.as_str()) {
-    //                     // Replace with the variable's string representation
-    //                     result.push_str(&value.to_string());
-    //                 } else {
-    //                     // Variable doesn't exist yet, leave it exactly as it was
-    //                     result.push('{');
-    //                     result.push_str(&var_name);
-    //                     result.push('}');
-    //                 }
-    //             } else {
-    //                 // Unclosed brace or empty {}, leave as is
-    //                 result.push('{');
-    //                 result.push_str(&var_name);
-    //                 if found_end {
-    //                     result.push('}');
-    //                 }
-    //             }
-    //         } else {
-    //             result.push(c);
-    //         }
-    //     }
-    //     result
-    // }
+    fn replace_inline_variables(
+        variables: &Variables,
+        settings: &Settings,
+        menus: &Menus,
+        element_ctx: &ElementContext,
+        s: &str,
+    ) -> String {
+        let mut result = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                let mut var_name = String::new();
+                let mut found_end = false;
+
+                // Consume characters until we find the closing '}'
+                for inner_c in chars.by_ref() {
+                    if inner_c == '}' {
+                        found_end = true;
+                        break;
+                    }
+                    var_name.push(inner_c);
+                }
+
+                if found_end && !var_name.is_empty() {
+                    let value =
+                        Self::from_str(&settings, variables, menus, element_ctx, &var_name, false);
+                    // Replace with the variable's string representation -- Huh?!
+                    result.push_str(&value.to_string());
+                } else {
+                    // Unclosed brace or empty {}, leave as is
+                    result.push('{');
+                    result.push_str(&var_name);
+                    if found_end {
+                        result.push('}');
+                    }
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        result
+    }
+
+    fn replace_inline_variables_pure(s: &str) -> String {
+        let mut result = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                let mut var_name = String::new();
+                let mut found_end = false;
+
+                // Consume characters until we find the closing '}'
+                for inner_c in chars.by_ref() {
+                    if inner_c == '}' {
+                        found_end = true;
+                        break;
+                    }
+                    var_name.push(inner_c);
+                }
+
+                if found_end && !var_name.is_empty() {
+                    let value = Self::from_str_pure(&var_name);
+                    // Replace with the variable's string representation -- Huh?! BAseball.
+                    result.push_str(&value.to_string());
+                } else {
+                    // Unclosed brace or empty {}, leave as is
+                    result.push('{');
+                    result.push_str(&var_name);
+                    if found_end {
+                        result.push('}');
+                    }
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        result
+    }
+
+    fn unescape_escaped_chars(s: &str) -> String {
+        let mut chars = s.chars().peekable();
+        let mut result = String::with_capacity(s.len());
+
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.peek().copied() {
+                    Some('"') | Some(',') | Some('\\') => {
+                        result.push(chars.next().unwrap());
+                    }
+                    _ => {
+                        result.push(c);
+                    }
+                }
+            } else {
+                result.push(c);
+            }
+        }
+
+        result
+    }
 }
 impl From<f64> for Value {
     fn from(v: f64) -> Self {
@@ -1751,6 +1797,73 @@ pub fn get_builtin<'a>(
                     function: "get",
                 })
         }),
+        "get_range" => boxed_builtin(move |args| {
+            let arr = match args.get(0) {
+                Some(Value::Array(arr)) => arr,
+                _ => {
+                    return Err(FunctionError::InvalidType {
+                        expected: "array",
+                        got: "value",
+                        function: "get_range",
+                    });
+                }
+            };
+
+            let start = arg_i64(&args, 1, "get_range")?;
+            let end = arg_i64(&args, 2, "get_range")?;
+
+            let len = arr.len() as i64;
+
+            if len == 0 {
+                return Ok(Value::Array(Vec::new()));
+            }
+
+            let normalize = |index: i64| -> usize {
+                if index < 0 {
+                    len.saturating_add(index).clamp(0, len - 1) as usize
+                } else {
+                    index.clamp(0, len - 1) as usize
+                }
+            };
+
+            let start = normalize(start);
+            let end = normalize(end);
+
+            if start <= end {
+                Ok(Value::Array(arr[start..=end].to_vec()))
+            } else {
+                Ok(Value::Array(
+                    arr[end..=start].iter().rev().cloned().collect(),
+                ))
+            }
+        }),
+        "wrap_text" => boxed_builtin(move |args| {
+            let (messages, wrap_at, pt) = parse_wrap_messages(&args, "wrap_text")?;
+            // println!("{} {}", wrap_at, pt);
+            // println!("{:?}", wrap_messages(&messages, wrap_at, pt)
+            //              .into_iter()
+            //              .flatten()
+            //              .map(Value::String)
+            //              .collect::<Vec<_>>());
+            Ok(Value::Array(
+                wrap_messages(&messages, wrap_at, pt)
+                    .into_iter()
+                    .flatten()
+                    .map(Value::String)
+                    .collect(),
+            ))
+        }),
+
+        "wrap_text_lines" => boxed_builtin(move |args| {
+            let (messages, wrap_at, pt) = parse_wrap_messages(&args, "wrap_text_lines")?;
+
+            Ok(Value::Array(
+                wrap_messages(&messages, wrap_at, pt)
+                    .into_iter()
+                    .map(|lines| Value::Array(lines.into_iter().map(Value::String).collect()))
+                    .collect(),
+            ))
+        }),
         "padleft" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "padleft")?;
             let s = val.to_string();
@@ -1955,37 +2068,125 @@ pub fn get_builtin<'a>(
             Ok(Value::F64(nearest))
         }),
         "nearest_index" => boxed_builtin(move |args| {
-            let choices_arr = match args.get(0) {
-                Some(Value::Array(arr)) => arr,
-                _ => {
+            let choices_arr = match get_arg(&args, 0, "nearest_index")? {
+                Value::Array(arr) => arr,
+                value => {
                     return Err(FunctionError::InvalidType {
                         expected: "array",
-                        got: "value",
+                        got: value.type_name(),
                         function: "nearest_index",
                     });
                 }
             };
-            let choices: Vec<f64> = choices_arr.iter().filter_map(|v| v.as_f64()).collect();
-            if choices.is_empty() {
+
+            if choices_arr.is_empty() {
                 return Err(FunctionError::EmptyInput {
                     function: "nearest_index",
                 });
             }
-            let value = arg_f64(&args, 1, "nearest_index")?;
-            let index = choices
-                .iter()
-                .enumerate()
-                .min_by(|(_, a), (_, b)| {
-                    (value - **a)
-                        .abs()
-                        .partial_cmp(&(value - **b).abs())
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .map(|(i, _)| i)
-                .ok_or(FunctionError::EmptyInput {
+
+            let value = get_arg(&args, 1, "nearest_index")?;
+
+            match value {
+                Value::F64(_) | Value::I64(_) => {
+                    let target = match value {
+                        Value::F64(number) => *number,
+                        Value::I64(number) => *number as f64,
+                        _ => unreachable!(),
+                    };
+
+                    if !target.is_finite() {
+                        return Err(FunctionError::InvalidType {
+                            expected: "finite number",
+                            got: value.type_name(),
+                            function: "nearest_index",
+                        });
+                    }
+
+                    let mut nearest: Option<(usize, f64)> = None;
+
+                    for (index, choice) in choices_arr.iter().enumerate() {
+                        let candidate = match choice {
+                            Value::F64(number) => *number,
+                            Value::I64(number) => *number as f64,
+                            _ => {
+                                return Err(FunctionError::InvalidType {
+                                    expected: "array of numbers",
+                                    got: choice.type_name(),
+                                    function: "nearest_index",
+                                });
+                            }
+                        };
+
+                        if !candidate.is_finite() {
+                            return Err(FunctionError::InvalidType {
+                                expected: "finite number in choices array",
+                                got: choice.type_name(),
+                                function: "nearest_index",
+                            });
+                        }
+
+                        let distance = (target - candidate).abs();
+
+                        if nearest
+                            .as_ref()
+                            .is_none_or(|(_, best_distance)| distance < *best_distance)
+                        {
+                            nearest = Some((index, distance));
+                        }
+                    }
+
+                    let index =
+                        nearest
+                            .map(|(index, _)| index)
+                            .ok_or(FunctionError::EmptyInput {
+                                function: "nearest_index",
+                            })?;
+
+                    Ok(Value::I64(index as i64))
+                }
+
+                Value::String(target) => {
+                    let mut nearest: Option<(usize, usize)> = None;
+
+                    for (index, choice) in choices_arr.iter().enumerate() {
+                        let candidate = match choice {
+                            Value::String(candidate) => candidate,
+                            _ => {
+                                return Err(FunctionError::InvalidType {
+                                    expected: "array of strings",
+                                    got: choice.type_name(),
+                                    function: "nearest_index",
+                                });
+                            }
+                        };
+
+                        let distance = levenshtein_distance(target, candidate);
+
+                        if nearest
+                            .as_ref()
+                            .is_none_or(|(_, best_distance)| distance < *best_distance)
+                        {
+                            nearest = Some((index, distance));
+                        }
+                    }
+
+                    let index =
+                        nearest
+                            .map(|(index, _)| index)
+                            .ok_or(FunctionError::EmptyInput {
+                                function: "nearest_index",
+                            })?;
+
+                    Ok(Value::I64(index as i64))
+                }
+
+                _ => Err(FunctionError::InvalidType {
+                    expected: "F64, I64, or String",
+                    got: value.type_name(),
                     function: "nearest_index",
-                })?;
-            Ok(Value::I64(index as i64))
+                }),
+            }
         }),
         "array_get" => boxed_builtin(move |args| {
             let arr = match args.get(0) {
@@ -2570,12 +2771,15 @@ pub enum AnnoyingError {
     OverflowWarning { pos: usize },
 }
 
+use crate::renderer::ui::with_font_system;
 use crate::renderer::ui_text_rendering::anchor_to;
 use crate::ui::actions::ElementContext;
 use crate::ui::ui_edit_manager::ColorComponent;
-use crate::ui::ui_editor::{Menus, get_element_borrowed};
+use crate::ui::ui_editor::{Menus, get_element_borrowed, get_layer_ap_vars};
 use crate::ui::ui_touch_manager::{ElementRef, Touchable};
+use crate::ui::vertex::UiElement;
 use owo_colors::OwoColorize;
+use sluggrs_skylines::cosmic_text;
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -2713,22 +2917,107 @@ type ParseResult<T> = Result<T, ParseError>;
 
 // fn get_var(variables: &Variables, settings: &Settings, menus: &Menus, element_ctx: &ElementContext, name: &str) -> Value {
 //     if let Some(key) = SettingKey::from_str(name) {
-//         return settings.read_setting(key).to_value(); // TODO: setting.options!! Is missing, that's what I wanted to say, insecure mind, lizard brain...- HUH?!
+//         return settings.read_setting(key).to_value(); // TO/DO: setting.options!! Is missing, that's what I wanted to say, insecure mind, lizard brain...- HUH?!
 //     }
 //     Value::load_variable(variables, menus, element_ctx, name)
 // }
+fn get_setting_opt(settings: &Settings, s: &str) -> Option<Value> {
+    match s.split_once(".") {
+        None => {
+            let key = SettingKey::from_str(s);
+            if let Some(key) = key {
+                let value = settings.read_setting(key).to_value();
+                //println!("{:?} {:?}", key, value);
+                return Some(value);
+            }
+        }
+        Some((l, r)) => {
+            let key = SettingKey::from_str(l);
+            if let Some(key) = key {
+                match r {
+                    "options" => {
+                        return Some(key.options());
+                    }
+                    _ => {
+                        match r.split_once(".") {
+                            None => {
+                                return Some(key.options());
+                            }
+                            Some((l, r)) => {
+                                if let Ok(idx) = r.parse::<usize>() {
+                                    if let Some(array) = key.options().as_array() {
+                                        if let Some(val) = array.get(idx) {
+                                            //println!("HOLY JESUS0, {:?}, {}", array, idx);
+                                            return Some(val.to_owned());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                let value = settings.read_setting(key).to_value();
+                //println!("{:?} {:?}", key, value);
+                return Some(value);
+            }
+        }
+    }
+    None
+}
 fn get_var_opt(
     variables: &Variables,
     settings: &Settings,
     menus: &Menus,
     element_ctx: &ElementContext,
     name: &str,
+    no_ap: bool,
 ) -> Option<Value> {
-    if let Some(key) = SettingKey::from_str(name) {
-        return Some(settings.read_setting(key).to_value());
+    get_setting_opt(settings, name)
+        .or_else(|| {
+            if no_ap {
+                None
+            } else {
+                get_dynamic_ap_opt(variables, settings, menus, element_ctx, name)
+            }
+        })
+        .or_else(|| Value::load_variable(variables, menus, element_ctx, name))
+}
+fn get_dynamic_ap_opt(
+    variables: &Variables,
+    settings: &Settings,
+    menus: &Menus,
+    element_context: &ElementContext,
+    name: &str,
+) -> Option<Value> {
+    let Some(element_ref) = element_context
+        .self_element
+        .as_ref()
+        .or(element_context.as_element.as_ref())
+    else {
+        return None;
+    };
+    let vars = get_layer_ap_vars(menus, element_ref);
+    if vars.is_empty() {
+        return None;
     }
-
-    Value::load_variable(variables, menus, element_ctx, name)
+    let name = Value::from_str(settings, variables, menus, element_context, name, true);
+    let Some(name) = name.as_str() else {
+        //println!("[UI get AP var] name wasn't resolved to string");
+        return None;
+    };
+    let Some(ap_var) = UiElement::get_ap(name, vars.as_slice()) else {
+        //println!("[UI get AP var] ap var '{}' doesn't exist in layer '{}' from menu '{}'", name, element_ref.layer, element_ref.menu);
+        return None;
+    };
+    let var = Value::from_str(
+        settings,
+        variables,
+        menus,
+        element_context,
+        ap_var.as_str(),
+        false,
+    );
+    Some(var)
 }
 
 fn combine_array_values<F>(left: Vec<Value>, right: Vec<Value>, mut op: F) -> Option<Vec<Value>>
@@ -2997,7 +3286,8 @@ pub fn resolve_template(
                 let val = if let Some(key) = SettingKey::from_str(inside) {
                     settings.read_setting(key).to_string()
                 } else {
-                    Value::from_str(settings, vars, menus, element_ctx, inside.trim()).into_string()
+                    Value::from_str(settings, vars, menus, element_ctx, inside.trim(), false)
+                        .into_string()
                 };
                 out.push_str(&val);
             } else {
@@ -3143,6 +3433,11 @@ pub enum Expr {
     Bool(bool, Span),
     None(Span),
     VarOrSetting(String, Span),
+    DynamicVarOrSetting {
+        key: Box<Expr>,
+        default: Option<Box<Expr>>,
+        span: Span,
+    },
     Array(Vec<Expr>, Span),
     Binary {
         left: Box<Expr>,
@@ -3197,7 +3492,8 @@ fn get_span(expr: &Expr) -> Span {
         | Expr::Index { span, .. }
         | Expr::Property { span, .. }
         | Expr::Ternary { span, .. }
-        | Expr::Format { span, .. } => span.clone(),
+        | Expr::Format { span, .. }
+        | Expr::DynamicVarOrSetting { span, .. } => span.clone(),
     }
 }
 
@@ -3860,43 +4156,82 @@ impl<'a> Parser<'a> {
 
             TokenKind::LBrace => {
                 let next = self.peek();
-                if let TokenKind::Ident(mut name) = next.kind {
+
+                if next.kind == TokenKind::LParen {
                     self.pos += 1;
 
-                    // Allow spaces in variable names: {Utilities Info_open}
-                    // Keep concatenating consecutive Idents with a space
-                    while matches!(self.peek().kind, TokenKind::Ident(_)) {
-                        if let TokenKind::Ident(part) = self.peek().kind.clone() {
-                            name.push(' ');
-                            name.push_str(&part);
-                            self.pos += 1;
-                        } else {
-                            break;
-                        }
+                    if self.peek().kind == TokenKind::RParen {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "an expression inside the dynamic lookup parentheses"
+                                .to_string(),
+                            found: self.peek(),
+                            pos: self.peek().span.start,
+                        });
                     }
 
-                    while self.peek().kind == TokenKind::Dot {
-                        self.pos += 1;
-                        match self.peek().kind {
-                            TokenKind::Ident(prop) => {
-                                name.push('.');
-                                name.push_str(&prop);
-                                self.pos += 1;
-                            }
-                            TokenKind::Number(n) => {
-                                name.push_str(&format!(".{}", n as i64));
-                                self.pos += 1;
-                            }
-                            _ => {
-                                return Err(ParseError::UnexpectedToken {
-                                    expected: "identifier or number after '.'".to_string(),
-                                    found: self.peek(),
-                                    pos: self.pos,
-                                });
-                            }
-                        }
+                    let key = self.parse_expr_bp(0)?;
+
+                    if self.peek().kind != TokenKind::RParen {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "')' to close the dynamic lookup key expression".to_string(),
+                            found: self.peek(),
+                            pos: self.peek().span.start,
+                        });
                     }
-                    // Optional inline default: {name ?? default_expr}
+
+                    self.pos += 1;
+
+                    let default = if self.peek().kind == TokenKind::NullCoalesce {
+                        self.pos += 1;
+
+                        if matches!(self.peek().kind, TokenKind::RBrace | TokenKind::End) {
+                            return Err(ParseError::UnexpectedToken {
+                                expected: "a fallback expression after '??'".to_string(),
+                                found: self.peek(),
+                                pos: self.peek().span.start,
+                            });
+                        }
+
+                        Some(Box::new(self.parse_expr_bp(4)?))
+                    } else {
+                        None
+                    };
+
+                    if self.peek().kind != TokenKind::RBrace {
+                        let expected = if default.is_some() {
+                            "'}' to close the dynamic lookup after its fallback"
+                        } else {
+                            "'??' followed by a fallback, or '}' to close the dynamic lookup"
+                        };
+
+                        return Err(ParseError::UnexpectedToken {
+                            expected: expected.to_string(),
+                            found: self.peek(),
+                            pos: self.peek().span.start,
+                        });
+                    }
+
+                    let end = self.peek().span.end;
+                    self.pos += 1;
+
+                    Ok(Expr::DynamicVarOrSetting {
+                        key: Box::new(key),
+                        default,
+                        span: Span { start: pos, end },
+                    })
+                } else if matches!(next.kind, TokenKind::Ident(_)) {
+                    let name_start = next.span.start;
+
+                    while !matches!(
+                        self.peek().kind,
+                        TokenKind::NullCoalesce | TokenKind::RBrace | TokenKind::End
+                    ) {
+                        self.pos += 1;
+                    }
+
+                    let name_end = self.peek().span.start;
+                    let name = self.source[name_start..name_end].trim().to_string();
+
                     let default = if self.peek().kind == TokenKind::NullCoalesce {
                         self.pos += 1;
                         Some(self.parse_expr_bp(4)?)
@@ -3906,15 +4241,17 @@ impl<'a> Parser<'a> {
 
                     if self.peek().kind != TokenKind::RBrace {
                         return Err(ParseError::UnexpectedToken {
-                            expected: "}".to_string(),
+                            expected: "'}' to close the variable/setting lookup".to_string(),
                             found: self.peek(),
-                            pos: self.pos,
+                            pos: self.peek().span.start,
                         });
                     }
+
                     let end = self.peek().span.end;
                     self.pos += 1;
 
                     let var_expr = Expr::VarOrSetting(name, Span { start: pos, end });
+
                     Ok(match default {
                         Some(default_expr) => Expr::Binary {
                             left: Box::new(var_expr),
@@ -3926,7 +4263,7 @@ impl<'a> Parser<'a> {
                     })
                 } else {
                     Err(ParseError::UnexpectedToken {
-                        expected: "identifier inside braces for variable/setting access"
+                        expected: "a variable/setting name or '(' to start a dynamic lookup"
                             .to_string(),
                         found: next.clone(),
                         pos: next.span.start,
@@ -4085,9 +4422,7 @@ pub fn type_check_and_resolve(
 ) -> Result<Expr, ParseError> {
     match expr {
         Expr::VarOrSetting(name, span) => {
-            if SettingKey::from_str(name).is_some()
-                || Value::load_variable(vars, menus, element_ctx, name).is_some()
-            {
+            if get_var_opt(vars, settings, menus, element_ctx, name, false).is_some() {
                 Ok(expr.clone())
             } else {
                 Err(ParseError::UndefinedVariable {
@@ -4095,6 +4430,15 @@ pub fn type_check_and_resolve(
                     pos: span.start,
                 })
             }
+        }
+        Expr::DynamicVarOrSetting { key, default, .. } => {
+            type_check_and_resolve(key, vars, settings, menus, element_ctx)?;
+
+            if let Some(default_expr) = default {
+                type_check_and_resolve(default_expr, vars, settings, menus, element_ctx)?;
+            }
+
+            Ok(expr.clone())
         }
         Expr::FunctionCall { name, args, span } => {
             if get_builtin(name, menus, element_ctx, vars).is_none() {
@@ -4186,11 +4530,42 @@ pub fn eval_ast(
         Expr::String(s, _) => Ok(Value::String(s.clone())),
         Expr::Bool(b, _) => Ok(Value::Bool(*b)),
         Expr::None(_) => Ok(Value::None),
-        Expr::VarOrSetting(name, span) => get_var_opt(vars, settings, menus, element_ctx, name)
-            .ok_or(ParseError::UndefinedVariable {
-                name: name.clone(),
-                pos: span.start,
-            }),
+        Expr::VarOrSetting(name, span) => {
+            get_var_opt(vars, settings, menus, element_ctx, name, false).ok_or(
+                ParseError::UndefinedVariable {
+                    name: name.clone(),
+                    pos: span.start,
+                },
+            )
+        }
+        Expr::DynamicVarOrSetting { key, default, span } => {
+            let key_value = eval_ast(key, vars, settings, menus, element_ctx)?;
+
+            let name = match key_value {
+                Value::String(name) => name,
+                value => {
+                    return Err(ParseError::TypeMismatch {
+                        operation: "dynamic variable/setting lookup key".to_string(),
+                        expected: "a string containing a variable or setting name".to_string(),
+                        found: value.type_name().to_string(),
+                        pos: get_span(key).start,
+                    });
+                }
+            };
+
+            match get_var_opt(vars, settings, menus, element_ctx, &name, false) {
+                Some(value) if default.is_none() || value.is_truthy() => Ok(value),
+                Some(_) | None => match default {
+                    Some(default_expr) => {
+                        eval_ast(default_expr, vars, settings, menus, element_ctx)
+                    }
+                    None => Err(ParseError::UndefinedVariable {
+                        name,
+                        pos: span.start,
+                    }),
+                },
+            }
+        }
         Expr::Array(items, _) => {
             let mut vals = Vec::new();
             for item in items {
@@ -4540,5 +4915,148 @@ pub fn eval_expr(
             }
             None
         }
+    }
+}
+
+fn wrap_messages(messages: &[String], wrap_at: f64, pt: f64) -> Vec<Vec<String>> {
+    use cosmic_text::{Attrs, Buffer, Metrics, Shaping, Wrap};
+
+    with_font_system(|font_system| {
+        messages
+            .iter()
+            .map(|message| {
+                let mut buffer = Buffer::new(
+                    font_system,
+                    Metrics::new(pt.max(1.0) as f32, (pt * 1.375).max(1.0) as f32),
+                );
+
+                buffer.set_wrap(Wrap::WordOrGlyph);
+                buffer.set_size(Some(wrap_at.max(1.0) as f32), None);
+                buffer.set_text(message, &Attrs::new(), Shaping::Advanced, None);
+                buffer.shape_until_scroll(font_system, false);
+
+                buffer
+                    .layout_runs()
+                    .map(|run| {
+                        let start = run.glyphs.iter().map(|g| g.start).min();
+                        let end = run.glyphs.iter().map(|g| g.end).max();
+
+                        match (start, end) {
+                            (Some(start), Some(end)) => {
+                                run.text.get(start..end).unwrap_or("").to_string()
+                            }
+                            _ => String::new(),
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
+    })
+}
+
+fn parse_wrap_messages(
+    args: &[Value],
+    function: &'static str,
+) -> Result<(Vec<String>, f64, f64), FunctionError> {
+    let messages = match args.first() {
+        Some(Value::String(message)) => vec![message.clone()],
+        Some(Value::Array(messages)) => messages
+            .iter()
+            .map(|value| match value {
+                Value::String(text) => Ok(text.clone()),
+                _ => Err(FunctionError::InvalidType {
+                    expected: "string",
+                    got: "value",
+                    function,
+                }),
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => {
+            return Err(FunctionError::InvalidType {
+                expected: "string or array",
+                got: "value",
+                function,
+            });
+        }
+    };
+
+    let wrap_at = arg_f64(args, 1, function)?;
+    let pt = arg_f64(args, 2, function)?;
+
+    Ok((messages, wrap_at, pt))
+}
+
+fn levenshtein_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+
+    let mut previous: Vec<usize> = (0..=b.len()).collect();
+    let mut current = vec![0; b.len() + 1];
+
+    for (i, ca) in a.iter().enumerate() {
+        current[0] = i + 1;
+
+        for (j, cb) in b.iter().enumerate() {
+            let substitution_cost = usize::from(ca != cb);
+
+            current[j + 1] = (previous[j + 1] + 1)
+                .min(current[j] + 1)
+                .min(previous[j] + substitution_cost);
+        }
+
+        std::mem::swap(&mut previous, &mut current);
+    }
+
+    previous[b.len()]
+}
+
+fn describe_token(token: &Token) -> String {
+    match &token.kind {
+        TokenKind::Number(n) => format!("number {n}"),
+        TokenKind::Ident(name) => format!("identifier {name:?}"),
+        TokenKind::StrLit(value) => format!("string literal {value:?}"),
+        TokenKind::True => "`true`".to_string(),
+        TokenKind::False => "`false`".to_string(),
+        TokenKind::None => "`none`".to_string(),
+        TokenKind::Plus => "`+`".to_string(),
+        TokenKind::Minus => "`-`".to_string(),
+        TokenKind::Star => "`*`".to_string(),
+        TokenKind::Slash => "`/`".to_string(),
+        TokenKind::Percent => "`%`".to_string(),
+        TokenKind::Power => "`**`".to_string(),
+        TokenKind::BitAnd => "`&`".to_string(),
+        TokenKind::BitOr => "`|` (bitwise OR)".to_string(),
+        TokenKind::BitXor => "`^`".to_string(),
+        TokenKind::BitNot => "`~`".to_string(),
+        TokenKind::Shl => "`<<`".to_string(),
+        TokenKind::Shr => "`>>`".to_string(),
+        TokenKind::Eq => "`==`".to_string(),
+        TokenKind::Neq => "`!=`".to_string(),
+        TokenKind::Lt => "`<`".to_string(),
+        TokenKind::Gt => "`>`".to_string(),
+        TokenKind::Le => "`<=`".to_string(),
+        TokenKind::Ge => "`>=`".to_string(),
+        TokenKind::StrictEq => "`===`".to_string(),
+        TokenKind::StrictNeq => "`!==`".to_string(),
+        TokenKind::And => "`&&`".to_string(),
+        TokenKind::Or => "`||`".to_string(),
+        TokenKind::Not => "`!`".to_string(),
+        TokenKind::NullCoalesce => "`??`".to_string(),
+        TokenKind::OptChain => "`?.`".to_string(),
+        TokenKind::Question => "`?`".to_string(),
+        TokenKind::Colon => "`:`".to_string(),
+        TokenKind::LParen => "`(`".to_string(),
+        TokenKind::RParen => "`)`".to_string(),
+        TokenKind::LBracket => "`[`".to_string(),
+        TokenKind::RBracket => "`]`".to_string(),
+        TokenKind::Comma => "`,`".to_string(),
+        TokenKind::Dot => "`.`".to_string(),
+        TokenKind::DotDot => "`..`".to_string(),
+        TokenKind::DotDotEq => "`..=`".to_string(),
+        TokenKind::Dollar => "`$`".to_string(),
+        TokenKind::Pipe => "`|` (pipeline operator)".to_string(),
+        TokenKind::End => "end of input".to_string(),
+        TokenKind::RBrace => "`}`".to_string(),
+        TokenKind::LBrace => "`{`".to_string(),
     }
 }

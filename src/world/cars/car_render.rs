@@ -650,21 +650,20 @@ pub fn interpolate_cars(world: &mut World, variables: &Variables, settings: &Set
             .map(|&car_id| {
                 (
                     car_id,
-                    if car_id == 0 && settings.drive_car {
-                        Vec::new()
-                    } else {
-                        interpolate_car(
-                            &world.time,
-                            &world.roads.road_manager.roads,
-                            storage,
-                            car_id,
-                            &world.buildings,
-                            &world.zoning.zoning_storage,
-                            &world.roads.parking,
-                            &sf_options,
-                            world.world_state.camera.eye_world(),
-                        )
-                    },
+                    // if car_id == 0{// && settings.drive_car
+                    //     Vec::new()
+                    // } else {
+                    interpolate_car(
+                        &world.time,
+                        &world.roads.road_manager.roads,
+                        storage,
+                        car_id,
+                        &world.buildings,
+                        &world.zoning.zoning_storage,
+                        &world.roads.parking,
+                        &sf_options,
+                        world.world_state.camera.eye_world(),
+                    ), //},
                 )
             })
             .collect()

@@ -194,6 +194,7 @@ fn fs_main(in: VertexOut) -> FragmentOut {
         in.world_pos,
         n,
         grass_amount,
+        uniforms.solar_eclipse_coverage
     );
 
     var final_color = albedo * lighting;

@@ -2,10 +2,11 @@
 pub mod drag_hue_point;
 
 use crate::data::{SettingKey, SettingOp, Settings};
+use crate::helpers::get_splash_message;
 use crate::helpers::paths::rusty_skylines_dir;
-use crate::helpers::{get_splash_message, print_exit_message};
 use crate::renderer::props::Props;
 use crate::renderer::render_core::Renderer;
+use crate::renderer::ui_text_rendering::Anchor;
 use crate::simulation::Simulation;
 use crate::ui::action_parser::{compile_actions, run_action};
 use crate::ui::parser::Value;
@@ -14,10 +15,11 @@ use crate::ui::ui_edit_manager::{
     DeleteElementCommand, DuplicateElementCommand, MoveElementCommand, ResizeElementCommand,
 };
 use crate::ui::ui_editor::{
-    Ui, get_element, get_element_main_size, get_element_mut, get_element_position,
+    Ui, get_element, get_element_main_size, get_element_mut, get_element_mut_dirty_layer,
+    get_element_position,
 };
 use crate::ui::ui_edits::{SizeProperty, create_element, delete_element};
-use crate::ui::ui_touch_manager::ElementRef;
+use crate::ui::ui_touch_manager::{ElementEvent, ElementRef, GlobalEvent};
 use crate::ui::variables::{Variables, initialize_value, save_colors};
 use crate::ui::vertex::{
     AdvancedPrimitive, ElementKind, UiButtonCircle, UiButtonHandle, UiButtonOutline,
@@ -40,6 +42,13 @@ use winit::event_loop::ActiveEventLoop;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum UiCommand {
+    TextUtils {
+        menu: String,
+        layer: String,
+        id: String,
+        action: String,
+    },
+    DeselectAll,
     OpenMenu {
         menu_name: String,
     },
@@ -433,16 +442,73 @@ impl CommandQueue {
     pub fn execute_one(&mut self, cmd: UiCommand, ctx: &mut CommandContext) -> CommandResult {
         //println!("{:?}", cmd);
         match cmd {
+            UiCommand::TextUtils {
+                menu,
+                layer,
+                id,
+                action,
+            } => {
+                let menu = string_to_value(ctx, menu).into_string();
+                let layer = string_to_value(ctx, layer).into_string();
+                let id = string_to_value(ctx, id).into_string();
+                let element_ref = ElementRef {
+                    menu,
+                    layer,
+                    id,
+                    kind: ElementKind::Text,
+                };
+                let action = string_to_value(ctx, action).into_string();
+                let Some(el) = get_element_mut(&mut ctx.ui.menus, &element_ref) else {
+                    return CommandResult::Error(format!(
+                        "In TextUtils UI Action: Element not found: [{}, {}, {}]",
+                        element_ref.menu, element_ref.layer, element_ref.id
+                    ));
+                };
+                let Some(text) = el.as_text_mut() else {
+                    return CommandResult::Error(format!(
+                        "In TextUtils UI Action: Element found, but is not a text: [{}, {}, {}, {}]",
+                        element_ref.menu,
+                        element_ref.layer,
+                        element_ref.id,
+                        el.kind()
+                    ));
+                };
+
+                match action.to_lowercase().as_str() {
+                    "texteditstart" => ctx
+                        .ui
+                        .touch_manager
+                        .push_event(element_ref, ElementEvent::TextEditStart),
+                    "blocklinebreak" => text.block_line_break = true,
+                    "allowlinebreak" => text.block_line_break = false,
+                    _ => {
+                        return CommandResult::Error(format!(
+                            "In TextUtils UI Action: Text action is not a valid action: {}",
+                            action
+                        ));
+                    }
+                }
+
+                CommandResult::Ok
+            }
+            UiCommand::DeselectAll => {
+                ctx.ui
+                    .touch_manager
+                    .next_frame_global_events
+                    .push(GlobalEvent::DeselectAllRequested);
+                CommandResult::Ok
+            }
+
             UiCommand::OpenMenu { menu_name } => {
                 let menu_name = string_to_value(ctx, menu_name);
 
-                let menu_names: Vec<String> = if let Some(name) = menu_name.as_string() {
+                let menu_names: Vec<String> = if let Some(name) = menu_name.as_str() {
                     vec![name.to_string()]
                 } else if let Some(names) = menu_name.as_array() {
                     let mut result = Vec::with_capacity(names.len());
 
                     for value in names {
-                        let Some(name) = value.as_string() else {
+                        let Some(name) = value.as_str() else {
                             return CommandResult::Error(
                                 "Menu name in open_menu() array wasn't a string".to_string(),
                             );
@@ -485,13 +551,13 @@ impl CommandQueue {
                 let element_ctx = &ctx.element_ctx.clone();
                 let menu_name = string_to_value(ctx, menu_name);
 
-                let menu_names: Vec<String> = if let Some(name) = menu_name.as_string() {
+                let menu_names: Vec<String> = if let Some(name) = menu_name.as_str() {
                     vec![name.to_string()]
                 } else if let Some(names) = menu_name.as_array() {
                     let mut result = Vec::with_capacity(names.len());
 
                     for value in names {
-                        let Some(name) = value.as_string() else {
+                        let Some(name) = value.as_str() else {
                             return CommandResult::Error(
                                 "Menu name in close_menu() array wasn't a string".to_string(),
                             );
@@ -535,7 +601,7 @@ impl CommandQueue {
                 //println!("Hi, te menu name is: {}", menu_name);
                 let element_ctx = &ctx.element_ctx.clone();
                 let menu_name = string_to_value(ctx, menu_name);
-                let Some(menu_name) = menu_name.as_string() else {
+                let Some(menu_name) = menu_name.as_str() else {
                     return CommandResult::Error(
                         "Menu name in close_all_layers() wasn't resolved to string".to_string(),
                     );
@@ -556,7 +622,7 @@ impl CommandQueue {
             UiCommand::ToggleMenu { menu_name } => {
                 let element_ctx = &ctx.element_ctx.clone();
                 let menu_name = string_to_value(ctx, menu_name);
-                let Some(menu_name) = menu_name.as_string() else {
+                let Some(menu_name) = menu_name.as_str() else {
                     return CommandResult::Error(
                         "Menu name in toggle_menu() wasn't resolved to string".to_string(),
                     );
@@ -572,7 +638,7 @@ impl CommandQueue {
             UiCommand::MenuActive { menu_name } => {
                 let element_ctx = &ctx.element_ctx.clone();
                 let menu_names = string_to_value(ctx, menu_name);
-                if let Some(menu_name) = menu_names.as_string() {
+                if let Some(menu_name) = menu_names.as_str() {
                     let is_active = ctx
                         .ui
                         .menus
@@ -584,7 +650,7 @@ impl CommandQueue {
                 } else if let Some(menu_names) = menu_names.as_array() {
                     let mut is_active = false;
                     for menu_name in menu_names {
-                        let Some(menu_name) = menu_name.as_string() else {
+                        let Some(menu_name) = menu_name.as_str() else {
                             return CommandResult::Error(
                                 "Menu name in menu_active() in array wasn't resolved to string"
                                     .to_string(),
@@ -613,13 +679,13 @@ impl CommandQueue {
             } => {
                 let element_ctx = &ctx.element_ctx.clone();
                 let menu_name = string_to_value(ctx, menu_name);
-                let Some(menu_name) = menu_name.as_string() else {
+                let Some(menu_name) = menu_name.as_str() else {
                     return CommandResult::Error(
                         "Menu name in open_layer() wasn't resolved to string".to_string(),
                     );
                 };
                 let layer_name = string_to_value(ctx, layer_name);
-                let Some(layer_name) = layer_name.as_string() else {
+                let Some(layer_name) = layer_name.as_str() else {
                     return CommandResult::Error(
                         "Layer name in open_layer() wasn't resolved to string".to_string(),
                     );
@@ -653,13 +719,13 @@ impl CommandQueue {
             } => {
                 let element_ctx = &ctx.element_ctx.clone();
                 let menu_name = string_to_value(ctx, menu_name);
-                let Some(menu_name) = menu_name.as_string() else {
+                let Some(menu_name) = menu_name.as_str() else {
                     return CommandResult::Error(
                         "Menu name in close_layer() wasn't resolved to string".to_string(),
                     );
                 };
                 let layer_name = string_to_value(ctx, layer_name);
-                let Some(layer_name) = layer_name.as_string() else {
+                let Some(layer_name) = layer_name.as_str() else {
                     return CommandResult::Error(
                         "Layer name in close_layer() wasn't resolved to string".to_string(),
                     );
@@ -680,13 +746,13 @@ impl CommandQueue {
             } => {
                 let element_ctx = &ctx.element_ctx.clone();
                 let menu_name = string_to_value(ctx, menu_name);
-                let Some(menu_name) = menu_name.as_string() else {
+                let Some(menu_name) = menu_name.as_str() else {
                     return CommandResult::Error(
                         "Menu name in toggle_layer() wasn't resolved to string".to_string(),
                     );
                 };
                 let layer_name = string_to_value(ctx, layer_name);
-                let Some(layer_name) = layer_name.as_string() else {
+                let Some(layer_name) = layer_name.as_str() else {
                     return CommandResult::Error(
                         "Layer name in toggle_layer() wasn't resolved to string".to_string(),
                     );
@@ -706,7 +772,7 @@ impl CommandQueue {
                 let initial_name = name.clone();
                 let name = string_to_value(ctx, name);
                 //println!("After string to value: {}", name);
-                let Some(name) = name.as_string() else {
+                let Some(name) = name.as_str() else {
                     return CommandResult::Error(format!(
                         "'{initial_name}' in set_var() wasn't resolved to string"
                     ));
@@ -743,47 +809,63 @@ impl CommandQueue {
             UiCommand::IncVar { name, amount } => {
                 let element_ctx = &ctx.element_ctx.clone();
                 let name = string_to_value(ctx, name);
-                let Some(name) = name.as_string() else {
+                let Some(name) = name.as_str() else {
                     return CommandResult::Error("Name in inc() wasn't resolved to string, use 'str' or 'strexpr:' or do something else".to_string());
                 };
-                let Some(amount) = string_to_value(ctx, amount).as_f64() else {
-                    return CommandResult::Error(
-                        "Value in inc() wasn't resolved to f64".to_string(),
-                    );
-                };
-                if let Some(key) = get_setting_key(&name) {
-                    let current = ctx.settings.read_setting(key);
+                let val = string_to_value(ctx, amount);
+                if let Some(amount) = val.as_f64() {
+                    if let Some(key) = get_setting_key(&name) {
+                        let current = ctx.settings.read_setting(key);
 
-                    if let Some(new_value) = current.add(amount) {
-                        ctx.settings.apply_setting(key, SettingOp::Set(new_value));
-                    } else {
-                        let steps = amount as isize;
+                        if let Some(new_value) = current.add(amount) {
+                            ctx.settings.apply_setting(key, SettingOp::Set(new_value));
+                        } else {
+                            let steps = amount as isize;
 
-                        match steps.cmp(&0) {
-                            Ordering::Greater => {
-                                for _ in 0..steps {
-                                    ctx.settings.apply_setting(key, SettingOp::CycleNext);
+                            match steps.cmp(&0) {
+                                Ordering::Greater => {
+                                    for _ in 0..steps {
+                                        ctx.settings.apply_setting(key, SettingOp::CycleNext);
+                                    }
                                 }
-                            }
-                            Ordering::Less => {
-                                for _ in 0..steps.unsigned_abs() {
-                                    ctx.settings.apply_setting(key, SettingOp::CyclePrev);
+                                Ordering::Less => {
+                                    for _ in 0..steps.unsigned_abs() {
+                                        ctx.settings.apply_setting(key, SettingOp::CyclePrev);
+                                    }
                                 }
+                                Ordering::Equal => {}
                             }
-                            Ordering::Equal => {}
                         }
-                    }
 
-                    return CommandResult::Ok;
+                        return CommandResult::Ok;
+                    }
                 }
 
-                let new_val =
-                    match Value::load_variable(&ctx.ui.variables, &ctx.ui.menus, element_ctx, name)
-                    {
-                        Some(Value::F64(f)) => Value::F64(f + amount),
-                        Some(Value::I64(i)) => Value::F64(i as f64 + amount),
-                        _ => Value::F64(amount),
-                    };
+                let var_val =
+                    Value::load_variable(&ctx.ui.variables, &ctx.ui.menus, element_ctx, name);
+                //println!("{:?} {:?}", var_val, name);
+                let new_val = match var_val {
+                    Some(Value::Array(mut vec)) => {
+                        vec.push(val);
+                        Value::Array(vec)
+                    }
+                    _ => {
+                        if var_val.is_none() {
+                            Value::Array(vec![val])
+                        } else {
+                            let Some(amount) = val.as_f64() else {
+                                return CommandResult::Error(
+                                    "Value in inc() wasn't resolved to f64".to_string(),
+                                );
+                            };
+                            match var_val {
+                                Some(Value::F64(f)) => Value::F64(f + amount),
+                                Some(Value::I64(i)) => Value::F64(i as f64 + amount),
+                                _ => Value::F64(amount),
+                            }
+                        }
+                    }
+                };
 
                 set_variable_or_property(ctx, &name, new_val)
             }
@@ -791,7 +873,7 @@ impl CommandQueue {
             UiCommand::DecVar { name, amount } => {
                 let element_ctx = &ctx.element_ctx.clone();
                 let name = string_to_value(ctx, name);
-                let Some(name) = name.as_string() else {
+                let Some(name) = name.as_str() else {
                     return CommandResult::Error(
                         "Name in dec_var() wasn't resolved to string".to_string(),
                     );
@@ -841,7 +923,7 @@ impl CommandQueue {
             UiCommand::MulVar { name, factor } => {
                 let element_ctx = &ctx.element_ctx.clone();
                 let name = string_to_value(ctx, name);
-                let Some(name) = name.as_string() else {
+                let Some(name) = name.as_str() else {
                     return CommandResult::Error(
                         "Name in mul_var() wasn't resolved to string".to_string(),
                     );
@@ -875,7 +957,7 @@ impl CommandQueue {
             UiCommand::ToggleVar { name } => {
                 let element_ctx = &ctx.element_ctx.clone();
                 let name = string_to_value(ctx, name);
-                let Some(name) = name.as_string() else {
+                let Some(name) = name.as_str() else {
                     return CommandResult::Error(
                         "Name in toggle_var() wasn't resolved to string".to_string(),
                     );
@@ -921,7 +1003,7 @@ impl CommandQueue {
             UiCommand::Clamp { name, min, max } => {
                 let element_ctx = &ctx.element_ctx.clone();
                 let name = string_to_value(ctx, name);
-                let Some(name) = name.as_string() else {
+                let Some(name) = name.as_str() else {
                     return CommandResult::Error(
                         "Name in clamp() wasn't resolved to string".to_string(),
                     );
@@ -1122,11 +1204,13 @@ impl CommandQueue {
                 let menu = string_to_value(ctx, menu).into_string();
                 let name = string_to_value(ctx, name).into_string();
                 let ap_name = string_to_value(ctx, ap_name).into_string();
+                //println!("{}", ap_var);
                 let ap_vars = string_to_value(ctx, ap_var);
+                //println!("{:?}", ap_vars);
                 let Some(ap_vars) = ap_vars
                     .as_array()
                     .map(|arr| arr.iter().map(|v| v.to_string()).collect())
-                    .or(ap_vars.as_string().map(|str| vec![str.to_string()]))
+                    .or(ap_vars.as_str().map(|str| vec![str.to_string()]))
                 else {
                     return CommandResult::Error(
                         "AP Vars in AddAP was not an array or single argument".to_string(),
@@ -1228,7 +1312,7 @@ impl CommandQueue {
                             optional_center: center.as_pos(),
                             optional_actions: actions.as_array().map(|a| {
                                 a.iter()
-                                    .flat_map(|v| v.as_string())
+                                    .flat_map(|v| v.as_str())
                                     .map(|str| str.to_string())
                                     .collect::<Vec<String>>()
                             }),
@@ -1260,7 +1344,7 @@ impl CommandQueue {
                     };
                     if let Some(actions) = actions.as_array().map(|a| {
                         a.iter()
-                            .flat_map(|v| v.as_string())
+                            .flat_map(|v| v.as_str())
                             .map(|str| str.to_string())
                             .collect::<Vec<String>>()
                     }) {
@@ -1395,7 +1479,7 @@ impl CommandQueue {
             } => {
                 let element_ctx = &ctx.element_ctx.clone();
                 let save_name = string_to_value(ctx, save_name);
-                let Some(save_name) = save_name.as_string() else {
+                let Some(save_name) = save_name.as_str() else {
                     return CommandResult::Error(format!(
                         "Save name '{}' in load_save() wasn't resolved to string",
                         save_name
@@ -1436,7 +1520,10 @@ impl CommandQueue {
                 let element_ctx = &ctx.element_ctx.clone();
                 //println!("printing: {}", statement);
                 let msg: String = string_to_value(ctx, statement).to_string();
-                println!("[UI] {}", msg);
+                ctx.ui
+                    .variables
+                    .push_array("CHAT", Value::String(msg.clone()));
+                println!("[UI Chat] {}", msg);
                 CommandResult::Ok
             }
 
@@ -1477,15 +1564,16 @@ impl CommandQueue {
                     args: Option<String>,
                 ) -> CommandResult {
                     let element_ctx = &ctx.element_ctx.clone();
+                    //println!("[Action Call] {}", function_name);
                     let actions = string_to_value(ctx, function_name);
-                    //println!("[Action Call] {}", actions);
-                    let actions: Vec<String> = if let Some(action) = actions.as_string() {
+                    //println!("[Action Call] {:?}", actions);
+                    let actions: Vec<String> = if let Some(action) = actions.as_str() {
                         vec![action.to_string()]
                     } else if let Some(actions) = actions.as_array() {
                         let mut result = Vec::with_capacity(actions.len());
 
                         for a in actions {
-                            let Some(action) = a.as_string() else {
+                            let Some(action) = a.as_str() else {
                                 return CommandResult::Error(
                                     "In call(), action in array wasn't a string".to_string(),
                                 );
@@ -1526,7 +1614,7 @@ impl CommandQueue {
                     args: Option<String>,
                 ) -> CommandResult {
                     let function_name = string_to_value(ctx, function_name);
-                    let Some(function_name) = function_name.as_string() else {
+                    let Some(function_name) = function_name.as_str() else {
                         return CommandResult::Error(
                             "Rust function in call() wasn't resolved to string, use 'str:' as in 'call(rust:str:function_name, [args])'".to_string(),
                         );
@@ -1571,7 +1659,7 @@ fn call_rust(ctx: &mut CommandContext, function_name: &str, args: Vec<Value>) {
         "create_save" => {
             let save_name = args
                 .get(0)
-                .and_then(|s| s.as_string())
+                .and_then(|s| s.as_str())
                 .unwrap_or_else(|| {
                     println!("Argument 0 of create_save() must be a String, it's the save name.");
                     "No save name"
@@ -1581,7 +1669,7 @@ fn call_rust(ctx: &mut CommandContext, function_name: &str, args: Vec<Value>) {
                 name: save_name.clone(),
                 difficulty: args
                     .get(1)
-                    .and_then(|s| s.as_string())
+                    .and_then(|s| s.as_str())
                     .unwrap_or_else(|| {
                         println!(
                             "Argument 1 of create_save() must be a String, it's the Difficulty."
@@ -1608,7 +1696,7 @@ fn call_rust(ctx: &mut CommandContext, function_name: &str, args: Vec<Value>) {
             println!("Created Save '{}': {:?}", save_name, create_result);
         }
         "play_sound" => {
-            let sound_name = args.get(0).and_then(|s| s.as_string());
+            let sound_name = args.get(0).and_then(|s| s.as_str());
             let Some(sound_name) = sound_name else {
                 println!(
                     "[Sounds] Argument 0 of {function_name} must be a sound_name: String, but it was: '{:?}'.",
@@ -1737,6 +1825,7 @@ pub fn string_to_value(ctx: &mut CommandContext, s: String) -> Value {
         &ctx.ui.menus,
         &ctx.element_ctx,
         s.as_str(),
+        false,
     );
     //println!("String to value; Input: '{}' Output: '{}'", s, val);
     val
@@ -1832,7 +1921,7 @@ pub fn exit_game(
     save_game(game_state, world, props, settings, variables, false);
 
     event_loop.exit();
-    print_exit_message()
+
     //std::process::exit(69); // Die.
 }
 pub fn save_game(
@@ -1948,6 +2037,7 @@ pub fn set_element_property(
                 &mut ctx.world.terrain.terrain_editor,
                 &mut ctx.renderer.props,
                 &mut ctx.ui.variables,
+                &mut ctx.world.roads.road_manager.roads,
             );
             ctx.world.buildings.start_preview(
                 &mut ctx.world.terrain.cursor,
@@ -1955,7 +2045,7 @@ pub fn set_element_property(
                 pos,
                 &mut ctx.world.zoning,
                 &mut ctx.ui.variables,
-                &ctx.world.roads,
+                &mut ctx.world.roads,
                 &ctx.renderer.road_renderer.mesh_manager,
             );
             //println!("{:?}", ctx.world.terrain.cursor.preview_building);
@@ -2366,7 +2456,7 @@ pub fn set_element_property(
                     if let Some(element) = get_element_mut(&mut ctx.ui.menus, &element_ref) {
                         let actions = new_actions
                             .iter()
-                            .flat_map(|a| a.as_string())
+                            .flat_map(|a| a.as_str())
                             .map(|str| str.to_string())
                             .collect::<Vec<_>>();
                         element.set_actions(actions);
@@ -2385,8 +2475,10 @@ pub fn set_element_property(
                 new_val.clone()
             }
             "text" => {
-                if let Some(new_text) = new_val.as_string() {
-                    if let Some(element) = get_element_mut(&mut ctx.ui.menus, &element_ref) {
+                if let Some(new_text) = new_val.as_str() {
+                    if let Some(element) =
+                        get_element_mut_dirty_layer(&mut ctx.ui.menus, &element_ref)
+                    {
                         element.set_text(new_text.to_string());
                     } else {
                         return CommandResult::Error(format!(
@@ -2404,10 +2496,72 @@ pub fn set_element_property(
                 }
                 new_val.clone()
             }
+            "tt" => {
+                if let Some(new_text) = new_val.as_str() {
+                    if let Some(element) =
+                        get_element_mut_dirty_layer(&mut ctx.ui.menus, &element_ref)
+                    {
+                        element.set_text(new_text.to_string());
+                        element.set_template(new_text.to_string());
+                    } else {
+                        return CommandResult::Error(format!(
+                            "set_element_property: element with ID: '{}' doesn't exist",
+                            element_ref.id
+                        ));
+                    }
+                } else {
+                    return CommandResult::Error(format!(
+                        "set_element_property: {}.{} expected string value, but got: {}",
+                        base,
+                        property,
+                        new_val.to_string()
+                    ));
+                }
+                new_val.clone()
+            }
             "template" => {
-                if let Some(new_template) = new_val.as_string() {
-                    if let Some(element) = get_element_mut(&mut ctx.ui.menus, &element_ref) {
+                //println!("Trying to set template of element '{element_ref:?}' with '{new_val:?}'");
+                if let Some(new_template) = new_val.as_str() {
+                    if let Some(element) =
+                        get_element_mut_dirty_layer(&mut ctx.ui.menus, &element_ref)
+                    {
                         element.set_template(new_template.to_string());
+                    } else {
+                        return CommandResult::Error(format!(
+                            "set_element_property: element with ID: '{}' doesn't exist",
+                            element_ref.id
+                        ));
+                    }
+                } else {
+                    return CommandResult::Error(format!(
+                        "set_element_property: {}.{} expected string value, but got: {}",
+                        base,
+                        property,
+                        new_val.to_string()
+                    ));
+                }
+                new_val.clone()
+            }
+
+            "anchor" => {
+                ////println!("Trying to set template of element '{element_ref:?}' with '{new_val:?}'");
+                if let Some(new_anchor) = new_val.as_str() {
+                    let anchor = Anchor::from_str(new_anchor);
+                    let anchor = match anchor {
+                        Ok(anchor) => anchor,
+                        Err(err) => {
+                            return CommandResult::Error(format!(
+                                "set_element_property: Text Anchor '{}' doesn't exist. Error: '{}'",
+                                new_anchor, err
+                            ));
+                        }
+                    };
+                    if let Some(element) =
+                        get_element_mut_dirty_layer(&mut ctx.ui.menus, &element_ref)
+                    {
+                        if let Some(text) = element.as_text_mut() {
+                            text.anchor = anchor;
+                        }
                     } else {
                         return CommandResult::Error(format!(
                             "set_element_property: element with ID: '{}' doesn't exist",

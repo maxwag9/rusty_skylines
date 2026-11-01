@@ -81,8 +81,12 @@ pub struct Utility {
     pub rail_color: [f32; 4],
     pub second_rail_color: [f32; 4],
     pub automatic_buildings_usage: UtilityUsage,
+    #[serde(default = "default_true")]
+    pub flows_to_consumer: bool,
 }
-
+fn default_true() -> bool {
+    true
+}
 #[revisioned(revision = 1)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UtilityRail {

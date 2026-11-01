@@ -236,11 +236,13 @@ pub enum ElementEvent {
         multi: bool,
     },
 
-    TextEditRequested,
-    TextEditEnded,
+    TextEditStart,
+    TextEditStop,
 
     Activated,
     Deactivated,
+    //InputBoxStartTyping,
+    EditingText,
 }
 
 #[derive(Clone, Debug)]
@@ -1184,6 +1186,7 @@ pub struct UiTouchManager {
     pub element_actives: HashMap<ElementRef, bool>,
     pub add_screen_resize_event: bool,
     pub top_hit: Option<HitTestResult>,
+    pub next_frame_global_events: Vec<GlobalEvent>,
 }
 
 impl UiTouchManager {
@@ -1207,6 +1210,7 @@ impl UiTouchManager {
             element_actives: HashMap::new(),
             add_screen_resize_event: true,
             top_hit: None,
+            next_frame_global_events: vec![],
         }
     }
     pub fn push_event<E>(&mut self, element_ref: E, event: ElementEvent)
@@ -1230,6 +1234,7 @@ impl UiTouchManager {
         self.selection.reset_frame_flags();
         self.events.clear();
         self.global_events.clear();
+        self.global_events = self.next_frame_global_events.drain(..).collect();
         // Update config from input modifiers
         self.config.multi_select_active = input.ctrl;
         self.config.additive_select_active = input.shift;

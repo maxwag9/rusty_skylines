@@ -1,7 +1,9 @@
 use crate::data::Cycle;
 use crate::data::FullScreenMode;
 use crate::data::SettingKey;
+use crate::helpers::get_start_message;
 use crate::helpers::implementations::register_svg_decoding_hook;
+use crate::helpers::modpack::ModManager;
 use crate::helpers::paths::data_dir;
 use crate::renderer::shadows::create_csm_shadow_texture;
 use crate::resources::{FrameTimeCheckpointType, Resources};
@@ -18,6 +20,7 @@ use crate::world::sound::sound::run_sounds;
 use crate::world::world::World;
 use glam::Vec2;
 use jxl_image_rs_integration::register_image_decoding_hook;
+use rand_distr::num_traits::Zero;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -45,6 +48,7 @@ pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct App {
     window: Option<Arc<Box<dyn Window>>>,
     resources: Option<Resources>,
+    custom_cursor: Option<Cursor>,
 }
 
 impl App {
@@ -52,6 +56,7 @@ impl App {
         Self {
             window: None,
             resources: None,
+            custom_cursor: None,
         }
     }
 }
@@ -105,6 +110,14 @@ impl ApplicationHandler for App {
             .ui
             .variables
             .set_string("cursor_mode", format!("{:#?}", world.terrain.cursor.mode));
+        resources
+            .ui
+            .variables
+            .set_array("CHAT", vec![Value::String(get_start_message())]);
+        resources.ui.variables.set_string(
+            "USERNAME",
+            whoami::username().unwrap_or("Entity 303".to_string()),
+        );
         resources.ui.variables.set_array(
             "screen",
             vec![window.surface_size().width, window.surface_size().height],
@@ -131,7 +144,9 @@ impl ApplicationHandler for App {
             .expect("Invalid cursor image");
 
             if let Ok(custom_cursor) = event_loop.create_custom_cursor(source) {
-                window.set_cursor(Cursor::Custom(custom_cursor));
+                let cursor = Cursor::Custom(custom_cursor);
+                window.set_cursor(cursor.clone());
+                self.custom_cursor = Some(cursor);
             }
         } else {
             error!("[App] Missing texture '{pointer_rel_path}'");
@@ -163,7 +178,7 @@ impl ApplicationHandler for App {
                 let cam_ctrl = &mut world.world_state.cam_controller;
                 let ui = &mut resources.ui;
                 let settings = &mut resources.settings;
-                let ui_options = &mut ui.touch_manager.options;
+
                 let input = &mut world.input;
                 let time = &world.time;
                 let down = event.state == ElementState::Pressed;
@@ -200,7 +215,21 @@ impl ApplicationHandler for App {
                 if input.action_repeat("Cycle MSAA") {
                     resources.render_core.cycle_msaa(settings);
                 }
-
+                if input.action_repeat("Reload") {
+                    let renderer = &mut resources.render_core;
+                    resources.game_state.mod_manager.reload_full(
+                        &mut renderer.shader_watcher,
+                        renderer.window_size,
+                        settings,
+                        &renderer.queue,
+                        &renderer.device,
+                        world,
+                        ui,
+                        &renderer.props,
+                        &mut renderer.render_manager,
+                    );
+                }
+                let input = &mut world.input;
                 if input.action_repeat("Switch Debug Render Mode") {
                     settings.debug_view_state = settings.debug_view_state.next();
                 }
@@ -214,6 +243,12 @@ impl ApplicationHandler for App {
                 if input.action_repeat("Toggle Reversed Depth Z") {
                     settings.reversed_depth_z = !settings.reversed_depth_z;
                 }
+                if input.action_released("Exit to Main Menu") {
+                    settings.show_gui = true;
+                    let ui_options = &mut ui.touch_manager.options;
+                    ui_options.show_gui = settings.show_gui;
+                    //panic!("YEs")
+                }
                 // if input.action_repeat("Change Camera Mode") {
                 //     camera.toggle_mode();
                 // }
@@ -226,6 +261,7 @@ impl ApplicationHandler for App {
                     settings.show_gui = true;
                     ui.variables.set_bool("show_gui", settings.show_gui);
                 }
+                let ui_options = &mut ui.touch_manager.options;
                 // Toggle override_mode
                 if input.action_repeat("Toggle override mode") {
                     settings.override_mode = !settings.override_mode;
@@ -237,10 +273,10 @@ impl ApplicationHandler for App {
                     settings.show_world = !settings.show_world;
                     ui.variables.set_bool("show_world", settings.show_world);
                 }
-                if input.action_repeat("Toggle drive car") {
-                    settings.drive_car = !settings.drive_car;
-                    ui.variables.set_bool("drive_car", settings.drive_car);
-                }
+                // if input.action_repeat("Toggle drive car") {
+                //     settings.drive_car = !settings.drive_car;
+                //     ui.variables.set_bool("drive_car", settings.drive_car);
+                // }
                 if input.action_repeat("Toggle noclip") {
                     settings.noclip = !settings.noclip;
                     ui.variables.set_bool("noclip", settings.noclip);
@@ -259,16 +295,16 @@ impl ApplicationHandler for App {
                 }
 
                 // Save GUI
-                if input.action_pressed_once("Save GUI layout") {
-                    match ui.save_gui_to_file(
-                        data_dir("ui_data/menus"),
-                        data_dir("ui_data/menus/advanced_primitives"),
-                        resources.window.surface_size().cast::<f32>(),
-                    ) {
-                        Ok(_) => println!("GUI layout saved"),
-                        Err(e) => eprintln!("Failed to save GUI layout: {e}"),
-                    }
-                }
+                // if input.action_pressed_once("Save GUI layout") {
+                //     match ui.save_gui_to_file(
+                //         data_dir("ui_data/menus"),
+                //         data_dir("ui_data/menus/advanced_primitives"),
+                //         resources.window.surface_size().cast::<f32>(),
+                //     ) {
+                //         Ok(_) => println!("GUI layout saved"),
+                //         Err(e) => eprintln!("Failed to save GUI layout: {e}"),
+                //     }
+                // }
                 if input.action_pressed_once("Toggle Cursor Mode") {
                     world.events.send(world.terrain.cursor.mode.next_command());
                 }
@@ -349,9 +385,13 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-
             WindowEvent::PointerMoved { position, .. } => {
                 if let Some(resources) = self.resources.as_mut() {
+                    if let Some(cursor) = &self.custom_cursor {
+                        if let Some(window) = self.window.as_ref() {
+                            window.set_cursor(cursor.clone());
+                        }
+                    }
                     let input = &mut resources.world.input;
                     input.handle_mouse_move(position.x, position.y);
 
@@ -367,16 +407,14 @@ impl ApplicationHandler for App {
                         .variables
                         .set_array("mouse_pos_delta", delta.to_array());
                     // camera rotation ONLY if needed & dragging
-                    if input.mouse.buttons.middle.pressed {
+                    if input.action_down("Orbit") {
                         let cam_controller = &mut resources.world.world_state.cam_controller;
-                        let pitch_s = 0.002;
-                        let yaw_s = 0.0016;
+                        let camera = &mut resources.world.world_state.camera;
+                        let fov_deg = camera.fov.clamp(0.01, 120.0);
+                        let fov_scale = fov_deg / 60.0;
 
-                        cam_controller.target_yaw += delta.x * yaw_s;
-                        cam_controller.target_pitch += delta.y * pitch_s;
-
-                        cam_controller.yaw_velocity = delta.x * yaw_s;
-                        cam_controller.pitch_velocity = delta.y * pitch_s;
+                        cam_controller.target_yaw += delta.x * 0.0016 * fov_scale;
+                        cam_controller.target_pitch += delta.y * 0.002 * fov_scale;
                     }
                 }
             }
@@ -390,7 +428,12 @@ impl ApplicationHandler for App {
                     {
                         let cam_controller = &mut resources.world.world_state.cam_controller;
                         let zoom_factor = 10.0;
-                        cam_controller.zoom_velocity -= scroll.y * zoom_factor;
+                        if cam_controller.is_zoomed() {
+                            cam_controller
+                                .change_zoom_amount(&resources.world.world_state.camera, scroll.y);
+                        } else {
+                            cam_controller.zoom_velocity -= scroll.y * zoom_factor;
+                        }
                     }
                 }
             }
@@ -619,6 +662,9 @@ fn update_stuff(resources: &mut Resources) {
         ui,
     );
     world.update_panorama(game_state);
+    world
+        .input
+        .set_keybinds_blocked(ui.touch_manager.editor.editing_text.is_some());
     let World {
         world_state,
         time,
@@ -632,7 +678,7 @@ fn update_stuff(resources: &mut Resources) {
         &render_core.pipelines.buffers.pick,
         &world_state.camera,
     );
-    let can_time_control = !settings.editor_mode && !settings.drive_car && settings.show_world;
+    let can_time_control = !settings.editor_mode && settings.show_world; // && !settings.drive_car
     ui.variables.set_bool("sim_running", simulation.running());
     if can_time_control && input.action_pressed_once("Toggle Stop Time") {
         simulation.toggle();
@@ -670,8 +716,13 @@ fn update_stuff(resources: &mut Resources) {
         ui.variables
             .set_f64("total_game_time", time.total_game_time);
         //println!("{}, {:?}", time.total_game_time, ui.variables.get("total_game_time"));
+        ui.variables.set_i64("year", time.year());
+        ui.variables.set_f64("year_float", time.year_float());
         ui.variables.set_i64("hour", time.hour());
         ui.variables.set_i64("minute", time.minute());
+        ui.variables.set_i64("day", time.day());
+        ui.variables.set_string("date", time.date());
+
         ui.variables
             .set_i64("money", world.city_state.economy.money);
         //println!("World population: {}", world.city_state.world_population);
@@ -802,7 +853,11 @@ fn update_stuff(resources: &mut Resources) {
     }
 }
 fn apply_settings(resources: &mut Resources) {
-    let changed = resources.settings.take_changed();
+    let changed = if resources.world.time.frame_count.is_zero() {
+        resources.settings.get_all_keys()
+    } else {
+        resources.settings.take_changed()
+    };
 
     for key in changed {
         match key {
@@ -842,6 +897,25 @@ fn apply_settings(resources: &mut Resources) {
                     .set_tps(resources.settings.target_tps.max(1.0));
             }
 
+            SettingKey::GenerationDistance | SettingKey::RenderDistance => {
+                resources.world.terrain.generation_distance =
+                    resources.settings.generation_distance as usize;
+                resources.world.terrain.render_distance =
+                    resources.settings.render_distance as usize;
+                resources.world.terrain.update_spiral();
+            }
+            SettingKey::CloudQuality | SettingKey::RenderClouds => {
+                resources.render_core.clouds.settings.quality = resources.settings.cloud_quality;
+                resources.render_core.clouds.settings.enabled = resources.settings.render_clouds;
+            }
+            SettingKey::Locale => {
+                let ui = &mut resources.ui;
+                ui.locales_manager.load_language(
+                    resources.settings.locale.as_str(),
+                    &mut ui.variables,
+                    &resources.game_state.mod_manager,
+                );
+            }
             _ => {}
         }
     }

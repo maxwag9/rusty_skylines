@@ -1,4 +1,4 @@
-#![allow(dead_code, unused_variables, private_interfaces)]
+#![allow(dead_code, unused_variables, private_interfaces, unused_imports)]
 
 mod app;
 mod commands;
@@ -11,13 +11,16 @@ mod systems;
 mod ui;
 pub mod world;
 
-use crate::helpers::print_start_message;
+use crate::app::GAME_VERSION;
+use crate::helpers::{get_start_message, print_exit_message};
 use app::App;
 use tracing_subscriber::FmtSubscriber;
 use winit::event_loop::{ControlFlow, EventLoop};
 
 fn main() {
-    print_start_message();
+    let start_message = get_start_message();
+    println!("{}", start_message);
+    println!("Rusty Skylines Alpha v{}", GAME_VERSION);
     let event_loop = EventLoop::new().expect("Failed to create event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
     let subscriber = FmtSubscriber::builder()
@@ -31,4 +34,5 @@ fn main() {
     event_loop
         .run_app(app)
         .expect("Failed to run event loop application");
+    print_exit_message()
 }

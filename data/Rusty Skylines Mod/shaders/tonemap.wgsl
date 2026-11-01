@@ -56,9 +56,16 @@ struct PostProcessUniforms {
     color_adj: vec4<f32>,
     vignette: vec4<f32>,
 };
+struct ExposureState {
+    exposure: f32,
+    average_log_luminance: f32,
+    target_exposure: f32,
+    _padding: f32,
+};
 
-@group(1) @binding(0)
-var<uniform> post: PostProcessUniforms;
+
+@group(1) @binding(0) var<uniform> post: PostProcessUniforms;
+@group(1) @binding(1) var<storage, read> exposure_state: ExposureState;
 
 fn tonemap_aces(
     a: f32,
@@ -144,6 +151,11 @@ fn fs_main(in: VSOut) -> FSOut {
         uv
     ).rgb;
 
+
+
+
+    let exposed_hdr = hdr * exposure_state.exposure;
+
     #ifdef TONEMAP_UI
         // UI gets HDR post processing
         let ui = textureSample(
@@ -153,13 +165,13 @@ fn fs_main(in: VSOut) -> FSOut {
         );
 
         let processed_input = mix(
-            hdr,
+            exposed_hdr,
             ui.rgb,
             ui.a
         );
     #else
         // UI doesn't get HDR post processing
-        let processed_input = hdr;
+        let processed_input = exposed_hdr;
     #endif
 
     let exposed = processed_input * pow(

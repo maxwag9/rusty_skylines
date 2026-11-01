@@ -127,9 +127,10 @@ fn format_memory(bytes: u64) -> String {
 }
 impl Resources {
     pub fn new(window: Arc<Box<dyn Window>>, event_loop: &dyn ActiveEventLoop) -> Self {
-        let mut settings = Settings::load(rusty_skylines_dir("settings.toml"));
+        let mut settings = crate::data::Settings::load(rusty_skylines_dir("settings.toml"));
         let mut variables = Variables::new();
         variables.set_string("GAME_VERSION", GAME_VERSION);
+
         let editor_mode = settings.editor_mode.clone();
 
         let (surface, adapter, size) = create_surface_and_adapter(window.clone(), event_loop);
@@ -169,8 +170,8 @@ impl Resources {
             );
         }
 
-        let mut sys = System::new_all();
-        sys.refresh_all();
+        let mut sys = System::new_all().expect("Could not create system system, lol");
+        sys.refresh_all(); // Need to unwrap for no reason
         let cpus = sys.cpus();
 
         if let Some(cpu) = cpus.first() {
@@ -187,11 +188,11 @@ impl Resources {
 
         println!("RAM: {}", ram_comment(sys));
         println!(
-            "OS: {}, OS kernel: {}, System name: {}, Average System load last 5 minutes: {}%",
+            "OS: {}, OS kernel: {:?}, System name: {}, Average System load last 5 minutes: {}%",
             System::long_os_version().unwrap_or_default(),
             System::kernel_long_version(),
             System::name().unwrap_or_default(),
-            System::load_average().five
+            System::load_average().unwrap_or_default().five
         );
         println!(
             "Backend: {}, Present mode: {}, MSAA: {}x",
@@ -314,6 +315,12 @@ pub struct Time {
 }
 
 impl Time {
+    pub(crate) fn get_spring(&self) -> f64 {
+        self.day_length * DAYS_PER_YEAR * 0.3 // Somewhere in Spring
+    }
+}
+
+impl Time {
     pub fn new() -> Self {
         let now = Instant::now();
         let target_fps = 100.0;
@@ -322,7 +329,7 @@ impl Time {
         let tps = 60.0;
         let target_sim_dt = 1.0 / tps;
 
-        Self {
+        let mut time = Self {
             timer: Default::default(),
             last_frame: now,
 
@@ -356,7 +363,9 @@ impl Time {
             frame_start: Instant::now(),
             cpu_frame_duration: Default::default(),
             after_acquire_start: Instant::now(),
-        }
+        };
+        time.change_game_time(TimeChangeOperation::Set(time.get_spring()));
+        time
     }
 
     #[inline]
@@ -464,11 +473,13 @@ impl Time {
     }
 
     pub fn update_hour(&mut self) {
-        self.total_days = self.total_game_time % self.day_length;
-        self.total_hours = self.total_days * 24.0;
-        let day_progress = self.total_days / self.day_length;
-        self.hour = day_progress * 24.0;
+        let elapsed_days = self.total_game_time / self.day_length;
+
+        self.total_days = elapsed_days;
+        self.total_hours = elapsed_days * HOURS_PER_DAY;
+        self.hour = elapsed_days.rem_euclid(1.0) * HOURS_PER_DAY;
     }
+
     #[inline]
     pub fn hour(&self) -> u32 {
         let hours = self.hour.floor() as u32;
@@ -487,6 +498,25 @@ impl Time {
     pub fn year(&self) -> u32 {
         let current_year = self.astronomy.current_year as u32;
         current_year
+    }
+    #[inline]
+    pub fn year_float(&self) -> f64 {
+        let current_year = self.astronomy.current_year;
+        current_year
+    }
+    #[inline]
+    pub fn day(&self) -> u32 {
+        let elapsed_days = (self.total_game_time / self.day_length).floor().max(0.0) as u64;
+        (elapsed_days % DAYS_PER_YEAR as u64) as u32 + 1
+    }
+
+    #[inline]
+    pub fn date(&self) -> String {
+        format!(
+            "{:02}/{:04}",
+            self.day(),
+            self.astronomy.current_year.floor() as u32
+        )
     }
     #[inline]
     pub fn school_year(&self) -> u32 {
@@ -607,6 +637,8 @@ pub struct Uniforms {
     pub reversed_depth_z: u32,
     pub csm_enabled: u32,
     pub near_far_depth: [f32; 2],
+    pub solar_eclipse_coverage: f32,
+    pub _pad_eclipse: [f32; 3],
 }
 
 pub trait IntoTimerPath {

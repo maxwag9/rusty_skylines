@@ -1,6 +1,8 @@
 use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos, chunk_size};
+use crate::world::camera::camera::ZoomAnchor;
 use crate::world::terrain::chunk_builder::ChunkHeightGrid;
 use glam::{Mat4, Vec2, Vec3, Vec4};
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PickUniform {
@@ -532,4 +534,84 @@ pub fn ray_from_mouse_pixels(
         origin: Vec3::ZERO,
         dir,
     }
+}
+
+pub fn make_zoom_anchor(cursor_position: Vec2, viewport_size: Vec2) -> ZoomAnchor {
+    let width = viewport_size.x.max(1.0);
+    let height = viewport_size.y.max(1.0);
+
+    ZoomAnchor {
+        ndc: Vec2::new(
+            cursor_position.x / width * 2.0 - 1.0,
+            1.0 - cursor_position.y / height * 2.0,
+        ),
+        aspect: (width / height).max(0.0001),
+    }
+}
+
+pub fn cursor_ray(yaw: f32, pitch: f32, fov: f32, anchor: ZoomAnchor) -> Vec3 {
+    let cp = pitch.cos();
+    let sp = pitch.sin();
+    let cy = yaw.cos();
+    let sy = yaw.sin();
+
+    let forward = Vec3::new(-cp * cy, -sp, -cp * sy);
+    let right = Vec3::new(sy, 0.0, -cy);
+    let up = Vec3::new(-sp * cy, cp, -sp * sy);
+
+    let tan_half_fov = (fov.to_radians() * 0.5).tan();
+    let horizontal = anchor.ndc.x * anchor.aspect * tan_half_fov;
+    let vertical = anchor.ndc.y * tan_half_fov;
+
+    (forward + right * horizontal + up * vertical).normalize()
+}
+
+pub fn solve_cursor_angles(
+    target_direction: Vec3,
+    anchor: ZoomAnchor,
+    fov: f32,
+    initial_yaw: f32,
+    initial_pitch: f32,
+) -> (f32, f32) {
+    let mut yaw = initial_yaw;
+    let mut pitch = initial_pitch.clamp(-89.9_f32.to_radians(), 89.9_f32.to_radians());
+
+    let epsilon = 0.0001;
+    let min_pitch = -89.9_f32.to_radians();
+    let max_pitch = 89.9_f32.to_radians();
+
+    for _ in 0..10 {
+        let current = cursor_ray(yaw, pitch, fov, anchor);
+        let error = current - target_direction;
+
+        if error.length_squared() < 1e-12 {
+            break;
+        }
+
+        let yaw_derivative = (cursor_ray(yaw + epsilon, pitch, fov, anchor) - current) / epsilon;
+
+        let pitch_derivative = (cursor_ray(yaw, pitch + epsilon, fov, anchor) - current) / epsilon;
+
+        let a = yaw_derivative.dot(yaw_derivative);
+        let b = yaw_derivative.dot(pitch_derivative);
+        let c = pitch_derivative.dot(pitch_derivative);
+
+        let determinant = a * c - b * b;
+
+        if !determinant.is_finite() || determinant.abs() < 1e-10 {
+            break;
+        }
+
+        let r_yaw = yaw_derivative.dot(error);
+        let r_pitch = pitch_derivative.dot(error);
+
+        let delta_yaw = ((-c * r_yaw + b * r_pitch) / determinant).clamp(-0.25, 0.25);
+
+        let delta_pitch = ((b * r_yaw - a * r_pitch) / determinant).clamp(-0.25, 0.25);
+
+        yaw += delta_yaw;
+        pitch = (pitch + delta_pitch).clamp(min_pitch, max_pitch);
+    }
+
+    (yaw, pitch)
 }

@@ -1,0 +1,26 @@
+name: chat_text
+elements:
+  - !Text
+    id: button_text
+    actions:
+      - set(str:self.text, var:{ap.2}); set(str:self.template, var:{ap.2}); set(str:self.center.y, expr:lerp({chat_bottom}-{text_line_height_chat}, {chat_top}, {ap.1}/({texts_amount_chat}-1)));  # print({ap.1})              #print(var:{ap.2});
+    x: 0
+    y: 0
+    pt: 15.0
+    resize_behaviour:
+      width: uniform
+      height: y
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 0.9
+    text: 'idk why nothing shows, just wait for the population of the array pls!'
+    anchor: CenterLeft
+    decorations:
+      - color: [ 0.0, 0.0, 0.0, 1.0 ]
+        spread: 2.0
+    misc:
+      active: true
+      touchable: false
+      editable: true

@@ -1,22 +1,11 @@
 #include "includes/uniforms.wgsl"
+#include "includes/sky_uniforms.wgsl"
 
 struct WaterUniform {
     sea_level: f32,
     color: vec4<f32>,
     wave_tiling: f32,
     wave_strength: f32,
-};
-
-struct SkyUniform {
-    star_rotation: mat4x4<f32>,
-    exposure: f32,
-    moon_phase: f32,
-    sun_size: f32,
-    sun_intensity: f32,
-    moon_size: f32,
-    moon_intensity: f32,
-    _pad1: f32,
-    _pad2: f32,
 };
 
 @group(1) @binding(0) var<uniform> uniforms: Uniforms;

@@ -111,7 +111,7 @@ macro_rules! define_commands {
                     }
                 ),*,
                 _ => {
-                    eprintln!("[Warning] Unknown UI command: '{}'", func_name);
+                    eprintln!("[Warning] Unknown UI command: '{}', Args: '{:?}'", func_name, args);
                     None
                 }
             }
@@ -285,6 +285,8 @@ macro_rules! define_commands {
 // COMMAND DEFINITIONS - I Just add a line here when I add a new UiCommand!
 define_commands! {
     // ===== MENU COMMANDS =====
+    "text_utils" => TextUtils {menu: String, layer: String, id: String, action: String},
+    "deselect_all" => DeselectAll,
     "open_menu" | "openmenu"
         => OpenMenu {menu_name: String },
 
@@ -416,6 +418,7 @@ pub enum ActionEvent {
     DoubleClick,
     ScrollOnElement,
     Select,
+    DeSelectAll,
     DeSelect,
     DragMove,
     Nothing,
@@ -426,6 +429,9 @@ pub enum ActionEvent {
     ScreenResize,
     DragStart,
     DragEnd,
+    TextEditStart,
+    TextEditStop,
+    EditingText,
 }
 impl ActionEvent {
     pub fn from_element_event(element_event: &ElementEvent) -> ActionEvent {
@@ -461,14 +467,15 @@ impl ActionEvent {
 
             ElementEvent::Deactivated { .. } => ActionEvent::Deactivated,
 
-            ElementEvent::TextEditRequested => ActionEvent::Nothing,
+            ElementEvent::TextEditStart => ActionEvent::TextEditStart,
 
-            ElementEvent::TextEditEnded => ActionEvent::Nothing,
+            ElementEvent::TextEditStop => ActionEvent::TextEditStop,
+            ElementEvent::EditingText => ActionEvent::EditingText,
         }
     }
     pub fn from_global_event(global_event: &GlobalEvent) -> ActionEvent {
         match global_event {
-            GlobalEvent::DeselectAllRequested {} => ActionEvent::DeSelect,
+            GlobalEvent::DeselectAllRequested => ActionEvent::DeSelectAll,
             GlobalEvent::StartUp { .. } => ActionEvent::StartUp,
 
             GlobalEvent::ScreenResize { .. } => ActionEvent::ScreenResize,
@@ -482,6 +489,7 @@ impl ActionEvent {
     pub fn is_always_event(&self) -> bool {
         match self {
             ActionEvent::Select => true,
+            ActionEvent::DeSelectAll => true,
             ActionEvent::DeSelect => true,
             ActionEvent::Activated => true,
             ActionEvent::Deactivated => true,
@@ -893,7 +901,11 @@ fn button_matches(
         ParsedButton::Back => &buttons.back,
         ParsedButton::Forward => &buttons.forward,
         ParsedButton::Key(key) => {
-            return match keybind_trigger {
+            // if key == "Enter".to_string() {
+            //     println!("{} {} {:?}", key, input.combo_down(&key), keybind_trigger);
+            // }
+
+            let p = match keybind_trigger {
                 KeyBindTrigger::Down => {
                     if input.action_known(&key) {
                         input.action_down(&key)
@@ -927,6 +939,8 @@ fn button_matches(
                     }
                 }
             };
+            //println!("{}", p);
+            return p;
         }
     };
     state.pressed || state.just_released
@@ -1190,7 +1204,7 @@ fn try_parse_on(input: &str, filters: &mut ActionFilters) -> Option<usize> {
         "down" | "d" | "hold" => ActionEvent::Down,
         "scroll" | "s" => ActionEvent::ScrollOnElement,
         "sel" => ActionEvent::Select,
-        "desel" => ActionEvent::DeSelect,
+        "desel" => ActionEvent::DeSelectAll,
         "activated" => ActionEvent::Activated,
         "deactivated" => ActionEvent::Deactivated,
         "startup" => ActionEvent::StartUp,
@@ -1520,13 +1534,23 @@ fn filters_match(
 
     // Check event filters
     if !filters.events.is_empty() {
-        let any_event_matches = filters.events.iter().any(|e| events.contains(e));
+        // let p = events.contains(&ActionEvent::DeSelectAll) && filters.events.contains(&ActionEvent::DeSelectAll);
 
+        let any_event_matches = filters.events.iter().any(|e| events.contains(e));
+        // if p {
+        //     println!("{:?};;;;; {:?} {:?}, Any event matches: {}", events, filters.events, element_ctx, any_event_matches);
+        // }
         if !any_event_matches {
             if !filters.events.iter().any(|e| e == &ActionEvent::Always) {
+                // if p {
+                //     println!("NOT PASSED");
+                // }
                 return false;
             }
         }
+        // if p {
+        //     println!("PASSED");
+        // }
     }
 
     // If in editor mode, require the action to explicitly allow editor_mode.

@@ -1,9 +1,11 @@
 use crate::data::Settings;
 use crate::helpers::hsv::lerp;
+use crate::helpers::mouse_ray::{cursor_ray, make_zoom_anchor, solve_cursor_angles};
 use crate::helpers::positions::*;
 use crate::world::terrain::terrain_subsystem::Terrain;
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 use std::time::Instant;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CameraMode {
     /// `target` is the pivot point; the eye orbits around it at `orbit_radius`.
@@ -197,7 +199,11 @@ struct ModeTransition {
     from_near: f32,
     to_near: f32,
 }
-
+#[derive(Debug, Clone, Copy)]
+pub struct ZoomAnchor {
+    pub ndc: Vec2,
+    pub aspect: f32,
+}
 #[derive(Debug, Clone)]
 pub struct CameraController {
     pub velocity: Vec3,
@@ -210,7 +216,7 @@ pub struct CameraController {
     pub orbit_damping_release: f32,
     pub zoom_damping: f32,
     prev_fov: f32,
-    zoom_from_fov: f32,
+    zoom_original_fov: f32,
     pub(crate) zoom_time_start: Option<Instant>,
     zoom_time_end: Option<Instant>,
     target_zoom_fov: f32,
@@ -220,6 +226,8 @@ pub struct CameraController {
     pub orbit_fov: f32,
     pub first_person_fov: f32,
     mode_transition: Option<ModeTransition>,
+    zoom_anchor: Option<ZoomAnchor>,
+    zoom_from_fov: f32,
 }
 
 impl CameraController {
@@ -238,10 +246,12 @@ impl CameraController {
             target_zoom_fov: 15.0,
             zoom_time_start: None,
             zoom_time_end: None,
-            zoom_from_fov: 14.0,
+            zoom_original_fov: 14.0,
             orbit_fov: 55.0,
             first_person_fov: 90.0,
             mode_transition: None,
+            zoom_anchor: None,
+            zoom_from_fov: 14.0,
         }
     }
 
@@ -255,7 +265,7 @@ impl CameraController {
         // Any in-flight ADS zoom shouldn't fight the mode blend.
         self.zoom_time_start = None;
         self.zoom_time_end = None;
-
+        self.zoom_anchor = None;
         let from_fov = camera.fov;
         let from_near = camera.near;
 
@@ -306,23 +316,11 @@ impl CameraController {
     }
 
     pub fn zoom(&mut self, camera: &mut Camera, zoom_speed: f32) {
-        if self.zoom_time_start.is_none() {
-            self.zoom_time_end = None;
-            self.zoom_time_start = Some(Instant::now());
-            self.zoom_from_fov = camera.fov;
-        }
-        let Some(start) = self.zoom_time_start else {
-            return;
-        };
-        let zoom_time = (0.5 * zoom_speed).max(0.0001);
-        let elapsed = (Instant::now() - start).as_secs_f32();
-        let t = (elapsed / zoom_time).clamp(0.0, 1.0);
-        let t = t * t * (3.0 - 2.0 * t);
-        camera.fov = lerp(self.zoom_from_fov, self.target_zoom_fov, t);
+        self.zoom_at_cursor(camera, zoom_speed, Vec2::splat(0.5), Vec2::ONE);
     }
 
     pub fn zoom_deactivate(&mut self, camera: &Camera) {
-        self.zoom_from_fov = camera.fov;
+        self.zoom_original_fov = camera.fov;
         self.zoom_time_start = None;
         self.zoom_time_end = Some(Instant::now());
     }
@@ -331,17 +329,113 @@ impl CameraController {
         if self.zoom_time_start.is_some() {
             return;
         }
+
         let Some(end_time) = self.zoom_time_end else {
             return;
         };
+
+        let anchor = self.zoom_anchor.unwrap_or(ZoomAnchor {
+            ndc: Vec2::ZERO,
+            aspect: 1.0,
+        });
+
+        let world_direction = cursor_ray(camera.yaw, camera.pitch, camera.fov, anchor);
+
         let unzoom_time = (0.5 * unzoom_speed).max(0.0001);
         let elapsed = (Instant::now() - end_time).as_secs_f32();
         let t = (elapsed / unzoom_time).clamp(0.0, 1.0);
         let t = t * t * (3.0 - 2.0 * t);
-        camera.fov = lerp(self.zoom_from_fov, self.prev_fov, t);
+
+        camera.fov = lerp(self.zoom_original_fov, self.prev_fov, t);
+
+        self.preserve_cursor_ray(camera, anchor, world_direction);
+
         if t >= 1.0 {
             self.zoom_time_end = None;
+            self.zoom_anchor = None;
         }
+    }
+
+    pub fn change_zoom_amount(&mut self, camera: &Camera, scroll: f32) {
+        self.target_zoom_fov *= 1.0 - scroll * 0.15;
+        self.target_zoom_fov = self.target_zoom_fov.clamp(0.00005, 160.0);
+        self.zoom_from_fov = camera.fov;
+        self.zoom_time_end = None;
+        self.zoom_time_start = Some(Instant::now());
+        self.zoom_anchor = None;
+    }
+
+    pub fn change_zoom_amount_at(
+        &mut self,
+        camera: &Camera,
+        scroll: f32,
+        cursor_position: Vec2,
+        viewport_size: Vec2,
+    ) {
+        self.change_zoom_amount(camera, scroll);
+
+        self.zoom_anchor = Some(make_zoom_anchor(cursor_position, viewport_size));
+    }
+
+    pub fn is_zoomed(&self) -> bool {
+        self.zoom_time_start.is_some()
+    }
+
+    pub fn zoom_at_cursor(
+        &mut self,
+        camera: &mut Camera,
+        zoom_speed: f32,
+        cursor_position: Vec2,
+        viewport_size: Vec2,
+    ) {
+        if self.zoom_time_start.is_none() {
+            self.zoom_time_end = None;
+            self.zoom_time_start = Some(Instant::now());
+            self.zoom_original_fov = camera.fov;
+            self.zoom_from_fov = camera.fov;
+            self.zoom_anchor = Some(make_zoom_anchor(cursor_position, viewport_size));
+        } else if self.zoom_anchor.is_none() {
+            self.zoom_anchor = Some(make_zoom_anchor(cursor_position, viewport_size));
+        }
+
+        let Some(start) = self.zoom_time_start else {
+            return;
+        };
+
+        let anchor = self.zoom_anchor.unwrap_or(ZoomAnchor {
+            ndc: Vec2::ZERO,
+            aspect: 1.0,
+        });
+
+        let world_direction = cursor_ray(camera.yaw, camera.pitch, camera.fov, anchor);
+
+        let zoom_time = (0.5 * zoom_speed).max(0.0001);
+        let elapsed = (Instant::now() - start).as_secs_f32();
+        let t = (elapsed / zoom_time).clamp(0.0, 1.0);
+        let t = t * t * (3.0 - 2.0 * t);
+
+        camera.fov = lerp(self.zoom_from_fov, self.target_zoom_fov, t);
+
+        self.preserve_cursor_ray(camera, anchor, world_direction);
+    }
+
+    fn preserve_cursor_ray(
+        &mut self,
+        camera: &mut Camera,
+        anchor: ZoomAnchor,
+        world_direction: Vec3,
+    ) {
+        let old_yaw = camera.yaw;
+        let old_pitch = camera.pitch;
+
+        let (yaw, pitch) =
+            solve_cursor_angles(world_direction, anchor, camera.fov, old_yaw, old_pitch);
+
+        camera.yaw = yaw;
+        camera.pitch = pitch;
+
+        self.target_yaw += yaw - old_yaw;
+        self.target_pitch += pitch - old_pitch;
     }
 }
 

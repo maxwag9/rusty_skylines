@@ -331,12 +331,12 @@ pub fn create_procedural_car() -> (Vec<CarVertex>, Vec<u32>) {
         ];
 
         let faces = [
-            ([0, 3, 2, 1], [0.0, -1.0, 0.0]),
-            ([4, 5, 6, 7], [0.0, 1.0, 0.0]),
-            ([0, 4, 7, 3], [-1.0, 0.0, 0.0]),
-            ([1, 2, 6, 5], [1.0, 0.0, 0.0]),
-            ([3, 7, 6, 2], [0.0, 0.0, 1.0]),
-            ([1, 5, 4, 0], [0.0, 0.0, -1.0]),
+            ([0, 1, 2, 3], [0.0, -1.0, 0.0]),
+            ([4, 7, 6, 5], [0.0, 1.0, 0.0]),
+            ([0, 3, 7, 4], [-1.0, 0.0, 0.0]),
+            ([1, 5, 6, 2], [1.0, 0.0, 0.0]),
+            ([3, 2, 6, 7], [0.0, 0.0, 1.0]),
+            ([0, 4, 5, 1], [0.0, 0.0, -1.0]),
         ];
 
         for (face, fallback_normal) in faces {
@@ -349,10 +349,8 @@ pub fn create_procedural_car() -> (Vec<CarVertex>, Vec<u32>) {
                 [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
             ));
 
-            let normal = if normal[0].is_finite()
-                && normal[1].is_finite()
-                && normal[2].is_finite()
-                && (normal[0].abs() + normal[1].abs() + normal[2].abs()) > 0.0
+            let normal = if normal.iter().all(|n| n.is_finite())
+                && normal.iter().map(|n| n.abs()).sum::<f32>() > 0.0
             {
                 normal
             } else {
@@ -416,7 +414,7 @@ pub fn create_procedural_car() -> (Vec<CarVertex>, Vec<u32>) {
             let c = base + n * 2 + 1;
             let d = base + n * 2;
 
-            indices.extend_from_slice(&[a, b, c, a, c, d]);
+            indices.extend_from_slice(&[a, d, c, a, c, b]);
         }
 
         let left_center = vertices.len() as u32;

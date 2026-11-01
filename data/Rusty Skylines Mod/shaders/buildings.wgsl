@@ -1,5 +1,6 @@
 #include "includes/shadow.wgsl"
 #include "includes/uniforms.wgsl"
+#include "includes/simple_lighting.wgsl"
 
 struct VertexInput {
     @location(0) chunk_xz: vec2<i32>,
@@ -62,27 +63,6 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
 @group(1) @binding(0) var<uniform> uniforms : Uniforms;
 
-fn fresnel_schlick(cos_theta: f32, F0: vec3<f32>) -> vec3<f32> {
-    return F0 + (1.0 - F0) * pow(1.0 - cos_theta, 5.0);
-}
-
-// GGX / Trowbridge-Reitz NDF
-fn d_ggx(NdotH: f32, alpha: f32) -> f32 {
-    let a2 = alpha * alpha;
-    let denom = (NdotH * NdotH) * (a2 - 1.0) + 1.0;
-    return a2 / (3.14159265 * denom * denom);
-}
-
-// Schlick-GGX geometry term (Smith)
-fn g_schlick_ggx(NdotX: f32, k: f32) -> f32 {
-    return NdotX / (NdotX * (1.0 - k) + k);
-}
-
-fn g_smith(NdotV: f32, NdotL: f32, roughness: f32) -> f32 {
-    let r = roughness + 1.0;
-    let k = (r * r) / 8.0;
-    return g_schlick_ggx(NdotV, k) * g_schlick_ggx(NdotL, k);
-}
 struct FragmentOut {
     @location(0) color: vec4<f32>,
     @location(1) normal: vec4<f32>,
@@ -90,67 +70,37 @@ struct FragmentOut {
 };
 
 @fragment
-fn fs_main(input : VertexOutput) -> FragmentOut {
+fn fs_main(input: VertexOutput) -> FragmentOut {
     var out: FragmentOut;
-    // --- sample material ---
-    let uv = input.uv;
-    var tex : vec4<f32>;
-    tex = textureSample(textures, building_sampler, uv, input.material_id);
 
-    let albedo = tex.rgb;
+    let tex = textureSample(
+        textures,
+        building_sampler,
+        input.uv,
+        input.material_id
+    );
 
-    // --- basis vectors ---
     let N = normalize(input.world_normal);
-    let V = normalize(-input.world_pos);
-    let L = normalize(uniforms.sun_direction);
+    let albedo = tex.rgb * input.color.rgb;
 
-    let NdotL = saturate(dot(N, L));
-    let NdotV = saturate(dot(N, V));
+    let lighting = calculate_world_lighting(
+        input.world_pos,
+        N,
+        0.0,
+        uniforms.solar_eclipse_coverage
+    );
 
-    let elevation = saturate(dot(L, vec3<f32>(0.0, 1.0, 0.0)));
-    let sun_color = mix(vec3<f32>(1.0, 0.55, 0.25), vec3<f32>(1.0, 1.0, 1.0), pow(elevation, 0.35));
-    let sun_intensity = mix(0.25, 1.0, pow(elevation, 0.25));
+    let rgb = albedo * lighting;
 
-    let roughness = 0.45;
-    let alpha = roughness * roughness;
-    let F0 = vec3<f32>(0.04);
-
-    let H = normalize(V + L);
-    let NdotH = saturate(dot(N, H));
-    let VdotH = saturate(dot(V, H));
-
-    let D = d_ggx(NdotH, alpha);
-    let G = g_smith(NdotV, NdotL, roughness);
-    let F = fresnel_schlick(VdotH, F0);
-
-    let spec = (D * G) * F / max(4.0 * NdotV * NdotL, 1e-4);
-    let kd = (vec3<f32>(1.0) - F);
-    let diff = kd * albedo / 3.14159265;
-
-    // --- SHADOW ---
-    let shadow = fetch_shadow(input.world_pos, N, L);
-
-    let direct = (diff + spec) * (NdotL * sun_intensity * shadow) * sun_color;
-
-    let hemi = saturate(N.y * 0.5 + 0.5);
-    let sky_ambient = vec3<f32>(0.22, 0.28, 0.35);
-    let ground_ambient = vec3<f32>(0.12, 0.10, 0.08);
-    let ambient_light = mix(ground_ambient, sky_ambient, hemi);
-
-    let ambient = ambient_light * albedo;
-
-    let rgb = (direct + ambient) * input.color.rgb;
-    let a   = input.color.a;
-
-    out.color = vec4<f32>(rgb, a);
+    out.color = vec4<f32>(rgb, input.color.a);
     out.normal = vec4<f32>(N * 0.5 + 0.5, 1.0);
 
     let curr_ndc = input.curr_clip.xy / input.curr_clip.w;
     let prev_ndc = input.prev_clip.xy / input.prev_clip.w;
     let curr_uv = curr_ndc * vec2(0.5, -0.5) + 0.5;
     let prev_uv = prev_ndc * vec2(0.5, -0.5) + 0.5;
+
     out.motion = curr_uv - prev_uv;
 
     return out;
 }
-

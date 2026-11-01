@@ -16,7 +16,7 @@ use crate::world::buildings::buildings::{
     RevisionedSmallVec, RoofType,
 };
 use crate::world::buildings::lot_fitting::{
-    LOT_FRONT_OFFSET, LOT_MIN_DEPTH, LOT_PREFERRED_FRONTAGE, LotFit, LotPoint, collect_road_points,
+    LOT_FRONT_OFFSET, LOT_MIN_DEPTH, LOT_PREFERRED_FRONTAGE, LotFit, LotPoint,
     fit_lot_to_neighbors, gather_closest_lot_point,
 };
 use crate::world::buildings::lot_layout::{LotFrame, LotPlan};
@@ -24,7 +24,7 @@ use crate::world::buildings::utilities::utilities::UtilityUsage;
 use crate::world::buildings::utilities::utilities_network::{
     EndpointType, UtilityEndpoint, UtilityNetwork,
 };
-use crate::world::camera::Camera;
+use crate::world::camera::camera::Camera;
 use crate::world::cars::car_structs::{Car, CarId, CarMode, CarStorage, SimTime};
 use crate::world::cars::car_subsystem::make_random_car;
 use crate::world::cars::parking::{ParkingSpotId, ParkingStorage};
@@ -175,8 +175,8 @@ impl District {
                         continue;
                     };
                     if building.pos.chunk.dist2(target_chunk)
-                        < ((terrain.view_radius_render as f32 * 0.8)
-                            * (terrain.view_radius_render as f32 * 0.8))
+                        < ((terrain.render_distance as f32 * 0.8)
+                            * (terrain.render_distance as f32 * 0.8))
                             as u64
                     {
                         let complaint = building.occupancy.complaint(
@@ -883,7 +883,7 @@ fn generate_building(
         ZoningType::Office => [3, 4, 5, 7, 10, 15],
     };
 
-    let levels = RevisionedSmallVec(SmallVec::from_vec(
+    let levels = RevisionedSmallVec(SmallVec::from(
         (0..6)
             .map(|level| {
                 make_building_parmas_for_level(
@@ -894,7 +894,7 @@ fn generate_building(
                     utility_network,
                 )
             })
-            .collect(),
+            .collect::<Vec<_>>(),
     ));
 
     Some(Building {
@@ -1077,7 +1077,7 @@ impl Zoning {
         camera: &Camera,
         terrain: &mut Terrain,
         buildings: &mut Buildings,
-        roads: &Roads,
+        roads: &mut Roads,
         road_mesh_manager: &RoadMeshManager,
         input: &mut Input,
         variables: &Variables,
@@ -1566,7 +1566,7 @@ impl Zoning {
                 continue;
             };
 
-            let road_points = collect_road_points(edges);
+            let road_points = edges.collect_road_points();
 
             for point in road_points {
                 if point_in_polygon_xz(*point, lot_points) {
@@ -1637,7 +1637,7 @@ impl Zoning {
         &mut self,
         terrain: &mut Terrain,
         buildings: &mut Buildings,
-        roads: &Roads,
+        roads: &mut Roads,
         road_mesh_manager: &RoadMeshManager,
         input: &mut Input,
         variables: &Variables,
@@ -1835,7 +1835,11 @@ impl Zoning {
                                     WorldPos::centroid(&lot.bounds[..lot.bounds.len() - 1]);
                                 lot.entrance =
                                     LotEntrance::new(fit.snap_point.pos, fit.snap_point.lateral);
-                                lot.segment_id = Some(fit.snap_point.segment_id);
+                                ZoningStorage::update_lot_segment_unborrowed(
+                                    lot,
+                                    Some(fit.snap_point.segment_id),
+                                    &mut roads.road_manager.roads,
+                                );
                                 lot.zoning_type = Some(new_zoning_type);
                             }
                         }
@@ -1876,7 +1880,8 @@ impl Zoning {
                     );
                 }
 
-                self.zoning_storage.despawn_lot(lot_id);
+                self.zoning_storage
+                    .despawn_lot(lot_id, &mut roads.road_manager.roads);
             }
 
             return true;
@@ -1960,7 +1965,8 @@ impl Zoning {
                         land_value: self.zoning_storage.sample_land_value(lot_center.chunk),
                     };
 
-                    self.zoning_storage.spawn_lot(lot);
+                    self.zoning_storage
+                        .spawn_lot(lot, &mut roads.road_manager.roads);
                 }
             }
 
@@ -2036,7 +2042,7 @@ impl Zoning {
     fn run_area_zoning(
         &mut self,
         terrain: &Terrain,
-        roads: &Roads,
+        roads: &mut Roads,
         input: &mut Input,
         variables: &Variables,
         picked: &PickedPoint,
@@ -2169,7 +2175,8 @@ impl Zoning {
                 if let Some(district) = self.zoning_storage.get_mut_district(district_id) {
                     district.points.pop();
                     if district.points.is_empty() {
-                        self.zoning_storage.despawn_district(district_id);
+                        self.zoning_storage
+                            .despawn_district(district_id, &mut roads.road_manager.roads);
                         self.zoning_state = None;
                     }
                 }
@@ -3153,7 +3160,7 @@ impl ZoningStorage {
                 .map(|l| l.district_id = district_id);
         }
     }
-    pub fn despawn_district(&mut self, id: DistrictId) {
+    pub fn despawn_district(&mut self, id: DistrictId, roads: &mut RoadStorage) {
         let mut lots_to_despawn = Vec::new();
         if self
             .districts
@@ -3171,7 +3178,7 @@ impl ZoningStorage {
             self.district_free_list.push(id);
         }
         for lot_id in lots_to_despawn {
-            self.despawn_lot(lot_id);
+            self.despawn_lot(lot_id, roads);
         }
     }
 
@@ -3189,7 +3196,7 @@ impl ZoningStorage {
         self.districts.get_mut(id as usize)?.as_mut()
     }
 
-    pub fn spawn_lot(&mut self, mut lot: Lot) -> LotId {
+    pub fn spawn_lot(&mut self, mut lot: Lot, roads: &mut RoadStorage) -> LotId {
         lot.center = WorldPos::centroid(&lot.bounds);
         let lot_id = if let Some(reused_id) = self.lot_free_list.pop() {
             lot.id = reused_id;
@@ -3209,7 +3216,17 @@ impl ZoningStorage {
             self.lots.push(Some(lot));
             new_id
         };
-
+        if let Some(segment_id) = self.get_lot(lot_id).and_then(|lot| lot.segment_id) {
+            if !roads.add_lot_to_segment(segment_id, lot_id) {
+                error!(
+                    "Failed to add lot id to segment!! Lot id: {:?} Segment id: {:?}",
+                    lot_id, segment_id
+                );
+                if let Some(lot) = self.get_mut_lot(lot_id) {
+                    lot.segment_id = None;
+                }
+            }
+        }
         // Clone bounds out — breaks the borrow conflict with iter_districts()
         let bounds: Vec<WorldPos> = self.lots[lot_id as usize].as_ref().unwrap().bounds.clone();
 
@@ -3274,7 +3291,7 @@ impl ZoningStorage {
         lot_id
     }
 
-    pub fn despawn_lot(&mut self, id: LotId) {
+    pub fn despawn_lot(&mut self, id: LotId, roads: &mut RoadStorage) {
         let mut despawn_district = None;
         if let Some(Some(lot)) = self.lots.get(id as usize) {
             // Remove from district
@@ -3296,13 +3313,15 @@ impl ZoningStorage {
                     self.lot_chunk_storage.remove(&lot.chunk_coord());
                 }
             }
-
+            if let Some(segment_id) = lot.segment_id {
+                roads.remove_lot_from_segment(segment_id, id);
+            }
             // Free slot
             self.lots[id as usize] = None;
             self.lot_free_list.push(id);
         }
         if let Some(district_id) = despawn_district {
-            self.despawn_district(district_id)
+            self.despawn_district(district_id, roads)
         }
     }
 
@@ -3318,6 +3337,58 @@ impl ZoningStorage {
     #[inline]
     pub fn get_mut_lot(&mut self, id: LotId) -> Option<&mut Lot> {
         self.lots.get_mut(id as usize)?.as_mut()
+    }
+
+    pub fn update_lot_segment(
+        &mut self,
+        lot_id: LotId,
+        new_segment_id: Option<SegmentId>,
+        roads: &mut RoadStorage,
+    ) {
+        let Some(old_segment_id) = self.get_lot(lot_id).map(|lot| lot.segment_id) else {
+            return;
+        };
+
+        if old_segment_id == new_segment_id {
+            return;
+        }
+
+        if let Some(segment_id) = new_segment_id {
+            if !roads.add_lot_to_segment(segment_id, lot_id) {
+                return;
+            }
+        }
+
+        if let Some(segment_id) = old_segment_id {
+            roads.remove_lot_from_segment(segment_id, lot_id);
+        }
+
+        if let Some(lot) = self.get_mut_lot(lot_id) {
+            lot.segment_id = new_segment_id;
+        }
+    }
+    pub fn update_lot_segment_unborrowed(
+        lot: &mut Lot,
+        new_segment_id: Option<SegmentId>,
+        roads: &mut RoadStorage,
+    ) {
+        let old_segment_id = lot.segment_id;
+
+        if old_segment_id == new_segment_id {
+            return;
+        }
+
+        if let Some(segment_id) = new_segment_id {
+            if !roads.add_lot_to_segment(segment_id, lot.id) {
+                return;
+            }
+        }
+
+        if let Some(segment_id) = old_segment_id {
+            roads.remove_lot_from_segment(segment_id, lot.id);
+        }
+
+        lot.segment_id = new_segment_id;
     }
 }
 

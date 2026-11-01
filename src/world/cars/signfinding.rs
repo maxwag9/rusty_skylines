@@ -363,6 +363,7 @@ pub fn make_new_trajectory(
         //
         // let traj = simulate_point_path_follow(car, parking_points, origin, now, sf_options);
         CarMode::Parked(..) => Err(MakeNewTrajectoryError::CarModeIsParked),
+        CarMode::None => Ok((None, None, callback)),
     }
 }
 
@@ -1611,9 +1612,7 @@ fn simulate_path_follow(
             // Snap position + heading directly to path — no steering, no physics
             let (new_pos, fwd) = path.sample(arc_s);
             pos = new_pos;
-            if fwd.length_squared() > 1e-6 {
-                quat = sanitize_quat(Quat::from_rotation_arc(Vec3::Z, fwd));
-            }
+            quat = quat_from_forward(fwd, quat);
             r = 0.0;
             let reached_end = arc_s >= path_total_len;
             if step % SIM_SAMPLE == 0 {
@@ -1667,14 +1666,20 @@ fn simulate_path_follow(
             arc_s = (arc_s + speed * SIM_DT).min(path_total_len);
             let look_s = (arc_s + LOOKAHEAD_M).min(path_total_len);
             let (look_pt, _) = path.sample(look_s);
-            let to_tgt = pos.delta_to(look_pt);
 
-            let desired_r = if to_tgt.length_squared() > 0.04 && speed > 0.2 {
-                let fwd = quat * Vec3::Z; // FORWARD is Z, not Y!
-                let tgt = to_tgt.normalize();
-                // Use Z for forward, cross.y gives turning direction
-                let cross_y = fwd.cross(tgt).y;
-                2.0 * speed * cross_y / LOOKAHEAD_M
+            let to_tgt = pos.delta_to(look_pt);
+            let to_tgt_flat = Vec3::new(to_tgt.x, 0.0, to_tgt.z);
+
+            let desired_r = if to_tgt_flat.length_squared() > 0.04 && speed > 0.2 {
+                let fwd = quat * Vec3::Z;
+                let fwd_flat = Vec3::new(fwd.x, 0.0, fwd.z).normalize_or_zero();
+                let tgt = to_tgt_flat.normalize();
+
+                if fwd_flat.length_squared() > 1e-6 {
+                    2.0 * speed * fwd_flat.cross(tgt).y / LOOKAHEAD_M
+                } else {
+                    0.0
+                }
             } else {
                 0.0
             };
@@ -1754,7 +1759,7 @@ fn simulate_point_path_follow(
     let mut pts = Vec::with_capacity((n_steps / SIM_SAMPLE + 2) as usize);
 
     let mut pos = car.pos;
-    let mut quat = sanitize_quat(car.quat);
+    let mut quat = quat_from_forward(car.quat * Vec3::Z, Quat::IDENTITY);
     let mut speed = car.current_velocity.length();
     let mut r = car.yaw_rate;
     let mut t = start_t;
@@ -1914,6 +1919,16 @@ fn simulate_point_path_follow(
         end_steering_vel: 0.0,
         is_last_turn_of_sf_traj: false,
     }
+}
+
+fn quat_from_forward(forward: Vec3, fallback: Quat) -> Quat {
+    let horizontal = Vec3::new(forward.x, 0.0, forward.z);
+    if horizontal.length_squared() < 1e-6 {
+        return fallback;
+    }
+
+    let heading = horizontal.x.atan2(horizontal.z);
+    sanitize_quat(Quat::from_rotation_y(heading))
 }
 
 const IDM_ACCEL: f32 = 2.5; // comfortable acceleration   m/s²

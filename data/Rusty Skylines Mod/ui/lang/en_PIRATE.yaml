@@ -1,0 +1,87 @@
+en_PIRATE: Sailor's Mouth
+
+main_menu:
+  play: "Hoist the Sails!"
+  settings: "Crew Quarters"
+  minigames: "Deckside Games"
+  exit: "Abandon Ship!"
+
+pause_menu:
+  return: "Back to the Port"
+  settings: "Crew Quarters"
+  save_to_menu: "Leave the World and Stow Yer Loot"
+  exit: "Quit and Save Yer Booty"
+
+settings:
+  return_to_main_menu: "<- Back to Port"
+  return_to_pause_menu: "<- Back to the Deck"
+
+  dropdown:
+    present_mode:
+      name: "Frame Presentation"
+      options:
+        Mailbox: "Mailbox (Low-Latency V-Sync, BEST)"
+        Immediate: "Immediate (No V-Sync, Arrr!)"
+        Fifo: "Fifo (V-Sync)"
+
+    tonemapping:
+      name: "Sky and Light"
+      options:
+        SunnyDay: "A Fine Sunny Day"
+        GoldenHour: "Golden Hour o' Glory"
+        Overcast: "Gloomy Skies"
+        Night: "Dead o' Night"
+        Cinematic: "Cinematic Splendour"
+        Mexico: "Mexican Sunset"
+        Off: "Off, Matey"
+
+    color_grade:
+      name: "Colour o' the World"
+      options:
+        Off: "None, Keep It Natural"
+        Mexico: "Mexican Heat"
+        Cold: "Frozen Seas"
+        Vintage: "Old Salt's Memories"
+        HighContrast: "Bold as Blackbeard"
+
+    shadow_type:
+      name: "Shadow Magic"
+      options:
+        OFF: "None, Fear Not the Dark"
+        CSM: "Cascaded Shadow Maps"
+        RT: "Ray Tracing (Black Magic!)"
+
+    fullscreen:
+      name: "Screen o' the Ship"
+      options:
+        Windowed: "Windowed, Below Deck"
+        Fullscreen: "Full Screen, All Hands!"
+        Borderless: "Borderless, Smooth Sailing"
+
+    cloud_quality:
+      name: "Cloud Quality"
+      options:
+        Performance: "Swift as the Wind"
+        High: "Fine Sailing Skies"
+        Ultra: "Legendary Skies"
+
+  slider:
+    render_distance: "How Far Yer Eyes Can See"
+    generation_distance: "How Far the World Be Built"
+    msaa: "MSAA (Smooth Them Jagged Edges!)"
+    shadow_quality: "Shadow Quality"
+    fps_limit: "Frame Rate Limit"
+    exposure: "Light Exposure"
+    brightness: "Brightness"
+    contrast: "Contrast"
+    saturation: "Colour Richness"
+    vignette_strength: "Vignette Strength"
+    vignette_radius: "Vignette Radius"
+    vignette_softness: "Vignette Softness"
+
+    shadow_quality_options:
+      potato: "A Cursed Potato"
+      low: "Barely There"
+      medium: "Fair Winds"
+      high: "Captain's Quality"
+      insane: "Kraken's Wrath"

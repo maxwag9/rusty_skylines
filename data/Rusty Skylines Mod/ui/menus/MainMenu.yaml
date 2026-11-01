@@ -68,7 +68,7 @@ layers:
         name: play_button
         ap_name: button
         ap_vars:
-          - "str:Play"
+          - "str:{lang.main_menu.play}"
           - "70"
           - "str:on:r set(str:editor_mode, false); set(str:override_mode, false); call(open_save_menus);"
         x: 960
@@ -80,7 +80,7 @@ layers:
         name: settings_button
         ap_name: button
         ap_vars:
-          - "str:Settings"
+          - "str:{lang.main_menu.settings}"
           - "50"
           - "str:on:r set(str:editor_mode, false); set(str:override_mode, false); call(open_settings_menus);"
         x: 960
@@ -92,9 +92,9 @@ layers:
         name: minigames_button
         ap_name: button
         ap_vars:
-          - "str:Minigames!"
+          - "str:{lang.main_menu.minigames}"
           - "50"
-          - "str:on:r close_all_menus; open_menu(str:MiniGames); call(rust:play_sound, PixelQuestTheme)"
+          - "str:on:r close_all_menus; open_menu(str:MiniGames); set(str:show_world, false); call(rust:play_sound, PixelQuestTheme)"
         x: 960
         y: 640
         scale: 1.0
@@ -104,7 +104,7 @@ layers:
         name: exit_game_button
         ap_name: button
         ap_vars:
-          - "str:Exit Game"
+          - "str:{lang.main_menu.exit}"
           - "50"
           - "str:on:r exit_game()"
         x: 960
@@ -130,7 +130,7 @@ layers:
         name: sound_button
         ap_name: button
         ap_vars:
-          - "str:Audio Jungle"
+          - "str:{lang.audio_jungle}"
           - "40"
           - "str:on:r call(rust:str:play_sound, str:PixelQuestTheme)"
         x: 960
@@ -154,8 +154,26 @@ layers:
           - 1.0
         decorations:
           - color: [ 0.01, 0.01, 0.01, 0.9 ]
-            offset: [ 5.0, 5.0 ]
+            offset: [ 2.0, 1.0 ]
+        anchor: TopCenter
         text: RUSTY SKYLINES SPLASH LOADING...
+
+
+      - !Advanced
+        name: language_slider
+        ap_name: slider
+        ap_var:
+          - "str:locale"
+          - "str:{lang.languages.language}"
+          - "0"
+          - "1"
+          - "1"
+          - "[str:en_US, str:en_PIRATE]"
+          - "[str:{lang.en_US}, str:{lang.en_PIRATE}]"
+          - "true"
+        x: 1075
+        y: 800
+        scale: 1.5
 #  - name: test_buttons
 #    order: 3
 #    elements:

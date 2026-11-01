@@ -4,6 +4,7 @@ pub mod camera;
 pub mod cars;
 pub mod game_state;
 pub mod roads;
+pub mod satellites;
 pub mod sound;
 pub mod statisticals;
 pub mod terrain;

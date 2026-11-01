@@ -28,7 +28,8 @@ use crate::world::astronomy::*;
 use crate::world::buildings::building_renderer::BuildingRenderer;
 use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::Zoning;
-use crate::world::camera::Camera;
+use crate::world::camera::camera::Camera;
+use crate::world::camera::exposure::AutoExposure;
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::car_subsystem::{CarRenderSubsystem, Cars};
 use crate::world::roads::road_subsystem::{RoadRenderSubsystem, Roads};
@@ -52,7 +53,7 @@ use wgpu::*;
 use wgpu_render_manager::compute_system::{BufferSet, ComputePipelineOptions};
 use wgpu_render_manager::fullscreen::{DebugVisualization, DepthDebugParams};
 use wgpu_render_manager::generator::TextureKey;
-use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions};
+use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions, RendererBufferBinding};
 use wgpu_render_manager::renderer::RenderManager;
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
@@ -66,9 +67,9 @@ pub struct Renderer {
     pub config: SurfaceConfiguration,
     pub msaa_samples: u32,
     pub old_window_size: PhysicalSize<f32>,
-
+    pub window_size: PhysicalSize<f32>,
     pub render_manager: RenderManager,
-    pub shader_watcher: Option<ShaderWatcher>,
+    pub shader_watcher: ShaderWatcher,
     pub screenshot_sender: Sender<ScreenshotJob>,
     pub pipelines: Pipelines,
     pub ui_renderer: UiRenderer,
@@ -81,6 +82,7 @@ pub struct Renderer {
     pub gizmo: Gizmo,
     pub props: Props,
     pub clouds: CloudSubsystem,
+    pub auto_exposure: AutoExposure,
 }
 
 impl Renderer {
@@ -95,7 +97,9 @@ impl Renderer {
         props: Props,
         mod_manager: &ModManager,
     ) -> Self {
-        let shader_watcher = ShaderWatcher::new(mod_manager.shader_paths()).ok();
+        let shader_watcher = ShaderWatcher::new(mod_manager.shader_paths())
+            .ok()
+            .expect("Shader watcher creation failed");
 
         let mut rt_subsystem = RTSubsystem::new(device);
         let mut ui_renderer = UiRenderer::new(device, queue, config, size, settings.msaa_samples)
@@ -105,6 +109,7 @@ impl Renderer {
         let car_renderer = CarRenderSubsystem::new(device, queue, &mut rt_subsystem);
         let building_renderer = BuildingRenderer::new(device);
         let mut render_manager = RenderManager::new(device, queue);
+        let auto_exposure = AutoExposure::new(device, queue, mod_manager);
         let gizmo = Gizmo::new(
             device,
             queue,
@@ -145,6 +150,8 @@ impl Renderer {
             building_renderer,
             screenshot_sender: make_screenshot_thread(),
             clouds,
+            auto_exposure,
+            window_size: PhysicalSize::new(config.width as f32, config.height as f32),
         }
     }
 
@@ -185,7 +192,8 @@ impl Renderer {
         };
 
         self.ui_renderer.viewport.update(&self.queue, res); // Update Glypon screen size to NEW size! NOT THE OLD SIZE FOR FUCKS SAKE
-        self.ui_renderer.text_atlas.trim()
+        self.ui_renderer.text_atlas.trim();
+        self.window_size = new_size.cast::<f32>();
     }
 
     pub fn render(
@@ -675,6 +683,18 @@ impl Renderer {
             }
         });
         self.execute_fog_pass(encoder, settings, mod_manager);
+        if settings.render_exposure {
+            gpu_timestamp!(encoder, &mut self.profiler, "AutoExposure", {
+                self.auto_exposure.encode(
+                    &self.queue,
+                    encoder,
+                    &self.pipelines.resolved.hdr,
+                    &mut self.render_manager,
+                );
+            });
+
+            self.auto_exposure.advance();
+        }
 
         // 8. Gizmo
         gpu_timestamp!(encoder, &mut self.profiler, "Gizmo", {
@@ -1220,9 +1240,10 @@ impl Renderer {
             let textures: Vec<&TextureView> = vec![
                 &self.pipelines.post_fx.linear_depth_half,
                 &self.pipelines.msaa.depth_sample,
+                self.clouds.terrain_height_view(),
             ];
 
-            let shader_name = if msaa_on { "fog_msaa" } else { "fog" };
+            //let shader_name = if msaa_on { "fog_msaa" } else { "fog" }; // MMhh, legacy! Legacy console edition!
             let Some(shader) = mod_manager.resource_path("shaders/fog.wgsl") else {
                 error!("[Renderer] Missing shader 'shaders/fog.wgsl'");
                 return;
@@ -1231,7 +1252,11 @@ impl Renderer {
                 &textures,
                 shader,
                 &options,
-                &[&self.pipelines.buffers.camera, &self.pipelines.buffers.fog],
+                &[
+                    &self.pipelines.buffers.camera,
+                    &self.pipelines.buffers.fog,
+                    &self.clouds.uniform_buffer,
+                ],
                 &mut pass,
             );
 
@@ -1554,14 +1579,18 @@ impl Renderer {
             error!("[Renderer] Missing shader 'shaders/tonemap.wgsl'");
             return;
         };
-        self.render_manager.render_with_textures(
-            &[&self.pipelines.resolved.hdr, &self.pipelines.resolved.ui], // Sample FROM non-msaa hdr and FROM non-msaa UI
-            shader,
-            &options,
-            &[&self.pipelines.buffers.post_processing],
-            &mut pass,
-        );
 
+        self.render_manager
+            .render_with_textures_and_buffer_bindings(
+                &[&self.pipelines.resolved.hdr, &self.pipelines.resolved.ui], // Sample FROM non-msaa hdr and FROM non-msaa UI
+                shader,
+                &options,
+                &[
+                    RendererBufferBinding::uniform(&self.pipelines.buffers.post_processing),
+                    RendererBufferBinding::storage_read_only(self.auto_exposure.current_buffer()),
+                ],
+                &mut pass,
+            );
         pass.draw(0..3, 0..1);
     }
 
@@ -1600,9 +1629,7 @@ impl Renderer {
     }
 
     fn check_shader_changes(&mut self, ui: &mut Ui) {
-        let Some(watcher) = &self.shader_watcher else {
-            return;
-        };
+        let watcher = &self.shader_watcher;
 
         let changed = watcher.take_changed_wgsl_files();
         if changed.is_empty() {
@@ -1623,9 +1650,11 @@ impl Renderer {
                     format!("Shaders reloaded: {summary}")
                 };
                 println!("{}", label);
-                ui.log_console(format!("✅ {label}"));
+                //ui.log_console(format!("✅ {label}"));
             }
-            Err(err) => ui.log_console(format!("❌ Shader reload failed: {err}")),
+            Err(err) => {
+                error!("Could not reload shaders: {}", err);
+            } //ui.log_console(format!("❌ Shader reload failed: {err}")),
         }
     }
 

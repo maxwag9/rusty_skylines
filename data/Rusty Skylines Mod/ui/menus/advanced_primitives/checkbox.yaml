@@ -7,7 +7,7 @@ elements:
       - "in:any, as:[str:button_text], set(str:as.pt, {ap.1}); set(str:self.size, expr:{as.size}+15.0); set(str:self.center, [expr:{as.center.x}+{as.size.x}*0.5, as.center.y]) call(str:{ap.2});"
       - "on:hover_enter, call(rust:play_sound, str:ButtonHover)"
       - "on:hovering, ifvareq({ap}, bool:false, set_var(str:self.color.border, [0.3, 0.0, 0.0, 1.0]), set_var(str:self.color.border, [0.0, 0.3, 0.0, 1.0]));"
-      - "on:hover_exit on:activated, ifvareq({ap}, bool:false, set_var(str:self.color.border, [1.0, 0.0, 0.0, 1.0]), set_var(str:self.color.border, [0.0, 1.0, 0.0, 1.0]))"
+      - "on:hover_exit on:activated, ifvareq({ap.0}, bool:false, set_var(str:self.color.border, [1.0, 0.0, 0.0, 1.0]), set_var(str:self.color.border, [0.0, 1.0, 0.0, 1.0]))"
       - "on:down, set(str:previous_fill, self.color.fill); set(str:self.color.fill, [0.8, 0.8, 0.8, 0.2])"
       - "on:release, toggle(str:{ap}); set(str:self.color.fill, [0.8, 0.8, 0.8, 0.05]); call(rust:play_sound, str:ButtonPress)"
       #      - "show_interaction(self.color.fill)"

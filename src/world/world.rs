@@ -3,11 +3,11 @@ use crate::data::Settings;
 use crate::helpers::modpack::ModManager;
 use crate::helpers::positions::chunk_size;
 use crate::renderer::props::Props;
-use crate::resources::{Time, TimeChangeOperation};
+use crate::resources::Time;
 use crate::ui::input::Input;
 use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::Zoning;
-use crate::world::camera::CameraMode;
+use crate::world::camera::camera::CameraMode;
 use crate::world::cars::car_subsystem::Cars;
 use crate::world::game_state::GameState;
 use crate::world::roads::road_subsystem::Roads;
@@ -70,6 +70,13 @@ impl World {
         )
     }
 
+    pub fn reload(&mut self, settings: &Settings, props: &Props, mod_manager: &ModManager) {
+        self.buildings.utilities.load(mod_manager);
+        self.buildings.catalog.load(mod_manager);
+        self.terrain.recreate_generator(props, mod_manager);
+        self.sounds = Sounds::new(mod_manager);
+    }
+
     pub fn start_panorama(&mut self, game_state: &GameState) {
         println!("Starting panorama");
         if self.panorama {
@@ -78,16 +85,16 @@ impl World {
         if game_state.current_save_info.is_some() {
             return;
         };
-        //self.world_state.camera.set_mode(CameraMode::FirstPerson);
+        self.world_state.camera.set_mode(CameraMode::FirstPerson);
         self.panorama = true;
         self.world_state.cam_controller.target_yaw = 90.0_f32.to_radians();
         self.world_state.cam_controller.target_pitch = 15.0_f32.to_radians();
         self.world_state.camera.yaw = 90.0_f32.to_radians();
         self.world_state.camera.pitch = 15.0_f32.to_radians();
         let mut rng = ThreadRng::default();
-        self.time.change_game_time(TimeChangeOperation::Set(
-            self.time.day_length * rng.random_range(0.1..0.8),
-        ));
+        // self.time.change_game_time(TimeChangeOperation::Set(
+        //     self.time.day_length * rng.random_range(0.0..0.05),
+        // ));
         let hc = chunk_size() as f32 * 0.5;
         self.world_state.camera.target = self.world_state.camera.target.add_vec3(Vec3::new(
             rng.random_range(-hc..hc),

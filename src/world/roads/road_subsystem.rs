@@ -12,7 +12,7 @@ use crate::resources::Time;
 use crate::simulation::Ticker;
 use crate::ui::input::Input;
 use crate::world::buildings::buildings::Buildings;
-use crate::world::camera::Camera;
+use crate::world::camera::camera::Camera;
 use crate::world::cars::car_subsystem::Cars;
 use crate::world::cars::parking::ParkingStorage;
 use crate::world::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};

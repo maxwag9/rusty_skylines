@@ -4,7 +4,7 @@ use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos};
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::shadows::{shadow_bias_for_cascade, shadow_pipeline_options};
 use crate::ui::input::Input;
-use crate::world::camera::Camera;
+use crate::world::camera::camera::Camera;
 use crate::world::terrain::terrain_subsystem::{CursorMode, Terrain};
 use bytemuck::{Pod, Zeroable};
 use glam::{Quat, Vec2, Vec3};

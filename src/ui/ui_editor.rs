@@ -34,6 +34,7 @@ use crate::world::sound::sound::Sounds;
 use crate::world::world::World;
 use sanitize_filename::sanitize;
 use serde::{Deserialize, Serialize};
+use sluggrs_skylines::cosmic_text::skrifa::raw::tables::postscript::dict::entries;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
@@ -78,7 +79,6 @@ pub struct Ui {
     // Core data
     pub global_actions: GlobalActions,
     pub variables: Variables,
-    pub console_lines: VecDeque<String>,
 
     // Touch manager (primary touch handling)
     pub touch_manager: UiTouchManager,
@@ -93,7 +93,9 @@ pub struct Ui {
     pub element_clipboard: Option<UiElement>,
     pub aps: HashMap<String, UiLayerYaml>,
 
-    pub action_events: Vec<ActionEvent>
+    pub action_events: Vec<ActionEvent>,
+    pub locales_manager: LocalesManager,
+    pub just_reloaded: bool
 }
 #[derive(Default, Clone, Serialize, Deserialize, Debug)]
 pub struct GlobalActionsYaml {
@@ -120,20 +122,21 @@ impl GlobalActions {
 }
 
 impl Ui {
-    pub fn new(settings: &Settings, variables: Variables, window_size: PhysicalSize<f32>, device: &Device, queue: &Queue, mod_manager: &ModManager) -> Self {
-
+    pub fn new(settings: &Settings, mut variables: Variables, window_size: PhysicalSize<f32>, device: &Device, queue: &Queue, mod_manager: &ModManager) -> Self {
+        let locales_manager = LocalesManager::new(settings.locale.as_str(), &mut variables, mod_manager);
         //println!("Global Actions loaded: {:?}", global_actions);
         let mut loader = Self {
             menus: HashMap::new(),
             aps: HashMap::new(),
             global_actions: GlobalActions::default(),
             variables,
-            console_lines: VecDeque::new(),
             touch_manager: UiTouchManager::new(settings),
             ui_edit_manager: UiEditManager::new(),
             drag_start_state: None,
             element_clipboard: None,
-            action_events: vec![]
+            action_events: vec![],
+            locales_manager,
+            just_reloaded: true,
         };
 
         loader.reload_ui(settings, window_size, device, queue, mod_manager);
@@ -141,6 +144,10 @@ impl Ui {
     }
     pub fn reload_ui(&mut self, settings: &Settings, window_size: PhysicalSize<f32>, device: &Device, queue: &Queue, mod_manager: &ModManager) {
         self.menus = HashMap::new();
+        //self.variables.clear();
+        self.touch_manager = UiTouchManager::new(settings);
+        self.locales_manager = LocalesManager::new(settings.locale.as_str(), &mut self.variables, mod_manager);
+        self.ui_edit_manager.clear();
         let menu_paths = mod_manager.menu_paths();
         let ap_paths = mod_manager.advanced_primitive_paths();
         let bend_mode = &settings.bend_mode;
@@ -253,7 +260,9 @@ impl Ui {
         }
         self.global_actions.element_compiled_actions = compile_actions(&self.menus, None, self.global_actions.element_string_actions.clone());
         self.global_actions.global_compiled_actions = compile_actions(&self.menus, None, self.global_actions.global_string_actions.clone());
+        self.touch_manager.next_frame_global_events.push(GlobalEvent::StartUp);
         self.touch_manager.global_events.push(GlobalEvent::StartUp);
+        self.just_reloaded = true;
         println!("[UI] Reloaded UI");
     }
     pub fn resize(&mut self, old_size: PhysicalSize<f32>, new_size: PhysicalSize<f32>) {
@@ -278,9 +287,7 @@ impl Ui {
             return;
         }
         self.touch_manager.events.values_mut().for_each(|events| { events.clear() });
-        if world.input.action_repeat("Reload UI") {
-            self.reload_ui(settings, window_size, &renderer.device, &renderer.queue, &game_state.mod_manager);
-        }
+
         self.touch_manager.config.snap_enabled = world.input.action_down("UI Snap Modifier");
 
         // Update undo manager timing
@@ -359,6 +366,7 @@ impl Ui {
         );
         //println!("{:?}", result);
         let input = &mut world.input;
+
         // Apply results
         self.apply_event_results(result, &input.mouse);
         //println!("The Variable is: {:?}", self.variables.get("tonemapping_state_open"));
@@ -396,6 +404,7 @@ impl Ui {
             game_state,
             simulation
         );
+        self.just_reloaded = false;
     }
 
     /// Collect all touchable elements from menus - return references, not owned Strings
@@ -508,6 +517,7 @@ impl Ui {
             ElementEvent::Nothing { .. } => {}
             ElementEvent::Activated { .. } => {}
             ElementEvent::Deactivated { .. } => {}
+
             // PRESS/RELEASE EVENTS
             ElementEvent::Press {
                 position,
@@ -552,12 +562,13 @@ impl Ui {
                 self.handle_selection_requested(element_ref, additive, multi, result);
             }
 
-            ElementEvent::TextEditRequested => {
-                self.handle_text_edit_requested(element_ref, result);
+            ElementEvent::TextEditStart => {
+                self.begin_text_editing(element_ref, result);
             }
-            ElementEvent::TextEditEnded => {
+            ElementEvent::TextEditStop => {
                 self.handle_text_edit_ended(element_ref, result);
             }
+            ElementEvent::EditingText => {}
             ElementEvent::ScrollOnElement { delta } => {
                 self.variables.set_f64("scroll_delta", delta);
             }
@@ -685,7 +696,7 @@ impl Ui {
             return;
         };
 
-        if !text.input_box && !editor_mode {
+        if (!text.input_box.is_input_box() && !editor_mode) || text.input_box.is_custom_input_box() {
             return;
         }
 
@@ -965,17 +976,6 @@ impl Ui {
             }
         }
     }
-    fn handle_text_edit_requested(
-        &mut self,
-        element: &ElementRef,
-        result: &mut EventProcessingResult,
-    ) {
-        if self.get_text(element).is_none() {
-            return;
-        }
-
-        self.begin_text_editing(element, result);
-    }
 
     fn handle_text_edit_ended(&mut self, element: &ElementRef, result: &mut EventProcessingResult) {
         self.end_text_editing(element);
@@ -1142,7 +1142,7 @@ impl Ui {
     fn is_input_box(&self, element: &ElementRef) -> bool {
         self.get_element(element)
             .and_then(|e| e.as_text())
-            .map(|t| t.input_box)
+            .map(|t| t.input_box.is_input_box())
             .unwrap_or(false)
     }
 
@@ -1275,11 +1275,11 @@ impl Ui {
             &mut self.variables,
             mouse,
         ) {
-            self.log_console(format!("↩ Undo: {}", desc));
+            // self.log_console(format!("↩ Undo: {}", desc));
             self.mark_editor_layers_dirty();
             self.update_selection();
         } else {
-            self.log_console("Nothing to undo");
+            // self.log_console("Nothing to undo");
         }
     }
 
@@ -1290,18 +1290,11 @@ impl Ui {
             &mut self.variables,
             mouse,
         ) {
-            self.log_console(format!("↪ Redo: {}", desc));
+            // self.log_console(format!("↪ Redo: {}", desc));
             self.mark_editor_layers_dirty();
             self.update_selection();
         } else {
-            self.log_console("Nothing to redo");
-        }
-    }
-
-    pub fn log_console(&mut self, message: impl Into<String>) {
-        self.console_lines.push_back(message.into());
-        while self.console_lines.len() > 6 {
-            self.console_lines.pop_front();
+            // self.log_console("Nothing to redo");
         }
     }
 
@@ -1311,14 +1304,14 @@ impl Ui {
 
     pub fn toggle_snap(&mut self) {
         self.touch_manager.toggle_snap();
-        self.log_console(format!(
-            "Snap to grid: {}",
-            if self.touch_manager.config.snap_enabled {
-                "ON"
-            } else {
-                "OFF"
-            }
-        ));
+        // self.log_console(format!(
+        //     "Snap to grid: {}",
+        //     if self.touch_manager.config.snap_enabled {
+        //         "ON"
+        //     } else {
+        //         "OFF"
+        //     }
+        // ));
     }
 
     pub fn set_grid_size(&mut self, size: f32) {
@@ -1440,8 +1433,17 @@ impl Ui {
 
         // Immutable resolving pass
         for (menu_name, menu) in &self.menus {
+            if !menu.active {
+                continue; // Why didn't I do this earlier...
+            }
             for layer in &menu.layers {
+                if !layer.active {
+                    continue;
+                }
                 for t in layer.elements.iter().filter_map(UiElement::as_text) {
+                    if !t.is_active() {
+                        continue;
+                    }
                     if t.being_hovered {
                         being_hovered = true;
 
@@ -1459,7 +1461,7 @@ impl Ui {
 
                     if !t.template.contains('{')
                         || !t.template.contains('}')
-                        || (t.being_edited && !t.input_box)
+                        || (t.being_edited && !t.input_box.is_input_box())
                         || t.template.contains("{ap}")
                     {
                         continue;
@@ -1474,7 +1476,7 @@ impl Ui {
 
                     let is_selected = self.touch_manager.selection.is_selected(&text_ref);
 
-                    let new_text = if !t.input_box || self.touch_manager.options.override_mode {
+                    let new_text = if !t.input_box.is_input_box() || self.touch_manager.options.override_mode {
                         let element_ctx = ElementContext::from_self(text_ref.clone());
 
                         resolve_template(
@@ -1532,10 +1534,19 @@ impl Ui {
         // Selection/input-box bookkeeping still needs mutation, so do that
         // separately after the resolving pass.
         for (menu_name, menu) in &mut self.menus {
+            if !menu.active {
+                continue;
+            }
             for layer in &mut menu.layers {
+                if !layer.active {
+                    continue;
+                }
                 let mut any_changed = false;
 
                 for t in layer.elements.iter_mut().filter_map(UiElement::as_text_mut) {
+                    if !t.is_active() {
+                        continue;
+                    }
                     if (self.touch_manager.selection.just_deselected
                         || self.touch_manager.selection.just_selected)
                         && !t.being_edited
@@ -1544,7 +1555,7 @@ impl Ui {
                         any_changed = true;
                     }
 
-                    if t.input_box {
+                    if t.input_box.is_input_box() {
                         let text_ref = ElementRef::new(
                             menu_name,
                             layer.name.as_str(),
@@ -1564,7 +1575,7 @@ impl Ui {
                             }
                         }
 
-                        if t.input_box && self.touch_manager.selection.just_deselected && is_selected {
+                        if t.input_box.is_input_box() && self.touch_manager.selection.just_deselected && is_selected {
                             let new_text =
                                 set_input_box(&t.template, &t.text, &mut self.variables);
 
@@ -2173,7 +2184,7 @@ fn run_all_actions(ui_command_queue: &mut CommandQueue, ctx: &mut CommandContext
     let mut global_action_events = Vec::new();
     global_action_events.push(ActionEvent::Always);
     //global_action_events.push(ActionEvent::Nothing);
-    if ctx.world.time.game_just_started() {
+    if ctx.world.time.game_just_started() || ctx.ui.just_reloaded {
         global_action_events.push(ActionEvent::StartUp);
     }
     // global_action_events.extend(ctx.ui.touch_manager.global_events.clone());
@@ -2241,6 +2252,20 @@ pub fn get_element_mut<'a>(
 
     layer.find_element_mut(element_id)
 }
+pub fn get_element_mut_dirty_layer<'a>(
+    menus: &'a mut HashMap<String, Menu>,
+    element: &ElementRef,
+) -> Option<&'a mut UiElement> {
+    let menu = menus.get_mut(&element.menu)?;
+    let layer = menu.layers.iter_mut().find(|l| l.name == element.layer)?;
+    let element_id = &element.id;
+
+    let element = layer.elements.iter_mut().find(|e| e.id() == element_id);
+    if let Some(element) = element.as_ref() {
+        element.mark_dirty(&mut layer.dirty);
+    };
+    element
+}
 pub fn get_element_borrowed<'a>(
     menus: &'a HashMap<String, Menu>,
     element: &ElementRef,
@@ -2261,7 +2286,7 @@ pub fn get_layer(menus: &HashMap<String, Menu>, element: &ElementRef) -> Option<
 
     Some(layer)
 }
-pub fn get_layer_ap_var(menus: &HashMap<String, Menu>, element: &ElementRef) -> Vec<String> {
+pub fn get_layer_ap_vars(menus: &HashMap<String, Menu>, element: &ElementRef) -> Vec<String> {
     let Some(menu) = menus.get(&element.menu) else {
         return vec![];
     };
@@ -2397,4 +2422,177 @@ pub struct TouchableElement<'a> {
     pub order: u32,
     pub idx: usize,
     pub element: &'a UiElement
+}
+
+
+pub struct LocalesManager {
+    pub current_locale: String,
+    pub current_language_name: String,
+}
+
+impl LocalesManager {
+    pub fn new(
+        start_locale: &str,
+        variables: &mut Variables,
+        mods: &ModManager,
+    ) -> LocalesManager {
+        let mut mgr = LocalesManager {
+            current_locale: start_locale.to_string(),
+            current_language_name: start_locale.to_string(),
+        };
+
+        mgr.load_language_names(start_locale, variables, mods);
+        mgr.load_language(start_locale, variables, mods);
+
+        mgr
+    }
+
+    fn load_language_names(
+        &mut self,
+        locale_name: &str,
+        variables: &mut Variables,
+        mods: &ModManager,
+    ) -> bool {
+        let resource = "ui/lang/langs.yaml";
+
+        let Some(paths) = mods.resource_paths(resource) else {
+            error!("Could not find language names file: '{}'", resource);
+            return false;
+        };
+        let mut entries = Vec::new();
+        for path in paths {
+            let contents = match fs::read_to_string(path) {
+                Ok(contents) => contents,
+                Err(err) => {
+                    error!("Could not read language names file '{}': {}", resource, err);
+                    return false;
+                }
+            };
+
+            let document: serde_yaml::Value = match serde_yaml::from_str(&contents) {
+                Ok(document) => document,
+                Err(err) => {
+                    error!("Could not parse language names file '{}': {}", resource, err);
+                    return false;
+                }
+            };
+
+            let Some(mapping) = document.as_mapping() else {
+                error!("Language names file '{}' must contain a YAML mapping", resource);
+                return false;
+            };
+
+            let language_name = mapping
+                .get(&serde_yaml::Value::String(locale_name.to_string()))
+                .and_then(|value| value.as_str().map(str::to_owned));
+
+            if language_name.is_none() {
+                error!(
+                "Locale '{}' has no display name in '{}'",
+                locale_name, resource)
+            };
+
+            Self::flatten_yaml(&document, "lang", &mut entries);
+        }
+
+
+        for (key, value) in entries {
+            variables.set_string(&key, &value);
+        }
+        let language_name = variables.get(format!("lang.{}", self.current_locale)).and_then(|v| v.as_string().cloned());
+        self.current_language_name = language_name.unwrap_or_else(|| locale_name.to_string());
+
+        true
+    }
+
+    pub fn load_language(
+        &mut self,
+        locale_name: &str,
+        variables: &mut Variables,
+        mods: &ModManager,
+    ) -> bool {
+        let resource = format!("ui/lang/{}.yaml", locale_name);
+
+        let Some(paths) = mods.resource_paths(&resource) else {
+            error!("Could not find locale file: '{}'", resource);
+            return false;
+        };
+        let mut entries = Vec::new();
+        for path in paths {
+            let contents = match std::fs::read_to_string(&path) {
+                Ok(contents) => contents,
+                Err(err) => {
+                    error!("Could not read locale '{}': {}", resource, err);
+                    return false;
+                }
+            };
+
+            let document: serde_yaml::Value = match serde_yaml::from_str(&contents) {
+                Ok(document) => document,
+                Err(err) => {
+                    error!("Could not parse locale '{}': {}", resource, err);
+                    return false;
+                }
+            };
+
+            if !document.is_mapping() {
+                error!("Locale '{}' must contain a YAML mapping", resource);
+                return false;
+            }
+
+            Self::flatten_yaml(&document, "lang", &mut entries);
+        }
+
+        for (key, value) in entries {
+            variables.set_string(&key, &value);
+        }
+
+        self.current_locale = locale_name.to_string();
+        let language_name = variables.get(format!("lang.{}", self.current_locale)).and_then(|v| v.as_string().cloned());
+        self.current_language_name = language_name.unwrap_or_else(|| locale_name.to_string());
+
+        variables.set_string("lang.locale", self.current_locale.clone());
+        variables.set_string("lang.language", self.current_language_name.clone());
+
+        true
+    }
+
+    fn flatten_yaml(
+        value: &serde_yaml::Value,
+        prefix: &str,
+        entries: &mut Vec<(String, String)>,
+    ) {
+        match value {
+            serde_yaml::Value::Mapping(mapping) => {
+                for (key, value) in mapping {
+                    let Some(key) = key.as_str() else {
+                        continue;
+                    };
+
+                    let full_key = if prefix.is_empty() {
+                        key.to_string()
+                    } else {
+                        format!("{}.{}", prefix, key)
+                    };
+
+                    Self::flatten_yaml(value, &full_key, entries);
+                }
+            }
+            serde_yaml::Value::Sequence(_) => {}
+            _ if !prefix.is_empty() => {
+                let value = value
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| {
+                        serde_yaml::to_string(value)
+                            .unwrap_or_default()
+                            .trim()
+                            .to_owned()
+                    });
+
+                entries.push((prefix.to_string(), value));
+            }
+            _ => {}
+        }
+    }
 }

@@ -15,7 +15,7 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: 'Rusty Skylines Alpha v{GAME_VERSION}'
+        text: 'Rusty Skylines Alpha v{var:GAME_VERSION}'
         anchor: TopLeft
         decorations:
           - color: [ 0.0, 0.0, 0.0, 1.0 ]
@@ -167,7 +167,7 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: 'Requested Time Speed: {expr:{sim_speed}:.2}x, Actual Time Speed: {expr:{achieved_time_speed}:.2}x, Total Game Time: {expr:fancy_time({total_game_time}, false, {day_length}, 3, false)}, Day length: {expr:{day_length}:.2}s, Total_days: {expr:{total_days}:.2}d, Sun declination: {expr:{sun_declination}:.2} degrees'
+        text: 'Requested Time Speed: {expr:{sim_speed}:.2}x, Actual Time Speed: {expr:{achieved_time_speed}:.2}x, Total Game Time: {expr:fancy_time({total_game_time}, false, {day_length}, 3, false)}, Day length: {expr:{day_length}:.2}s, Total_days: {expr:{total_days}:.2}d, Sun declination: {expr:{sun_declination}:.2} degrees, Date: {date}'
         anchor: TopLeft
         decorations:
           - color: [ 0.0, 0.0, 0.0, 1.0 ]

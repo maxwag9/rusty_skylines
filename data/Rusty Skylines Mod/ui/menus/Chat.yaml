@@ -1,0 +1,55 @@
+name: Chat
+layers:
+  - name: chat_layer_chad
+    order: 2
+    elements:
+      - !Rect
+        id: Menu Background
+        actions:
+          - on:startup, set(str:point_size_chat_texts, 20); set(str:text_line_height_chat, expr:{point_size_chat_texts}*1.2); set(str:texts_amount_chat, expr:{self.size.y}/{text_line_height_chat}); forin(texts_amount_chat, set(str:ct_name, expr:"chat_text_"+{idx}); set(str:ca_idx, expr:"chat_array."+{idx}) del_ap(self.menu, self.layer, ct_name); add_ap(self.menu, ct_name, chat_text, ["chat_array", idx, ca_idx], [0.0, self.center.y], 1.0, false); );
+          #- on:startup, forin(40, set(expr:"CHAT."+{idx}, "_..."); );
+          - on:startup on:always, set(str:chat_bottom, expr:{self.center.y}+{self.size.y}*0.5); set(str:chat_top, expr:{self.center.y}-{self.size.y}*0.5); set(str:scaled_point_size_chat_texts, expr:scaled_pt({point_size_chat_texts})); set(str:chat_array, expr:reverse(wrap_text(get_range({CHAT}, -{texts_amount_chat}, -1), {self.size.x}, {scaled_point_size_chat_texts}))); # print(chat_array);
+          # forin(, if(expr:{idx}<{texts_amount_chat}, ))               # print([chat_top, chat_bottom])   # print(chat_array);
+        x: 200
+        y: 600
+        w: 400
+        h: 600
+        rotation: 0.0
+        color:
+          - 0.01
+          - 0.01
+          - 0.01
+          - 0.4
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness: 0.00
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          touchable: false
+          editable: true
+      - !Advanced
+        name: chat_textbox
+        ap_name: textbox
+        ap_vars:
+          - "str:Chat..."
+          - "40"
+          - "Center"
+          - 'str:["button:\"Open Chat\" trigger:r in:any, call(open_chat)", "button:\"Close Chat\" trigger:r in:any, call(close_chat)"]'
+          - 'str:print(expr:trim("<"+{USERNAME}+"> "+{self.text}));'
+        x: 80
+        y: 925
+        scale: 1.0
+        editing_tool: false

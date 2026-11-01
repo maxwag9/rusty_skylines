@@ -5,8 +5,7 @@ use crate::renderer::render_core::Renderer;
 use crate::ui::input::Input;
 use crate::ui::ui_editor::Ui;
 use crate::world::buildings::zoning::Zoning;
-use crate::world::camera::Camera;
-use crate::world::cars::car_player::drive_car;
+use crate::world::camera::camera::Camera;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use crate::world::world::World;
 use glam::Vec2;
@@ -118,15 +117,15 @@ impl Simulation {
             camera.target,
         );
 
-        drive_car(
-            &mut world.cars,
-            &world.terrain,
-            settings,
-            &mut world.input,
-            cam_controller,
-            camera,
-            world.time.target_sim_dt,
-        );
+        // drive_car(
+        //     &mut world.cars,
+        //     &world.terrain,
+        //     settings,
+        //     &mut world.input,
+        //     cam_controller,
+        //     camera,
+        //     world.time.target_sim_dt,
+        // );
         world.buildings.storage.update(camera.target.chunk);
         Zoning::update_districts(
             &mut renderer.gizmo,

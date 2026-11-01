@@ -15,7 +15,7 @@ use crate::ui::vertex::Vertex;
 use crate::world::buildings::building_mesher::BuildingMeshBuilder;
 use crate::world::buildings::buildings::BuildingId;
 use crate::world::buildings::zoning::{LotId, ZoningType};
-use crate::world::camera::Camera;
+use crate::world::camera::camera::Camera;
 use crate::world::roads::road_mesh_manager::ChunkCoord;
 use crate::world::roads::road_structs::RoadType;
 use crate::world::roads::road_subsystem::Roads;
@@ -288,7 +288,7 @@ impl TerrainRenderSubsystem {
         let target_cx = target_pos.chunk.x;
         let target_cz = target_pos.chunk.z;
 
-        let r = terrain.view_radius_render as i32;
+        let r = terrain.render_distance as i32;
         let r2 = r * r;
 
         let mut per_page: Vec<Vec<GpuChunkHandle>> = vec![Vec::new(); terrain.arena.pages.len()];
@@ -389,8 +389,8 @@ pub struct Terrain {
     pub chunks: HashMap<ChunkCoord, ChunkMeshLod>,
     pub terrain_editor: TerrainEditor,
 
-    pub view_radius_generate: usize,
-    pub view_radius_render: usize,
+    pub generation_distance: usize,
+    pub render_distance: usize,
 
     pub terrain_jobs: TerrainJobs,
 
@@ -420,9 +420,10 @@ const VERTEX_SIZE_BYTES: usize = size_of::<Vertex>();
 impl Terrain {
     pub fn new(device: &Device, queue: &Queue, settings: &Settings, props: &Props) -> Self {
         let cs = chunk_size() as f32;
-        let view_radius_render = (64f32 * (64f32 / cs)) as usize;
-        let view_radius_generate = (32f32 * (64f32 / cs)) as usize;
-
+        // let view_radius_render = (64f32 * (64f32 / cs)) as usize;
+        // let view_radius_generate = (32f32 * (64f32 / cs)) as usize;
+        let generation_distance = settings.generation_distance as usize;
+        let render_distance = settings.render_distance as usize;
         let arena = TerrainMeshArena::new(
             device,
             64 * 1024 * 1024, // vertex bytes per page
@@ -439,21 +440,21 @@ impl Terrain {
         println!("Using {} chunk workers", threads);
 
         let workers = ChunkWorkerPool::new(threads, &terrain_gen);
-        Self {
+        let mut terrain = Self {
             tick: Ticker::new(60.0),
             cursor: Cursor::new(),
             arena,
             chunks: HashMap::new(),
             terrain_editor,
 
-            view_radius_generate,
-            view_radius_render,
+            generation_distance,
+            render_distance,
 
             terrain_jobs: TerrainJobs::new(workers),
 
             terrain_gen,
 
-            spiral: generate_spiral_offsets(view_radius_generate as i32),
+            spiral: vec![],
             lod_map: HashMap::new(),
             pick_radius_m: 5.0,
             last_picked: None,
@@ -470,9 +471,20 @@ impl Terrain {
             pending_results: VecDeque::with_capacity(64),
             device: device.clone(),
             queue: queue.clone(),
-        }
+        };
+        terrain.update_spiral();
+        terrain
     }
+    pub fn recreate_generator(&mut self, props: &Props, mod_manager: &ModManager) {
+        let mut terrain_params = TerrainParams::default();
+        terrain_params.seed = 144;
+        self.terrain_gen = TerrainGenerator::new(terrain_params, props);
 
+        let threads = num_cpus::get_physical().saturating_sub(1).max(1);
+        println!("Using {} chunk workers", threads);
+
+        self.terrain_jobs = TerrainJobs::new(ChunkWorkerPool::new(threads, &self.terrain_gen));
+    }
     pub fn update(
         &mut self,
         gizmo: &mut Gizmo,
@@ -615,8 +627,8 @@ impl Terrain {
         let view_proj = camera.view_proj();
         let planes = extract_frustum_planes(view_proj);
 
-        let r_render = self.view_radius_render as i32;
-        let r_gen = self.view_radius_generate as i32;
+        let r_render = self.render_distance as i32;
+        let r_gen = self.generation_distance as i32;
 
         FrameState {
             cam_pos,
@@ -837,8 +849,8 @@ impl Terrain {
 
     fn unload_out_of_range(&mut self, frame: &FrameState) {
         // Avoid thrash: unload outside render radius + generous margin.
-        let margin = (self.view_radius_render / 2) as u64;
-        let r = self.view_radius_render as u64 + margin;
+        let margin = (self.render_distance / 2) as u64;
+        let r = self.render_distance as u64 + margin;
         let r2 = r * r;
 
         // Build a set of currently-visible coords so we never unload them.
@@ -1071,6 +1083,10 @@ impl Terrain {
             }
         }
         false
+    }
+
+    pub fn update_spiral(&mut self) {
+        self.spiral = generate_spiral_offsets(self.generation_distance as i32);
     }
 }
 

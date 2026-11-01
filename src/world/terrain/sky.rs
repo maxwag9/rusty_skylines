@@ -41,4 +41,13 @@ pub struct SkyUniform {
 
     pub(crate) _pad1: f32,
     pub(crate) _pad2: f32,
+
+    pub celestial_bodies: [CelestialBodyUniform; 20],
+}
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CelestialBodyUniform {
+    pub direction_size: [f32; 4],
+    pub properties: [f32; 4],
+    pub parent_relative_position: [f32; 4],
 }

@@ -5,22 +5,35 @@ use crate::ui::ui_text_editing::{
 };
 use crate::ui::vertex::{UiButtonText, UiVertexText};
 use serde::{Deserialize, Serialize};
+use strum_macros::EnumString;
 use unicode_segmentation::UnicodeSegmentation;
 
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, PartialEq, EnumString)]
 pub enum Anchor {
     TopLeft,
+    TopCenter,
+    TopRight,
+    CenterLeft,
     #[default]
     Center,
-    CenterLeft,
+    CenterRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
 }
 
-/// Returned should be used as topleft
+/// Returned position should be used as top-left.
 pub fn anchor_to(anchor: Anchor, pos: [f32; 2], w: f32, h: f32) -> [f32; 2] {
     match anchor {
         Anchor::TopLeft => pos,
-        Anchor::Center => [pos[0] - w * 0.5, pos[1] - h * 0.5],
+        Anchor::TopCenter => [pos[0] - w * 0.5, pos[1]],
+        Anchor::TopRight => [pos[0] - w, pos[1]],
         Anchor::CenterLeft => [pos[0], pos[1] - h * 0.5],
+        Anchor::Center => [pos[0] - w * 0.5, pos[1] - h * 0.5],
+        Anchor::CenterRight => [pos[0] - w, pos[1] - h * 0.5],
+        Anchor::BottomLeft => [pos[0], pos[1] - h],
+        Anchor::BottomCenter => [pos[0] - w * 0.5, pos[1] - h],
+        Anchor::BottomRight => [pos[0] - w, pos[1] - h],
     }
 }
 

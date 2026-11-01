@@ -20,7 +20,9 @@ impl Variables {
             vars: HashMap::new(),
         }
     }
-
+    pub fn clear(&mut self) {
+        self.vars.clear();
+    }
     pub fn set_f64<T: Into<f64>>(&mut self, name: &str, value: T) {
         let value = Value::F64(value.into());
         self.vars.insert(name.to_string(), value);
@@ -124,6 +126,21 @@ impl Variables {
             a[idx] = value;
         }
     }
+
+    pub fn push_array<T>(&mut self, name: &str, val: T)
+    where
+        T: Into<Value>,
+    {
+        match self.vars.get_mut(name) {
+            Some(Value::Array(a)) => {
+                a.push(val.into());
+            }
+            _ => {
+                return;
+            }
+        }
+    }
+
     pub fn component_index(s: &str) -> Option<usize> {
         match s {
             "x" | "r" | "h" => Some(0),
@@ -163,9 +180,12 @@ impl Variables {
             },
         }
     }
-    pub fn get(&self, name: &str) -> Option<Cow<'_, Value>> {
+    pub fn get<S>(&self, name: S) -> Option<Cow<'_, Value>>
+    where
+        S: AsRef<str>,
+    {
         //println!("In variables.get(): {}", name);
-        let mut base = name;
+        let mut base: &str = name.as_ref();
         let mut suffixes: Vec<&str> = Vec::new();
 
         while let Some((left, right)) = base.rsplit_once('.') {

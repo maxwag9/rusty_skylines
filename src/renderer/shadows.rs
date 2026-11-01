@@ -8,7 +8,7 @@ use crate::ui::vertex::Vertex;
 use crate::world::buildings::building_mesher::BuildingVertex;
 use crate::world::buildings::building_renderer::BuildingRenderer;
 use crate::world::buildings::buildings::Buildings;
-use crate::world::camera::Camera;
+use crate::world::camera::camera::Camera;
 use crate::world::cars::car_mesh::CarVertex;
 use crate::world::cars::car_render::CarInstance;
 use crate::world::cars::car_structs::CarStorage;

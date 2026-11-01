@@ -1,6 +1,5 @@
-use std::collections::HashSet;
-use crate::helpers::positions::{chunk_size, ChunkCoord, LocalPos, LodStep, WorldPos};
-use crate::renderer::gizmo::gizmo::{push_gizmo_renders, Gizmo};
+use crate::helpers::positions::{ChunkCoord, LocalPos, LodStep, WorldPos, chunk_size};
+use crate::renderer::gizmo::gizmo::{Gizmo, push_gizmo_renders};
 use crate::renderer::props::{ArchetypeId, PropInstance, Props};
 use crate::ui::vertex::Vertex;
 use crate::world::terrain::terrain_editing::{apply_edits_with_stitching, recompute_patch_minmax};
@@ -13,9 +12,10 @@ use fastnoise_lite::{FastNoiseLite, NoiseType};
 use glam::Vec3;
 use rand::rngs::SmallRng;
 use rand::{Rng, RngExt, SeedableRng};
+use std::collections::HashSet;
 use std::mem::take;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter};
 
@@ -204,7 +204,8 @@ pub fn regenerate_vertices_from_height_grid(
                     .and_then(|n| n.pos_z.as_ref())
                     .and_then(|edge| edge.get(gx).copied())
                     .unwrap_or_else(|| {
-                        let pos = WorldPos::new(chunk, LocalPos::new(local_x, 0.0, local_z + cell)).normalize();
+                        let pos = WorldPos::new(chunk, LocalPos::new(local_x, 0.0, local_z + cell))
+                            .normalize();
                         terrain_gen.height(&pos)
                     })
             };
@@ -236,7 +237,7 @@ pub struct GpuChunkHandle {
     pub first_index_under: u32,
     pub index_count_under: u32,
     pub page: usize,
-    pub vertex_count: u32
+    pub vertex_count: u32,
 }
 
 pub struct ChunkBuilder;
@@ -249,7 +250,7 @@ pub struct CpuChunkMesh {
     pub indices: Vec<u32>,
     pub height_grid: Arc<ChunkHeightGrid>,
     pub tree_placements: Vec<PropInstance>,
-    pub archetypes: Vec<String>
+    pub archetypes: Vec<String>,
 }
 
 /// Pre-computed cell data for greedy meshing decisions
@@ -284,7 +285,7 @@ impl ChunkBuilder {
         terrain_gen: &TerrainGenerator,
         terrain_edits_snapshot: &TerrainEditsSnapshot,
         loaded_chunks_snapshot: &LoadedChunksSnapshot,
-        tree_spawning_params: TreeSpawningParams
+        tree_spawning_params: TreeSpawningParams,
     ) -> Option<CpuChunkMesh> {
         let step = state.step;
         let stepf = step as f32;
@@ -298,7 +299,8 @@ impl ChunkBuilder {
         let cells_z = verts_z - 1;
         let total_cells = cells_x * cells_z;
 
-        let (heights, moistures, colors) = Self::sample_terrain_batch(chunk_coord, step, terrain_gen);
+        let (heights, moistures, colors) =
+            Self::sample_terrain_batch(chunk_coord, step, terrain_gen);
 
         if !ChunkWorkerPool::still_current(version_atomic, version) {
             return None;
@@ -342,7 +344,12 @@ impl ChunkBuilder {
             (Vec::new(), Vec::new())
         } else {
             let veg_samples = TreeSpawner::gather_vegetation_samples(chunk_coord, terrain_gen);
-            terrain_gen.tree_spawner.spawn_trees_for_chunk(chunk_coord, &veg_samples, terrain_gen, tree_spawning_params)
+            terrain_gen.tree_spawner.spawn_trees_for_chunk(
+                chunk_coord,
+                &veg_samples,
+                terrain_gen,
+                tree_spawning_params,
+            )
         };
         //println!("Trees: {}", tree_placements.len());
         let (mut vertices, mut indices) = if has_edits {
@@ -353,7 +360,7 @@ impl ChunkBuilder {
                 verts_z,
                 heights,
                 &colors,
-                &normals
+                &normals,
             )
         } else {
             Self::build_greedy_mesh(
@@ -368,7 +375,7 @@ impl ChunkBuilder {
                 &colors,
                 &normals,
                 version,
-                version_atomic
+                version_atomic,
             )?
         };
 
@@ -377,7 +384,7 @@ impl ChunkBuilder {
             &mut vertices,
             &mut indices,
             &height_grid,
-            chunk_coord
+            chunk_coord,
         );
 
         Some(CpuChunkMesh {
@@ -388,7 +395,7 @@ impl ChunkBuilder {
             indices,
             height_grid: Arc::new(height_grid),
             tree_placements,
-            archetypes
+            archetypes,
         })
     }
 
@@ -936,6 +943,7 @@ fn _density_from_chunk_dist2(dist2_chunks: i32) -> f32 {
     1.0 - t * t * (3.0 - 2.0 * t)
 }
 
+/// i32 because it avoids casting for ChunkCoord::new()
 pub fn generate_spiral_offsets(radius: i32) -> Vec<ChunkCoord> {
     let mut v: Vec<ChunkCoord> = Vec::new();
     for dx in -radius..=radius {
@@ -1043,7 +1051,7 @@ pub struct VegetationSample {
 #[derive(Clone, Copy)]
 pub struct TreeSpawningParams {
     pub forest_cluster_strength: f32,
-    pub dense_forests: bool
+    pub dense_forests: bool,
 }
 #[derive(Clone)]
 pub struct TreeSpawner {
@@ -1059,7 +1067,10 @@ impl TreeSpawner {
     pub fn new(props: &Props) -> TreeSpawner {
         let mut kind_to_archetype_id: Vec<ArchetypeId> = Vec::new();
         for kind in TreeKind::iter() {
-            let Some(archetype_id) = props.get_archetype_id_for_name(kind.to_string().as_str()) else { continue };
+            let Some(archetype_id) = props.get_archetype_id_for_name(kind.to_string().as_str())
+            else {
+                continue;
+            };
             kind_to_archetype_id.push(archetype_id);
         }
 
@@ -1217,7 +1228,8 @@ impl TreeSpawner {
 
                 let scale = rng.random_range(0.85..1.2);
                 let rotation_y_rad = rng.random_range(0.0..std::f32::consts::TAU);
-                let world_pos = WorldPos::new(chunk_coord, LocalPos::new(local_x, h_exact, local_z));
+                let world_pos =
+                    WorldPos::new(chunk_coord, LocalPos::new(local_x, h_exact, local_z));
                 //gizmo.cross(world_pos, 2.0, [1.0, 0.0, 0.0, 1.0], 0.0, 10.0);
                 let tree_kind = self.pick_kind(h, m, &mut rng);
                 archetypes.insert(tree_kind.to_string());
@@ -1236,7 +1248,6 @@ impl TreeSpawner {
             }
         }
         push_gizmo_renders(take(&mut gizmo.pending_renders));
-
 
         // println!(
         //     "blob min {:.2} max {:.2} avg {:.2}",
@@ -1258,8 +1269,12 @@ impl TreeSpawner {
         let macro_scale = 1.0 / (cs * 0.5);
         let carve_scale = 1.0 / (cs * 4.5);
 
-        let macro_n = self.forest_noise.get_noise_2d(world_x * macro_scale, world_z * macro_scale);
-        let carve_n = self.forest_carve_noise.get_noise_2d(world_x * carve_scale, world_z * carve_scale);
+        let macro_n = self
+            .forest_noise
+            .get_noise_2d(world_x * macro_scale, world_z * macro_scale);
+        let carve_n = self
+            .forest_carve_noise
+            .get_noise_2d(world_x * carve_scale, world_z * carve_scale);
 
         let macro01 = ((macro_n + 1.0) * 0.5).clamp(0.0, 1.0);
         let carve01 = ((carve_n + 1.0) * 0.5).clamp(0.0, 1.0);
@@ -1331,10 +1346,8 @@ impl TreeSpawner {
         const TREE_SALT: u64 = 0x7A_5E_ED_5E_ED_00_01;
         let x = chunk_coord.x as i64 as u64;
         let z = chunk_coord.z as i64 as u64;
-        let mut seed = x
-            .wrapping_mul(0x9E3779B97F4A7C15)
-            ^ z.wrapping_mul(0xC2B2AE3D27D4EB4F)
-            ^ TREE_SALT;
+        let mut seed =
+            x.wrapping_mul(0x9E3779B97F4A7C15) ^ z.wrapping_mul(0xC2B2AE3D27D4EB4F) ^ TREE_SALT;
 
         seed = (seed ^ (seed >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
         seed = (seed ^ (seed >> 27)).wrapping_mul(0x94D049BB133111EB);

@@ -37,26 +37,41 @@ elements:
   - !Circle
     id: Slider knob
     actions:
-      - on:startup, set(str:{ap.0}_target_pos, self.center.x)
+      - on:startup,
+        set(str:{ap.0}_target_pos, self.center.x);
+        set(str:{ap.0}_shadow_pos, self.center.x);
+        set(str:{ap.0}_tug_offset, 0.0);
+        set(str:{ap.0}_dragging, false)
+
       - as:["slider_bar"],
         set(str:min_px, expr:{as.center.x} - {as.size.x} * 0.5);
-        
         if({ap.7},
         set(str:option_index, expr:nearest_index({ap.5}, {{ap.0}}));
         set(str:{ap.0}_target_pos, expr:{min_px}+({option_index}/({ap.5}.len-1)*{as.size.x})),
-        set(str:{ap.0}_target_pos, expr:{min_px}+(({{ap.0}}-{ap.2})/({ap.3}-{ap.2})*{as.size.x}));
+        set(str:{ap.0}_target_pos, expr:{min_px}+(({{ap.0}}-{ap.2})/({ap.3}-{ap.2})*{as.size.x}))
         );
-      - on:h_enter, set(str:self.radius, expr:{self.radius}*1.1);
-      - on:drag_start, call(rust:play_sound, str:ButtonPress)
+
+      - on:h_enter, set(str:self.radius, expr:{self.radius}*1.1)
+
+      - on:drag_start,
+        set(str:{ap.0}_dragging, true);
+        call(rust:play_sound, str:ButtonPress)
+
+      - on:drag_end,
+        set(str:{ap.0}_dragging, false);
+      #set(str:{ap.0}_tug_offset, 0.0);
+
       - on:h_exit, set(str:self.radius, expr:{self.radius}/1.1)
+
       - on:drag_move as:["slider_bar"],
         set(str:min_px, expr:{as.center.x} - {as.size.x} * 0.5);
         set(str:max_px, expr:{as.center.x} + {as.size.x} * 0.5);
         set(str:clamped_mouse_x, expr:clamp({mouse_pos.x}, {min_px}, {max_px}));
         set(str:mouse_t, expr:({clamped_mouse_x}-{min_px})/({max_px}-{min_px}));
+        set(str:{ap.0}_tug_offset, expr:(clamp({mouse_pos.x}, {as.center.x} - {as.size.x} * 0.5, {as.center.x} + {as.size.x} * 0.5) - {{ap.0}_shadow_pos}) * 0.22);
+        
         
         if({ap.7},
-        
         set(str:option_index, expr:round({mouse_t}*({ap.5}.len-1)));
         if(expr:{{ap.0}_last_option_index??0} != {option_index}, call(rust:play_sound, str:ButtonHover));
         set(str:{ap.0}_last_option_index, option_index);
@@ -74,7 +89,11 @@ elements:
         );
         set(str:{ap.0}_target_pos, expr:{min_px}+(({{ap.0}}-{ap.2})/({ap.3}-{ap.2})*{as.size.x}))
         );
-      - set(str:self.center.x, expr:{self.center.x} + ({{ap.0}_target_pos} - {self.center.x}) * 0.08);
+
+      - set(str:{ap.0}_shadow_pos, expr:{{ap.0}_shadow_pos} + ({{ap.0}_target_pos} - {{ap.0}_shadow_pos}) * (1 - exp(-5.0 * {render_dt})));
+        set(str:{ap.0}_tug_offset, expr:{{ap.0}_tug_offset}*0.8);
+
+      - set(str:self.center.x, expr:{{ap.0}_shadow_pos} + {{ap.0}_tug_offset});
     x: 0.0
     y: 0.0
     radius: 20

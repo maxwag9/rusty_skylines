@@ -9,13 +9,13 @@ use crate::renderer::props::{GpuPropInstance, PropVertex, Props};
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::render_core::create_color_attachment_load;
 use crate::renderer::textures::material_keys::*;
-use crate::renderer::ui::UiRenderer;
+use crate::renderer::ui::{UiRenderer, with_font_system};
 use crate::renderer::ui_pipelines::multisample_state;
 use crate::ui::vertex::{FlowingThickLineVtxRender, ThickLineVtxRender, ThinLineVtxRender, Vertex};
 use crate::world::buildings::building_mesher::BuildingVertex;
 use crate::world::buildings::building_renderer::BuildingRenderer;
 use crate::world::buildings::buildings::Buildings;
-use crate::world::camera::Camera;
+use crate::world::camera::camera::Camera;
 use crate::world::cars::car_mesh::CarVertex;
 use crate::world::cars::car_render::CarInstance;
 use crate::world::cars::car_structs::CarStorage;
@@ -1139,17 +1139,19 @@ pub fn render_gizmo<'a>(
             pass.draw(0..4, 0..flowing_count);
         }
     }
-    let text_ready = gizmo.prepare_text(
-        camera,
-        device,
-        queue,
-        encoder,
-        &ui.viewport,
-        &mut ui.text_atlas,
-        &mut ui.font_system,
-        pipelines.config.width,
-        pipelines.config.height,
-    );
+    let text_ready = with_font_system(|font_system| {
+        gizmo.prepare_text(
+            camera,
+            device,
+            queue,
+            encoder,
+            &ui.viewport,
+            &mut ui.text_atlas,
+            font_system,
+            pipelines.config.width,
+            pipelines.config.height,
+        )
+    });
     if text_ready {
         let Some(gb) = gizmo.gizmo_buffers.as_mut() else {
             error!("[Renderer] Gizmo buffers is empty");

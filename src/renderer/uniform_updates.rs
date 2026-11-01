@@ -8,8 +8,8 @@ use crate::renderer::shadows::compute_csm_matrices;
 use crate::resources::Time;
 use crate::ui::variables::Variables;
 use crate::world::astronomy::Astronomy;
-use crate::world::camera::Camera;
-use crate::world::terrain::sky::SkyUniform;
+use crate::world::camera::camera::Camera;
+use crate::world::terrain::sky::{CelestialBodyUniform, SkyUniform};
 use crate::world::terrain::terrain_subsystem::Terrain;
 use crate::world::terrain::water::WaterUniform;
 use glam::Mat4;
@@ -50,6 +50,7 @@ impl<'a> UniformUpdater<'a> {
         let new_uniforms = make_new_camera_uniforms(
             astronomy.sun_dir,
             astronomy.moon_dir,
+            astronomy.solar_eclipse_coverage,
             time_system,
             light_mats,
             splits,
@@ -67,17 +68,17 @@ impl<'a> UniformUpdater<'a> {
         self.pipelines.resources.csm_shadows.splits = splits;
     }
 
-    pub fn update_fog_uniforms(&self, config: &SurfaceConfiguration, camera: &Camera) {
+    pub fn update_fog_uniforms(&self, _config: &SurfaceConfiguration, _camera: &Camera) {
         let fog_uniforms = FogUniforms {
-            fog_density: 1.0,
-            fog_height: 20.0,
+            fog_density: 0.9,
+            fog_height: 25.0,
+            fog_height_falloff: 0.008,
+            fog_start: 110.0,
+            fog_end: 32000.0,
+            fog_sky_factor: 0.0,
             _pad0: 0.0,
-            fog_color: [0.55, 0.55, 0.7],
             _pad1: 0.0,
-            fog_sky_factor: 0.5,
-            fog_height_falloff: 0.0,
-            fog_start: camera.far * 0.70,
-            fog_end: camera.far * 1.05,
+            fog_color: [0.60, 0.67, 0.79],
             _pad2: 0.0,
         };
 
@@ -106,7 +107,32 @@ impl<'a> UniformUpdater<'a> {
         );
     }
     pub fn update_sky_uniforms(&self, astronomy: &Astronomy) {
-        let moon_phase: f32 = astronomy.moon_phase as f32;
+        let moon_phase = astronomy.moon_phase as f32;
+
+        let celestial_bodies: [CelestialBodyUniform; 20] = std::array::from_fn(|index| {
+            let body = astronomy.celestial_bodies[index];
+
+            CelestialBodyUniform {
+                direction_size: [
+                    body.direction.x,
+                    body.direction.y,
+                    body.direction.z,
+                    body.angular_radius_ndc as f32,
+                ],
+                properties: [
+                    body.distance_km as f32,
+                    body.illumination as f32,
+                    body.radius_km as f32,
+                    body.parent_index as f32,
+                ],
+                parent_relative_position: [
+                    body.parent_relative_position_ecliptic_km.x,
+                    body.parent_relative_position_ecliptic_km.y,
+                    body.parent_relative_position_ecliptic_km.z,
+                    body.parent_distance_km as f32,
+                ],
+            }
+        });
 
         let sky_uniform = SkyUniform {
             star_rotation: astronomy.star_rotation.to_cols_array_2d(),
@@ -118,6 +144,7 @@ impl<'a> UniformUpdater<'a> {
             moon_intensity: 1.0,
             _pad1: 1.0,
             _pad2: 0.0,
+            celestial_bodies,
         };
 
         self.queue.write_buffer(

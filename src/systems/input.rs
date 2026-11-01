@@ -1,8 +1,8 @@
 use crate::helpers::positions::chunk_size;
 use crate::resources::Resources;
 use crate::ui::helper::calc_move_speed;
-use crate::world::camera::{CameraMode, ground_camera_target, resolve_pitch_by_search};
-use glam::Vec3;
+use crate::world::camera::camera::{CameraMode, ground_camera_target, resolve_pitch_by_search};
+use glam::{Vec2, Vec3};
 
 pub fn run_inputs(resources: &mut Resources) {
     let world = &mut resources.world;
@@ -48,10 +48,20 @@ pub fn run_inputs(resources: &mut Resources) {
     let zooming = input.action_down("Zoom");
 
     if zooming {
-        cam_ctrl.zoom(
+        // cam_ctrl.zoom(
+        //     camera,
+        //     resources.ui.variables.get_f64("zoom_speed").unwrap_or(1.0) as f32,
+        // );
+        cam_ctrl.zoom_at_cursor(
             camera,
             resources.ui.variables.get_f64("zoom_speed").unwrap_or(1.0) as f32,
+            input.mouse.pos,
+            Vec2::new(
+                resources.render_core.window_size.width,
+                resources.render_core.window_size.height,
+            ),
         );
+
         resources.ui.variables.set_bool("zoomed", true);
     } else {
         if cam_ctrl.zoom_time_start.is_some() {
@@ -69,9 +79,8 @@ pub fn run_inputs(resources: &mut Resources) {
     }
 
     let mut wish = Vec3::ZERO;
-    if !resources.settings.editor_mode
-        && !resources.settings.drive_car
-        && !resources.ui.touch_manager.hovered().is_some()
+    if !resources.settings.editor_mode && !resources.ui.touch_manager.hovered().is_some()
+    //&& !resources.settings.drive_car
     {
         if input.action_down("Fly Camera Forward") {
             wish += forward;
@@ -95,7 +104,14 @@ pub fn run_inputs(resources: &mut Resources) {
         }
         //}
 
-        let orbit_speed = 1.5 * world.time.render_dt;
+        let fov_deg = if camera.fov.is_finite() {
+            camera.fov.clamp(0.01, 120.0)
+        } else {
+            60.0
+        };
+
+        let fov_scale = (fov_deg / 60.0).clamp(0.001, 2.0);
+        let orbit_speed = 1.5 * world.time.render_dt * fov_scale;
         if cam_ctrl.target_yaw.is_nan() {
             camera.yaw = 0.0;
             cam_ctrl.target_yaw = 0.0;
@@ -161,27 +177,31 @@ pub fn run_inputs(resources: &mut Resources) {
         cam_ctrl.zoom_velocity = 0.0;
     }
 
-    let dv = (-cam_ctrl.orbit_damping_release * dt).exp();
-    cam_ctrl.yaw_velocity *= dv;
-    cam_ctrl.pitch_velocity *= dv;
-
+    // let dv = (-cam_ctrl.orbit_damping_release * dt).exp();
+    // cam_ctrl.yaw_velocity *= dv;
+    // cam_ctrl.pitch_velocity *= dv;
+    //
+    // if !input.action_down("Orbit") {
+    //     cam_ctrl.target_yaw += cam_ctrl.yaw_velocity;
+    //     cam_ctrl.target_pitch += cam_ctrl.pitch_velocity;
+    // }
     if !input.action_down("Orbit") {
-        cam_ctrl.target_yaw += cam_ctrl.yaw_velocity;
-        cam_ctrl.target_pitch += cam_ctrl.pitch_velocity;
+        cam_ctrl.yaw_velocity = 0.0;
+        cam_ctrl.pitch_velocity = 0.0;
     }
-    if !resources.settings.drive_car {
-        camera.target = camera.target.add_vec3(cam_ctrl.velocity * dt);
-        if !noclip {
-            // First person needs eye-height clearance above ground, not the
-            // small pivot clearance used while orbiting.
-            let clearance = if camera.mode == CameraMode::FirstPerson {
-                5.7
-            } else {
-                0.1
-            };
-            ground_camera_target(camera, cam_ctrl, terrain_subsystem, clearance);
-        }
+    // if !resources.settings.drive_car {
+    camera.target = camera.target.add_vec3(cam_ctrl.velocity * dt);
+    if !noclip {
+        // First person needs eye-height clearance above ground, not the
+        // small pivot clearance used while orbiting.
+        let clearance = if camera.mode == CameraMode::FirstPerson {
+            5.7
+        } else {
+            0.1
+        };
+        ground_camera_target(camera, cam_ctrl, terrain_subsystem, clearance);
     }
+
     // Pitch-by-terrain-search sweeps along the orbit arm to keep the pivot
     // camera from clipping through terrain; there's no arm to sweep in first
     // person (eye == target), so it's Orbit-only.

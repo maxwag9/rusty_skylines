@@ -1166,12 +1166,66 @@ impl WorldPos {
 
         result
     }
+
+    pub fn offset_polyline_in_direction(
+        points: &[WorldPos],
+        direction: Vec3,
+        offset: f32,
+    ) -> Vec<WorldPos> {
+        if points.is_empty() || offset.abs() <= f32::EPSILON {
+            return points.to_vec();
+        }
+
+        let displacement = direction.normalize_or_zero() * offset;
+
+        points
+            .iter()
+            .map(|&point| point.add_vec3(displacement))
+            .collect()
+    }
+
+    #[inline]
+    pub fn closest_point_on_polyline(&self, polyline: &[WorldPos]) -> Option<ClosestPolylinePoint> {
+        let (&first, remaining) = polyline.split_first()?;
+
+        let mut closest_point = first;
+        let mut closest_index = 0;
+        let mut closest_distance_squared = self.distance_squared(first);
+
+        for (index, &point) in remaining.iter().enumerate() {
+            let distance_squared = self.distance_squared(point);
+
+            if distance_squared < closest_distance_squared {
+                closest_distance_squared = distance_squared;
+                closest_point = point;
+                closest_index = index + 1;
+            }
+        }
+
+        Some(ClosestPolylinePoint {
+            distance_squared: closest_distance_squared,
+            point: closest_point,
+            index: closest_index,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ClosestPolylinePoint {
+    pub distance_squared: f64,
+    pub point: WorldPos,
+    pub index: usize,
 }
 impl Default for WorldPos {
     fn default() -> Self {
         WorldPos::zero()
     }
 }
+
+impl WorldPos {
+    // UNSPONSORED AND UNSOLICITED AND MOST IMPORTANTLY NOT RECOMMENDED TRICKERY!! section.
+}
+
 impl fmt::Display for ChunkCoord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Chunk({}, {})", self.x, self.z)

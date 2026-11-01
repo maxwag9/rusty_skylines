@@ -355,7 +355,7 @@ fn synth_text(rng: &mut SimpleRng) -> UiButtonTextYaml {
             touchable: rng.next_bool(),
             editable: rng.next_bool(),
         },
-        input_box: rng.next_bool(),
+        input_box: InputBoxMode::random(),
         anchor: Anchor::default(),
         decorations: vec![], // TODO: FANCY RANDOM DECO!!
     }

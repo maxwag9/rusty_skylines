@@ -85,28 +85,51 @@ pub fn process_text_editing_input(
         if input.mouse.buttons.just_pressed() {
             sounds.queue_sfx("ButtonHover");
         }
+        //println!("Mouse caret selection");
+        return;
+    }
 
+    if handle_select_all(input, text, dirty) {
+        sounds.queue_sfx("ButtonPress");
+        //println!("Select all");
         return;
     }
 
     if handle_clipboard_commands(input, text, dirty) {
         sounds.queue_sfx("ButtonPress");
+        //println!("Clipboard stuff");
         return;
     }
 
     if handle_backspace(input, text, dirty) {
         sounds.queue_sfx("Backspace");
+        //println!("Backspace");
         return;
     }
 
     if handle_character_input(input, text, dirty) {
         sounds.queue_sfx("Write");
+        //println!("Character Input");
         return;
     }
 
     handle_arrow_navigation(input, text, dirty);
 }
+fn handle_select_all(input: &mut Input, text: &mut UiButtonText, dirty: &mut LayerDirty) -> bool {
+    if !input.action_pressed_once("Select All") {
+        return false;
+    }
 
+    let grapheme_count = text.text.graphemes(true).count();
+
+    text.sel_start = 0;
+    text.sel_end = grapheme_count;
+    text.caret = grapheme_count;
+    text.has_selection = grapheme_count > 0;
+
+    dirty.mark_texts();
+    true
+}
 fn handle_mouse_caret_selection(
     editor: &mut EditorTouchExtension,
     input: &Input,
@@ -315,7 +338,7 @@ fn handle_character_input(
         .iter()
         .any(|s| s.chars().any(|c| !c.is_control()));
 
-    let enter = input.named_just_pressed(NamedKey::Enter);
+    let enter = input.named_just_pressed(NamedKey::Enter) & !text.block_line_break;
     let tab = input.named_just_pressed(NamedKey::Tab);
 
     if !has_text && !enter && !tab {
@@ -409,34 +432,48 @@ fn insert_characters(text: &mut UiButtonText, input: &mut Input, is_template_mod
 }
 
 fn handle_arrow_navigation(input: &mut Input, text: &mut UiButtonText, dirty: &mut LayerDirty) {
-    if text.has_selection {
+    if text.has_selection && !input.shift {
+        //println!("Collapse");
         handle_selection_collapse(input, text, dirty);
         return;
     }
 
+    let mut changed = false;
+
     if input.action_repeat("Move Cursor Left") && text.caret > 0 {
-        text.caret -= 1;
-        dirty.mark_texts();
+        //println!("Left");
+        move_caret(text, text.caret - 1, input.shift);
+        changed = true;
     }
 
     let grapheme_count = text.text.graphemes(true).count();
+
     if input.action_repeat("Move Cursor Right") && text.caret < grapheme_count {
-        text.caret += 1;
-        dirty.mark_texts();
+        //println!("Right");
+        move_caret(text, text.caret + 1, input.shift);
+        changed = true;
     }
 
     if input.action_repeat("Move Cursor Up") {
         if let Some(new_caret) = navigate_vertical(text, true) {
-            text.caret = new_caret;
-            dirty.mark_texts();
+            if new_caret != text.caret {
+                move_caret(text, new_caret, input.shift);
+                changed = true;
+            }
         }
     }
 
     if input.action_repeat("Move Cursor Down") {
         if let Some(new_caret) = navigate_vertical(text, false) {
-            text.caret = new_caret;
-            dirty.mark_texts();
+            if new_caret != text.caret {
+                move_caret(text, new_caret, input.shift);
+                changed = true;
+            }
         }
+    }
+
+    if changed {
+        dirty.mark_texts();
     }
 }
 
@@ -744,4 +781,19 @@ pub fn inverse_rotate_text_point(text: &UiButtonText, point: [f32; 2]) -> [f32; 
         origin[0] + cos * dx + sin * dy,
         origin[1] - sin * dx + cos * dy,
     ]
+}
+
+fn move_caret(text: &mut UiButtonText, new_caret: usize, extend_selection: bool) {
+    if extend_selection {
+        if !text.has_selection {
+            text.sel_start = text.caret;
+        }
+
+        text.sel_end = new_caret;
+        text.has_selection = text.sel_start != text.sel_end;
+    } else {
+        text.clear_selection();
+    }
+
+    text.caret = new_caret;
 }

@@ -1,5 +1,5 @@
 use crate::helpers::positions::WorldPos;
-use crate::world::camera::Camera;
+use crate::world::camera::camera::Camera;
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::sound::MAX_CARS_AUDIO;
 use crate::world::sound::sound::AudioState;

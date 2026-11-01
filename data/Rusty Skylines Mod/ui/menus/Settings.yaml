@@ -15,10 +15,10 @@ layers:
           - 1.0
         text: Settings
       - !Advanced
-        name: settings_to_main_menu_button
+        name: settings_to_menu_button
         ap_name: button
         ap_vars:
-          - 'str:<- To {expr:is_some({current_save}) == true ? "Pause" : "Main"} Menu'
+          - 'str:{expr:is_some({current_save}) == true ? {lang.settings.return_to_pause_menu} : {lang.settings.return_to_main_menu}} '
           - "25"
           - "str:on:r if(expr:is_some({current_save}), call(open_pause_menus), call(open_main_menus))"
         x: 100
@@ -137,11 +137,44 @@ layers:
         misc:
           touchable: false
       - !Advanced
+        name: checkbox_render_clouds
+        ap_name: checkbox
+        ap_var:
+          - "str:render_clouds"
+          - "25"
+        x: 75
+        y: 920
+        scale: 1.0
+        misc:
+          touchable: false
+      - !Advanced
+        name: checkbox_render_exposure
+        ap_name: checkbox
+        ap_var:
+          - "str:render_exposure"
+          - "25"
+        x: 75
+        y: 980
+        scale: 1.0
+        misc:
+          touchable: false
+      - !Advanced
+        name: present_mode_dropdown
+        ap_name: dropdown
+        ap_var:
+          - str:present_mode
+          - str:lang.settings.dropdown.present_mode
+        x: 600
+        y: 440
+        scale: 1.0
+        misc:
+          touchable: false
+      - !Advanced
         name: tonemapping_state_dropdown
         ap_name: dropdown
         ap_var:
           - str:tonemapping_state
-          - str:Tonemapping
+          - str:lang.settings.dropdown.tonemapping
         x: 600
         y: 280
         scale: 1.0
@@ -152,29 +185,19 @@ layers:
         ap_name: dropdown
         ap_var:
           - str:color_grading_state
-          - str:Color Grade
+          - str:lang.settings.dropdown.color_grade
         x: 600
         y: 360
         scale: 1.0
         misc:
           touchable: false
-      - !Advanced
-        name: present_mode_dropdown
-        ap_name: dropdown
-        ap_var:
-          - str:present_mode
-          - str:Present Mode
-        x: 600
-        y: 440
-        scale: 1.0
-        misc:
-          touchable: false
+
       - !Advanced
         name: shadow_type_dropdown
         ap_name: dropdown
         ap_var:
           - str:shadow_type
-          - str:Shadow Type
+          - str:lang.settings.dropdown.shadow_type
         x: 600
         y: 520
         scale: 1.0
@@ -185,16 +208,55 @@ layers:
         ap_name: dropdown
         ap_var:
           - str:fullscreen_mode
-          - str:Fullscreen
+          - str:lang.settings.dropdown.fullscreen
         x: 600
         y: 600
         scale: 1.0
+      - !Advanced
+        name: cloud_quality_dropdown
+        ap_name: dropdown
+        ap_var:
+          - str:cloud_quality
+          - str:lang.settings.dropdown.cloud_quality
+        x: 600
+        y: 680
+        scale: 1.0
+      - !Advanced
+        name: render_distance_slider
+        ap_name: slider
+        ap_var:
+          - "str:render_distance"
+          - "str:{lang.settings.slider.render_distance}"
+          - "1"
+          - "256"
+          - "1"
+          - "none:None"
+          - "none:None"
+          - "false"
+        x: 1075
+        y: 400
+        scale: 1.5
+      - !Advanced
+        name: generation_distance_slider
+        ap_name: slider
+        ap_var:
+          - "str:generation_distance"
+          - "str:{lang.settings.slider.generation_distance}"
+          - "1"
+          - "256"
+          - "1"
+          - "none:None"
+          - "none:None"
+          - "false"
+        x: 1075
+        y: 500
+        scale: 1.5
       - !Advanced
         name: msaa_slider
         ap_name: slider
         ap_var:
           - "str:msaa_samples"
-          - "str:MSAA"
+          - "str:{lang.settings.slider.msaa}"
           - "1"
           - "8"
           - "1"
@@ -209,12 +271,12 @@ layers:
         ap_name: slider
         ap_var:
           - "str:shadow_map_size"
-          - "str:Shadow Quality"
+          - "str:{lang.settings.slider.shadow_quality}"
           - "1024"
           - "8192"
           - "1024"
           - "[1024, 2048, 4096, 6144, 8192]"
-          - "[str:Potato, str:Low, str:Medium, str:High, str:Insane]"
+          - "[str:{lang.settings.slider.shadow_quality_options.potato}, str:{lang.settings.slider.shadow_quality_options.low}, str:{lang.settings.slider.shadow_quality_options.medium}, str:{lang.settings.slider.shadow_quality_options.high}, str:{lang.settings.slider.shadow_quality_options.insane}]"
           - "true"
         x: 1075
         y: 600
@@ -224,7 +286,7 @@ layers:
         ap_name: slider
         ap_var:
           - "str:target_fps"
-          - "str:FPS Limit"
+          - "str:{lang.settings.slider.fps_limit}"
           - "25"
           - "2000"
           - "1"
@@ -239,7 +301,7 @@ layers:
         ap_name: slider
         ap_var:
           - "str:exposure"
-          - "str:Exposure"
+          - "str:{lang.settings.slider.exposure}"
           - "-2.0"
           - "2.0"
           - "0.1"
@@ -249,13 +311,12 @@ layers:
         x: 1575
         y: 700
         scale: 1.5
-
       - !Advanced
         name: brightness_slider
         ap_name: slider
         ap_var:
           - "str:brightness"
-          - "str:Brightness"
+          - "str:{lang.settings.slider.brightness}"
           - "-1.0"
           - "1.0"
           - "0.1"
@@ -265,13 +326,12 @@ layers:
         x: 1575
         y: 600
         scale: 1.5
-
       - !Advanced
         name: contrast_slider
         ap_name: slider
         ap_var:
           - "str:contrast"
-          - "str:Contrast"
+          - "str:{lang.settings.slider.contrast}"
           - "0.0"
           - "2.0"
           - "0.1"
@@ -281,13 +341,12 @@ layers:
         x: 1075
         y: 900
         scale: 1.5
-
       - !Advanced
         name: saturation_slider
         ap_name: slider
         ap_var:
           - "str:saturation"
-          - "str:Saturation"
+          - "str:{lang.settings.slider.saturation}"
           - "0.0"
           - "20.0"
           - "0.1"
@@ -297,13 +356,12 @@ layers:
         x: 1075
         y: 1000
         scale: 1.5
-
       - !Advanced
         name: vignette_strength_slider
         ap_name: slider
         ap_var:
           - "str:vignette_strength"
-          - "str:Vignette Strength"
+          - "str:{lang.settings.slider.vignette_strength}"
           - "0.0"
           - "1.0"
           - "0.1"
@@ -313,13 +371,12 @@ layers:
         x: 1575
         y: 800
         scale: 1.5
-
       - !Advanced
         name: vignette_radius_slider
         ap_name: slider
         ap_var:
           - "str:vignette_radius"
-          - "str:Vignette Radius"
+          - "str:{lang.settings.slider.vignette_radius}"
           - "0.0"
           - "1.0"
           - "0.05"
@@ -329,13 +386,12 @@ layers:
         x: 1575
         y: 900
         scale: 1.5
-
       - !Advanced
         name: vignette_softness_slider
         ap_name: slider
         ap_var:
           - "str:vignette_softness"
-          - "str:Vignette Softness"
+          - "str:{lang.settings.slider.vignette_softness}"
           - "0.0"
           - "1.0"
           - "0.05"

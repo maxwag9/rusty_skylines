@@ -7,3 +7,4 @@ second_rail_color: [ 0.13, 0.5, 0.928, 0.6 ]
 automatic_buildings_usage:
   consumption: 0.001
   production: 0
+flows_to_consumer: true

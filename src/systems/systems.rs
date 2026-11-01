@@ -5,7 +5,6 @@ use crate::resources::Resources;
 use crate::ui::input::Input;
 use crate::ui::variables::Variables;
 use crate::world::buildings::buildings::{BuildingStorage, Buildings};
-use crate::world::buildings::lot_fitting::collect_road_points;
 use crate::world::buildings::zoning::{LotId, Zoning, draw_area, point_in_polygon_xz};
 use crate::world::cars::car_render::interpolate_cars;
 use crate::world::roads::road_mesh_manager::RoadMeshManager;
@@ -173,7 +172,8 @@ fn handle_destruction(
                 continue;
             };
 
-            let points: Vec<WorldPos> = collect_road_points(road_edges)
+            let points: Vec<WorldPos> = road_edges
+                .collect_road_points()
                 .into_iter()
                 .copied()
                 .collect();
@@ -190,7 +190,7 @@ fn handle_destruction(
                 RoadDestroyType::Segment(segment_id) => {
                     if let Some(edges) = road_mesh_manager.road_edge_storage.get(&segment_id) {
                         let points: Vec<WorldPos> =
-                            collect_road_points(edges).into_iter().copied().collect();
+                            edges.collect_road_points().into_iter().copied().collect();
                         //gizmo.area(points.as_slice(), [0.5, 0.2, 0.0, 0.3], 0.0);
                         let segment = roads.road_manager.roads.segment(segment_id);
                         if let Some(lane) = segment

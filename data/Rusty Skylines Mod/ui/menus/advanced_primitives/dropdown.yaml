@@ -12,17 +12,17 @@ elements:
       - on:sel button:a, ifvareq({ap}_open, bool:false, forin({ap}.options, del_ap(self.menu, self.layer, expr:"{ap.0}_Option_"+{idx})))
       # If opening: Iterate over the options array and clone the template AP
       #- on:release button:a, print(str:{ap}.{idx})
-      - on:release button:left, ifvareq(var:{ap.0}_open, bool:true, forin({ap}.options, add_ap(self.menu, expr:"{ap.0}_Option_"+{idx}, "dropdown_option", [expr:"{ap.0}.options."+{idx}, str:str:{ap.0}, self.layer], [self.center.x, expr:{self.center.y} + {self.size.y} * ({idx} + 1)], 1.0, true);))
+      - on:release button:left, ifvareq(var:{ap.0}_open, bool:true, forin({ap.0}.options, add_ap(self.menu, expr:"{ap.0}_Option_"+{idx}, "dropdown_option", [expr:"{ap.0}.options."+{idx}, str:str:{ap.0}, self.layer, expr:"{ap.1}.options."+{("{ap.0}.options."+{idx})}], [self.center.x, expr:{self.center.y} + {self.size.y} * ({idx} + 1)], 1.0, true);))
       #- on:release button:left, print("dd_{ap}_layer")
       # If closing: Iterate over the options array and delete the cloned APs
       #- on:release button:left, print("{ap}_open")
       #- button:a, print({ap}_open)
       #- button:a, print(Name in dd:, str:{ap}_open)
-      - on:release on:sel button:left, ifvareq({ap.0}_open, bool:false, forin({ap.0}.options, del_ap(self.menu, self.layer, expr:"{ap}_Option_"+{idx})))
+      - on:release on:sel on:desel button:left, ifvareq({ap.0}_open, bool:false, forin({ap.0}.options, del_ap(self.menu, self.layer, expr:"{ap}_Option_"+{idx})))
       - on:hover_enter, call(rust:play_sound, str:ButtonHover)
       - on:press, call(rust:play_sound, str:ButtonPress)
       # Visual feedback for the main button
-      - call(show_interaction, [[0.1, 0.1, 0.1, 1.0], false]))
+      - call(show_interaction, [[0.0, 0.761, 0.820, 0.7], false]))
     #      - on:hovering, ifvareq({ap}_open, bool:true, set(self.color.fill, [0.5, 0.5, 0.5, 1.0]), set(self.color.fill, [0.2, 0.2, 0.2, 1.0]))
     #      - on:hover_exit, ifvareq({ap}_open, bool:true, set(self.color.fill, [0.4, 0.4, 0.4, 1.0]), set(self.color.fill, [0.1, 0.1, 0.1, 1.0]))
 
@@ -31,32 +31,36 @@ elements:
     w: 240
     h: 60
     color:
-      - 0.04
-      - 0.04
-      - 0.04
+      - 0.0
+      - 0.761
+      - 0.820
       - 1.0
     border_color:
-      - 1.0
-      - 1.0
+      - 0.8
+      - 0.8
       - 1.0
       - 1.0
     roundness: 0.2
-    border_thickness: 4
+    border_thickness: 3
 
   - !Text
     id: Main Button Text
+    actions:
+      - as:"Main Button Background", set(str:self.pt, expr:{self.pt} * ({as.size.x}*0.93) / {self.size.x}))
     x: 0
     y: 0
     pt: 16.0
-    border_width: 5.0
     color:
       - 1.0
       - 1.0
       - 1.0
       - 1.0
     # Evaluates to the currently selected option string
-    text: "{ap.1}: {{ap.0}}"
+    text: '{exprvar:"{ap.1}"+".name"}: {exprvar:"{ap.1}.options."+{("{ap.0}.options."+nearest_index({{ap.0}.options}, {{ap.0}}))}}'
     anchor: Center
+    decorations:
+      - color: [ 0.149, 0.049, 0.047, 1.0 ]
+        offset: [ 1, 1 ]
     misc:
       active: true
       touchable: false

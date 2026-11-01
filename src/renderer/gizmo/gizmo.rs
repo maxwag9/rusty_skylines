@@ -13,7 +13,7 @@ use crate::ui::vertex::{
 };
 use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::{Zoning, ZoningStorage, point_in_polygon_xz};
-use crate::world::camera::{Camera, CameraMode};
+use crate::world::camera::camera::{Camera, CameraMode};
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::parking::{PARK_L, PARK_W, ParkingStorage};
 use crate::world::cars::partitions::PartitionId;
@@ -393,6 +393,34 @@ impl Gizmo {
                     );
 
                     rail_index += 1;
+
+                    for lot in segment
+                        .lot_ids
+                        .iter()
+                        .flat_map(|&lot_id| zoning.get_lot(lot_id))
+                    {
+                        let Some(lot_layout) = lot.layout.as_ref() else {
+                            continue;
+                        };
+                        let end_pos = lot.entrance.pos;
+
+                        let Some(flow) = connect_polyline_to_polygon(
+                            points.as_slice(),
+                            end_pos,
+                            &lot.bounds,
+                            lane_offset,
+                        ) else {
+                            continue;
+                        };
+
+                        let flow = if utility.flows_to_consumer {
+                            flow
+                        } else {
+                            [flow[1], flow[0]]
+                        };
+
+                        self.polyline_flowing(&flow, a_color, b_color, false, 0.06, 0.0);
+                    }
                 }
             }
         }
@@ -2616,4 +2644,173 @@ impl Gizmo {
 
         has_text
     }
+}
+
+pub fn connect_polyline_to_polygon(
+    rail: &[WorldPos],
+    entrance: WorldPos,
+    bounds: &[WorldPos],
+    rail_offset: f32,
+) -> Option<[WorldPos; 2]> {
+    if rail.len() < 2 || bounds.len() < 3 {
+        return None;
+    }
+
+    let origin = rail[0];
+    let px = origin.dx(entrance);
+    let pz = origin.dz(entrance);
+
+    let mut closest_distance_sq = f64::INFINITY;
+    let mut closest_along = 0.0f64;
+    let mut closest_rail_point = rail[0];
+    let mut total_rail_length = 0.0f64;
+
+    for pair in rail.windows(2) {
+        let a = pair[0];
+        let b = pair[1];
+
+        let ax = origin.dx(a);
+        let az = origin.dz(a);
+        let dx = a.dx(b);
+        let dz = a.dz(b);
+        let length_sq = dx * dx + dz * dz;
+        let length = length_sq.sqrt();
+
+        if length <= f64::EPSILON {
+            continue;
+        }
+
+        let t = (((px - ax) * dx + (pz - az) * dz) / length_sq).clamp(0.0, 1.0);
+
+        let cx = ax + dx * t;
+        let cz = az + dz * t;
+        let distance_sq = (px - cx).powi(2) + (pz - cz).powi(2);
+        let along = total_rail_length + length * t;
+
+        if distance_sq < closest_distance_sq {
+            closest_distance_sq = distance_sq;
+            closest_along = along;
+            closest_rail_point = a.lerp(b, t);
+        }
+
+        total_rail_length += length;
+    }
+
+    if total_rail_length <= f64::EPSILON {
+        return None;
+    }
+
+    let target_along = (closest_along + rail_offset as f64).clamp(0.0, total_rail_length);
+
+    let mut traversed = 0.0f64;
+    let mut start = *rail.last()?;
+
+    for pair in rail.windows(2) {
+        let a = pair[0];
+        let b = pair[1];
+
+        let dx = a.dx(b);
+        let dz = a.dz(b);
+        let length = (dx * dx + dz * dz).sqrt();
+
+        if length <= f64::EPSILON {
+            continue;
+        }
+
+        if target_along <= traversed + length {
+            let t = ((target_along - traversed) / length).clamp(0.0, 1.0);
+            start = a.lerp(b, t);
+            break;
+        }
+
+        traversed += length;
+    }
+
+    let mut closest_bound_distance_sq = f64::INFINITY;
+    let mut boundary_along = 0.0f64;
+    let mut closest_bound_edge = 0usize;
+    //let mut closest_bound_t = 0.0f64;
+    let mut perimeter_length = 0.0f64;
+
+    for i in 0..bounds.len() {
+        let a = bounds[i];
+        let b = bounds[(i + 1) % bounds.len()];
+
+        let ax = entrance.dx(a);
+        let az = entrance.dz(a);
+        let dx = a.dx(b);
+        let dz = a.dz(b);
+        let length_sq = dx * dx + dz * dz;
+        let length = length_sq.sqrt();
+
+        if length <= f64::EPSILON {
+            continue;
+        }
+
+        let t = (-(ax * dx + az * dz) / length_sq).clamp(0.0, 1.0);
+        let cx = ax + dx * t;
+        let cz = az + dz * t;
+        let distance_sq = cx * cx + cz * cz;
+
+        if distance_sq < closest_bound_distance_sq {
+            closest_bound_distance_sq = distance_sq;
+            closest_bound_edge = i;
+            //closest_bound_t = t;
+            boundary_along = perimeter_length + length * t;
+        }
+
+        perimeter_length += length;
+    }
+
+    if perimeter_length <= f64::EPSILON {
+        return None;
+    }
+
+    let boundary_a = bounds[closest_bound_edge];
+    let boundary_b = bounds[(closest_bound_edge + 1) % bounds.len()];
+
+    let edge_dx = boundary_a.dx(boundary_b);
+    let edge_dz = boundary_a.dz(boundary_b);
+    let edge_length = (edge_dx * edge_dx + edge_dz * edge_dz).sqrt();
+
+    if edge_length <= f64::EPSILON {
+        return None;
+    }
+
+    let edge_direction_x = edge_dx / edge_length;
+    let edge_direction_z = edge_dz / edge_length;
+
+    let rail_movement = closest_rail_point.direction_to(start);
+
+    let boundary_offset =
+        rail_movement.x as f64 * edge_direction_x + rail_movement.z as f64 * edge_direction_z;
+
+    let target_boundary_along = (boundary_along + boundary_offset).rem_euclid(perimeter_length);
+
+    let mut boundary_traversed = 0.0f64;
+    let mut end = bounds[0];
+
+    for i in 0..bounds.len() {
+        let a = bounds[i];
+        let b = bounds[(i + 1) % bounds.len()];
+
+        let dx = a.dx(b);
+        let dz = a.dz(b);
+        let length = (dx * dx + dz * dz).sqrt();
+
+        if length <= f64::EPSILON {
+            continue;
+        }
+
+        if target_boundary_along <= boundary_traversed + length {
+            let t = ((target_boundary_along - boundary_traversed) / length).clamp(0.0, 1.0);
+
+            end = a.lerp(b, t);
+            break;
+        }
+
+        boundary_traversed += length;
+    }
+
+    Some([start, end])
 }

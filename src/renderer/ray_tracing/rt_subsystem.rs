@@ -1,7 +1,7 @@
 use crate::helpers::positions::WorldPos;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::structs::{Aabb, Blas, BvhNode, RTVertex, Tlas, TlasInstance};
-use crate::world::camera::Camera;
+use crate::world::camera::camera::Camera;
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Quat, Vec3};
 // rt_subsystem.rs

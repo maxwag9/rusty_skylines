@@ -404,6 +404,34 @@ impl RoadEdges {
             road_type_id,
         }
     }
+    pub fn collect_road_points(&self) -> Vec<&WorldPos> {
+        let points: Vec<&WorldPos> = match (
+            self.left_sidewalk_edge.is_empty(),
+            self.right_sidewalk_edge.is_empty(),
+        ) {
+            (true, _) => self
+                .right_sidewalk_edge
+                .right_points
+                .iter()
+                .chain(self.lane_edges.values().flat_map(|e| e.right_points.iter()))
+                .collect(),
+
+            (_, true) => self
+                .left_sidewalk_edge
+                .left_points
+                .iter()
+                .chain(self.lane_edges.values().flat_map(|e| e.right_points.iter()))
+                .collect(),
+
+            (false, false) => self
+                .right_sidewalk_edge
+                .right_points
+                .iter()
+                .chain(self.left_sidewalk_edge.right_points.iter())
+                .collect(),
+        };
+        points
+    }
 }
 fn mesh_node(
     terrain: &Terrain,

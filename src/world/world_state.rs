@@ -3,7 +3,7 @@ use crate::resources::Time;
 use crate::ui::ui_editor::Ui;
 use crate::ui::variables::update_ui_variables;
 use crate::world::astronomy::{ObserverParams, TimeScales, compute_astronomy};
-use crate::world::camera::{Camera, CameraController};
+use crate::world::camera::camera::{Camera, CameraController};
 use glam::Mat4;
 
 pub struct WorldState {

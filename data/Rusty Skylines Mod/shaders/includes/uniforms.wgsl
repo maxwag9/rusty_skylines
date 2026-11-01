@@ -40,5 +40,9 @@ struct Uniforms {
     // ── Misc settings ───────────────────────────────────────────
     reversed_depth_z:  u32,
     csm_enabled:       u32,
-    near_far_depth:    vec2<f32>
+    near_far_depth:    vec2<f32>,
+    solar_eclipse_coverage: f32,
+    _pad_eclipse0: f32,
+    _pad_eclipse1: f32,
+    _pad_eclipse2: f32,
 };

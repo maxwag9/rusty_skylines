@@ -1,8 +1,8 @@
-
 fn calculate_world_lighting(
     world_pos: vec3<f32>,
     world_normal: vec3<f32>,
     wrap_amount: f32,
+    solar_eclipse_coverage: f32,
 ) -> vec3<f32> {
     let n = normalize(world_normal);
     let sun_l = normalize(uniforms.sun_direction);
@@ -13,6 +13,9 @@ fn calculate_world_lighting(
     let sun_direct_visibility = smoothstep(0.0, 0.025, sun_elev);
     let night_amount = 1.0 - sun_direct_visibility;
 
+    let eclipse_sunlight = 1.0 - saturate(solar_eclipse_coverage);
+    let daylight_amount = sun_amount * eclipse_sunlight;
+
     let moon_visible = smoothstep(-0.08, 0.08, moon_l.y);
     let moon_factor = moon_visible * night_amount;
 
@@ -21,13 +24,13 @@ fn calculate_world_lighting(
     let sky_ambient = mix(
         vec3<f32>(0.02, 0.02, 0.02),
         vec3<f32>(0.10, 0.12, 0.15),
-        sun_amount,
+        daylight_amount,
     );
 
     let ground_ambient = mix(
         vec3<f32>(0.03, 0.03, 0.03),
         vec3<f32>(0.05, 0.05, 0.05),
-        sun_amount,
+        daylight_amount,
     );
 
     let ambient = mix(ground_ambient, sky_ambient, hemi)
@@ -40,7 +43,8 @@ fn calculate_world_lighting(
     let sun_wrapped = saturate(sun_ndotl + 0.4) / 1.4;
 
     let sun_direct = mix(sun_diffuse, sun_wrapped, wrapped)
-        * sun_direct_visibility;
+        * sun_direct_visibility
+        * eclipse_sunlight;
 
     var sun_shadow = 1.0;
 

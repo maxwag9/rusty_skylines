@@ -163,20 +163,20 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         history_value.rgb - current_value.rgb
     ) / radiance_scale;
 
-    if opacity_mismatch > 0.72 || radiance_mismatch > 1.75 {
+    if opacity_mismatch > 0.25 || radiance_mismatch > 0.65 {
         return current_value;
     }
 
     let neighbourhood_span = neighbourhood_max - neighbourhood_min;
 
     let rgb_padding = max(
-        neighbourhood_span.rgb * 0.25,
-        vec3<f32>(0.06)
+        neighbourhood_span.rgb * 0.10,
+        vec3<f32>(0.025)
     );
 
     let opacity_padding = max(
-        neighbourhood_span.a * 0.25,
-        0.05
+        neighbourhood_span.a * 0.10,
+        0.02
     );
 
     let history_min = vec4<f32>(
@@ -196,14 +196,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     );
 
     let opacity_confidence = 1.0 - smoothstep(
-        0.35,
-        0.70,
+        0.05,
+        0.25,
         opacity_mismatch
     );
 
     let radiance_confidence = 1.0 - smoothstep(
-        0.75,
-        1.50,
+        0.15,
+        0.65,
         radiance_mismatch
     );
 
@@ -212,7 +212,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         radiance_confidence
     );
 
-    let history_weight = 0.92 * history_confidence;
+    let history_weight = 0.80 * history_confidence;
 
     return mix(current_value, clamped_history, history_weight);
 }

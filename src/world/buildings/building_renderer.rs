@@ -4,7 +4,7 @@ use crate::renderer::props::Props;
 use crate::world::buildings::building_mesher::{BuildingMeshBuilder, BuildingMeshManager};
 use crate::world::buildings::buildings::{Building, BuildingId, Buildings};
 use crate::world::buildings::zoning::{Lot, Zoning};
-use crate::world::camera::Camera;
+use crate::world::camera::camera::Camera;
 use crate::world::cars::parking::ParkingStorage;
 use crate::world::roads::road_mesh_manager::ChunkCoord;
 use crate::world::roads::road_subsystem::ChunkGpuMesh;

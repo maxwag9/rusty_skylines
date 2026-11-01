@@ -1,7 +1,8 @@
 use crate::data::Cycle;
 use crate::ui::parser::Value;
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
-use strum_macros::Display;
+use strum_macros::{Display, EnumString};
 use wgpu::{
     AddressMode, Buffer, BufferDescriptor, BufferUsages, Device, Extent3d, FilterMode, Queue,
     Sampler, SamplerDescriptor, SurfaceConfiguration, Texture, TextureDescriptor, TextureDimension,
@@ -16,14 +17,16 @@ use crate::renderer::clouds::cloud_terrain_height::CloudTerrainHeightMap;
 use crate::renderer::clouds::noise::CloudNoiseResources;
 use crate::world::terrain::terrain_subsystem::Terrain;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, EnumString, Display,
+)]
 pub enum CloudQuality {
     Performance,
     #[default]
     High,
     Ultra,
 }
-
+impl_cycle!(CloudQuality: CloudQuality::Performance, CloudQuality::High, CloudQuality::Ultra);
 impl CloudQuality {
     fn resolution_divisor(self) -> u32 {
         match self {
@@ -60,7 +63,7 @@ impl Default for CloudSettings {
             enabled: true,
             quality: CloudQuality::High,
             coverage: 0.4,
-            density: 1.0,
+            density: 0.2,
             detail_strength: 1.0,
             wind: [80.0, 50.0],
             debug_mode: CloudDebugMode::Lit,

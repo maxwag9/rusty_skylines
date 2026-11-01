@@ -18,7 +18,7 @@ use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::systems::systems::RoadDestroyType;
 use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::utilities::utilities::UtilityRail;
-use crate::world::buildings::zoning::{DistrictId, ZoningStorage};
+use crate::world::buildings::zoning::{DistrictId, LotId, ZoningStorage};
 use crate::world::cars::car_subsystem::Cars;
 use crate::world::cars::parking::ParkingSpotId;
 use crate::world::cars::partitions::Destination;
@@ -478,7 +478,7 @@ impl Node {
 /// Road segment connecting two nodes, containing multiple lanes.
 /// Segments are grouping/metadata; lanes are the first-class graph edges.
 #[derive(Debug, Clone, Default)]
-#[revisioned(revision = 1)]
+#[revisioned(revision = 2)]
 pub struct Segment {
     pub start: NodeId,
     pub end: NodeId,
@@ -489,6 +489,8 @@ pub struct Segment {
     pub road_type_id: RoadTypeId, // The ONLY place this is stored btw, intersections ask segments!
     pub parking_spots: Vec<ParkingSpotId>,
     pub utility_rails: Vec<UtilityRail>,
+    #[revision(start = 2)]
+    pub lot_ids: Vec<LotId>,
 }
 
 impl Segment {
@@ -503,6 +505,7 @@ impl Segment {
             road_type_id,
             parking_spots: vec![],
             utility_rails: vec![],
+            lot_ids: vec![],
         }
     }
 
@@ -1976,6 +1979,41 @@ impl RoadStorage {
     //         node.update_heights(chunks, terrain_gen);
     //     }
     // }
+
+    pub fn add_lot_to_segment(&mut self, segment_id: SegmentId, lot_id: LotId) -> bool {
+        let Some(segment) = self
+            .segments
+            .get_mut(segment_id.index())
+            .and_then(Option::as_mut)
+        else {
+            return false;
+        };
+
+        if !segment.lot_ids.contains(&lot_id) {
+            segment.lot_ids.push(lot_id);
+        }
+
+        true
+    }
+
+    pub fn remove_lot_from_segment(&mut self, segment_id: SegmentId, lot_id: LotId) {
+        let Some(segment) = self
+            .segments
+            .get_mut(segment_id.index())
+            .and_then(Option::as_mut)
+        else {
+            return;
+        };
+
+        segment.lot_ids.retain(|&id| id != lot_id);
+    }
+
+    pub fn get_segment_lots(&self, segment_id: SegmentId) -> Option<&[LotId]> {
+        self.segments
+            .get(segment_id.index())?
+            .as_ref()
+            .map(|segment| segment.lot_ids.as_slice())
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]

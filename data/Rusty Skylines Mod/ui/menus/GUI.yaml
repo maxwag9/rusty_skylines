@@ -35,7 +35,7 @@ layers:
         glow_misc: { }
         misc:
           active: true
-          touchable: false
+          touchable: true
           editable: true
       - !Rect
         id: GUI Lower Background
@@ -68,7 +68,7 @@ layers:
         glow_misc: { }
         misc:
           active: true
-          touchable: false
+          touchable: true
           editable: true
       - !Advanced
         name: pause button

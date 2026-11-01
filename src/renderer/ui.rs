@@ -18,11 +18,31 @@ use crate::ui::vertex::{
 };
 use sluggrs_skylines::*;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 use tracing::error;
 use wgpu::*;
 use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions};
 use wgpu_render_manager::renderer::RenderManager;
 use winit::dpi::PhysicalSize;
+
+/// I'm sorry god for all my sins, may Jesus have attoned my sins. ↓
+pub static FONT_SYSTEM: OnceLock<Mutex<FontSystem>> = OnceLock::new();
+
+pub fn init_global_font_system(font_system: FontSystem) {
+    FONT_SYSTEM
+        .set(Mutex::new(font_system))
+        .expect("Global font system already initialized");
+}
+
+pub fn with_font_system<R>(f: impl FnOnce(&mut FontSystem) -> R) -> R {
+    let mutex = FONT_SYSTEM
+        .get()
+        .expect("Global font system not initialized");
+
+    let mut font_system = mutex.lock().expect("Font system mutex poisoned");
+
+    f(&mut font_system)
+}
 
 const UI_COMPARE_FUNCTION: CompareFunction = CompareFunction::Always; // TODO: I have to make layer order more explicit and stuff and handle colliding layer orders and APs! Less function is correct. Back is 1.0 front is 0.0 depth.
 #[repr(C)]
@@ -197,7 +217,6 @@ impl Default for TextParams {
 pub struct UiRenderer {
     pub pipelines: UiPipelines,
 
-    pub font_system: FontSystem,
     pub swash_cache: SwashCache,
     pub text_atlas: TextAtlas,
     pub text_renderer: TextRenderer,
@@ -248,11 +267,10 @@ impl UiRenderer {
                 height: config.height,
             },
         );
-
+        init_global_font_system(font_system);
         Ok(Self {
             pipelines,
 
-            font_system,
             swash_cache,
             text_atlas,
             text_renderer,
@@ -313,18 +331,20 @@ impl UiRenderer {
             let mut ap_layers = vec![];
 
             for idx in dirty_indices {
-                ap_layers.append(&mut menu.rebuild_layer_cache_index(
-                    settings,
-                    &ui.variables,
-                    &mut self.font_system,
-                    idx,
-                    &mut ui.touch_manager.runtimes,
-                    &ui.aps,
-                    window_size,
-                    device,
-                    queue,
-                    mod_manager,
-                ));
+                ap_layers.append(&mut with_font_system(|font_system| {
+                    menu.rebuild_layer_cache_index(
+                        settings,
+                        &ui.variables,
+                        font_system,
+                        idx,
+                        &mut ui.touch_manager.runtimes,
+                        &ui.aps,
+                        window_size,
+                        device,
+                        queue,
+                        mod_manager,
+                    )
+                }));
 
                 let layer = &mut menu.layers[idx];
                 self.upload_layer(queue, layer, &ui.touch_manager, time, menu_name);
@@ -389,7 +409,7 @@ impl UiRenderer {
         if !ui.touch_manager.options.show_gui {
             let color_attachment = create_color_attachment_clear(&pipelines.resolved.ui);
 
-            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            let pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("Main Pass (UI Elements)"),
                 color_attachments: &[Some(color_attachment)],
                 depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
@@ -1406,16 +1426,18 @@ impl UiRenderer {
         let depths: Vec<f32> = batch.iter().map(|(_, depth)| *depth).collect();
         let areas = batch.drain(..).map(|(area, _)| area);
 
-        if let Err(e) = self.text_renderer.prepare_with_depth(
-            &self.device,
-            queue,
-            encoder,
-            &mut self.font_system,
-            &mut self.text_atlas,
-            &self.viewport,
-            areas,
-            |index| depths[index],
-        ) {
+        if let Err(e) = with_font_system(|font_system| {
+            self.text_renderer.prepare_with_depth(
+                &self.device,
+                queue,
+                encoder,
+                font_system,
+                &mut self.text_atlas,
+                &self.viewport,
+                areas,
+                |index| depths[index],
+            )
+        }) {
             error!("Failed to prepare UI text: {}", e);
         }
     }

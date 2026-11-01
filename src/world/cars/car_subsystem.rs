@@ -9,7 +9,7 @@ use crate::ui::input::Input;
 use crate::ui::variables::Variables;
 use crate::ui::vertex::Vertex;
 use crate::world::buildings::zoning::ZoningStorage;
-use crate::world::camera::Camera;
+use crate::world::camera::camera::Camera;
 use crate::world::cars::car_mesh::{create_procedural_car, sample_car_color};
 use crate::world::cars::car_render::CarInstance;
 use crate::world::cars::car_simulation::CarSimSystem;

@@ -413,7 +413,7 @@ impl AdvancedPrimitive {
                     //el.scale_by(x_scale, y_scale, );// WTF??!?!?!
                     el.translate(x, y);
                     el.set_editable(&self.misc.editable);
-                    el.set_aps(settings, variables, self.ap_vars.as_slice());
+                    el.set_aps(self.ap_vars.as_slice());
                     el
                 })
                 .collect()
@@ -1406,12 +1406,14 @@ impl UiElement {
         }
     }
 
-    pub fn set_aps(&mut self, settings: &Settings, variables: &Variables, ap_vars: &[String]) {
+    pub fn set_aps(&mut self, ap_vars: &[String]) {
+        //println!("BEFORE: {:?}", ap_vars);
         let ap_vars = ap_vars
             .iter()
             .map(|var| Value::from_str_pure(var).into_string())
             .collect::<Vec<String>>();
         let ap_vars = ap_vars.as_slice();
+        //println!("AFTER: {:?}", ap_vars);
         match self {
             UiElement::Circle(e) => Self::replace_actions(&mut e.string_actions, ap_vars),
             UiElement::Handle(e) => {}
@@ -1431,26 +1433,33 @@ impl UiElement {
             UiElement::Advanced(e) => {}
         }
     }
+    pub fn get_ap(ap: &str, ap_vars: &[String]) -> Option<String> {
+        let replacement = if ap == "ap" {
+            ap_vars.first().cloned().unwrap_or("None".into())
+        } else if ap == "ap.all" {
+            format!("[{}]", ap_vars.join(", "))
+        } else if let Some(component) = ap.strip_prefix("ap.") {
+            let idx = Variables::component_index(component).unwrap_or(0);
+            ap_vars.get(idx).cloned().unwrap_or("None".into())
+        } else {
+            return None;
+        };
+
+        Some(replacement)
+    }
+
     fn replace_aps(text: &mut String, ap_vars: &[String]) {
         while let Some(start) = text.find("{ap") {
             let rest = &text[start..];
 
-            let (end, replacement) = if rest.starts_with("{ap}") {
-                (start + 4, ap_vars.first().cloned().unwrap_or("None".into()))
-            } else if rest.starts_with("{ap.all}") {
-                let end = start + 8;
-                (end, format!("[{}]", ap_vars.join(", ")))
-            } else if rest.starts_with("{ap.") {
-                if let Some(close_rel) = rest.find('}') {
-                    let end = start + close_rel + 1;
-                    let component = &text[start + 4..end - 1];
-                    let idx = Variables::component_index(component).unwrap_or(0);
+            let Some(close_rel) = rest.find('}') else {
+                break;
+            };
 
-                    (end, ap_vars.get(idx).cloned().unwrap_or("None".into()))
-                } else {
-                    break;
-                }
-            } else {
+            let end = start + close_rel + 1;
+            let expression = &text[start + 1..end - 1];
+
+            let Some(replacement) = Self::get_ap(expression, ap_vars) else {
                 break;
             };
 
@@ -2267,12 +2276,13 @@ pub struct UiButtonText {
     pub has_selection: bool,
 
     pub buffer: sluggrs_skylines::Buffer,
-    pub input_box: bool,
+    pub input_box: InputBoxMode,
     pub anchor: Anchor,
     pub yaml_element: Option<UiButtonTextYaml>,
 
     pub cache: Option<TextParams>,
     pub decorations: Vec<TextDecoration>,
+    pub block_line_break: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -2415,6 +2425,7 @@ impl UiButtonText {
 
             buffer: sluggrs_skylines::Buffer::new_empty(Metrics::new(e.pt, 20.0)),
             decorations,
+            block_line_break: false,
         }
     }
 
@@ -2874,12 +2885,13 @@ impl Default for UiButtonText {
             sel_start: 0,
             sel_end: 0,
             has_selection: false,
-            input_box: false,
+            input_box: InputBoxMode::False,
             anchor: Anchor::default(),
             yaml_element: None,
             cache: None,
             buffer: sluggrs_skylines::Buffer::new_empty(Metrics::new(14.0, 20.0)),
             decorations: vec![],
+            block_line_break: false,
         }
     }
 }
@@ -3094,6 +3106,36 @@ impl Default for UiVertex {
         }
     }
 }
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Default)]
+pub enum InputBoxMode {
+    #[default]
+    #[serde(rename = "false")]
+    False,
+    #[serde(rename = "true")]
+    True,
+    Custom,
+}
+impl InputBoxMode {
+    pub fn is_input_box(&self) -> bool {
+        match self {
+            InputBoxMode::Custom | InputBoxMode::True => true,
+            InputBoxMode::False => false,
+        }
+    }
+    pub fn is_custom_input_box(&self) -> bool {
+        match self {
+            InputBoxMode::Custom => true,
+            InputBoxMode::False | InputBoxMode::True => false,
+        }
+    }
+    pub fn random() -> Self {
+        match rand::random_range(0..3) {
+            0 => Self::False,
+            1 => Self::True,
+            _ => Self::Custom,
+        }
+    }
+}
 
 // --- TEXT ---
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -3139,7 +3181,7 @@ pub struct UiButtonTextYaml {
     pub misc: MiscButtonSettingsYaml,
 
     #[serde(skip_serializing_if = "is_default")]
-    pub input_box: bool,
+    pub input_box: InputBoxMode,
 
     #[serde(default, skip_serializing_if = "is_default")]
     pub anchor: Anchor,
@@ -3239,7 +3281,7 @@ impl Default for UiButtonTextYaml {
             color: [1.0, 1.0, 1.0, 1.0],
             text: String::new(),
             misc: MiscButtonSettingsYaml::default(),
-            input_box: false,
+            input_box: InputBoxMode::False,
             anchor: Anchor::default(),
             decorations: vec![],
         }

@@ -41,13 +41,13 @@ var<uniform> camera: Uniforms;
 var<uniform> cloud: CloudUniforms;
 
 
-const MAX_PRIMARY_STEPS: u32 = 640u;
+const MAX_PRIMARY_STEPS: u32 = 320u;
 
 const MIN_PRIMARY_STEP_SIZE: f32 = 128.0;
 const PRIMARY_TARGET_STEP_SIZE: f32 = 160.0;
 const MAX_PRIMARY_STEP_SIZE: f32 = 256.0;
 const PRIMARY_REFINE_STEP_THRESHOLD: f32 = 192.0;
-const CLOUD_SUN_TRANSMITTANCE_STEPS: u32 = 16u;
+const CLOUD_SUN_TRANSMITTANCE_STEPS: u32 = 4u;
 const CLOUD_MAX_SUN_PATH: f32 = 20000.0;
 const CLOUD_SINGLE_SCATTERING_ALBEDO: f32 = 0.999;
 const WEATHER_PERIOD_CHUNKS: i32 = 512;
@@ -748,7 +748,7 @@ fn calculate_cloud_sun_energy(
         * source
         * sunlight
         * CLOUD_SUN_INTENSITY
-        * CLOUD_SINGLE_SCATTERING_ALBEDO;
+        * CLOUD_SINGLE_SCATTERING_ALBEDO * (1-camera.solar_eclipse_coverage);
 }
 
 

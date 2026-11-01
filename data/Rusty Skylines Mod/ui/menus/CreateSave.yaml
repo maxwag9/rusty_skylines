@@ -139,7 +139,7 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: EASY
+        text: "{lang.create_save.easy_title}"
       - !Text
         id: hard_text
         actions: [ ]
@@ -151,7 +151,7 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: HARD
+        text: "{lang.create_save.hard_title}"
       - !Text
         id: easy_description_text
         actions: [ ]
@@ -163,7 +163,7 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: lorem ipsum solemifasolemi fsol
+        text: "{lang.create_save.easy_description}"
       - !Text
         id: hard_description_text
         actions: [ ]
@@ -175,7 +175,7 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: Lorem ipsum il samet mohammmed
+        text: "{lang.create_save.hard_description}"
       - !Rect
         id: Easy select background
         x: 510
@@ -249,7 +249,7 @@ layers:
           - 0.0
           - 0.0
           - 1.0
-        text: ">Enter chill<"
+        text: "{lang.create_save.enter_easy}"
         misc:
           touchable: false
       - !Text
@@ -263,13 +263,9 @@ layers:
           - 0.0
           - 0.0
           - 1.0
-        text: ">Enter hell<"
+        text: "{lang.create_save.enter_hard}"
         misc:
           touchable: false
-    editing_tool: false
-
-
-
 
 
 
@@ -343,18 +339,19 @@ layers:
         name: world_name_textbox
         ap_name: textbox
         ap_vars:
-          - "str:World Name"
+          - "str:{lang.create_save.world_name}"
           - "50"
-          - "str:as:[str:button_text] set(str:new_save_name, as.text);"
+          - "Center"
+          - ""
+          - ""
+          - "str:set(str:new_save_name, expr:trim({self.text}));"
         x: 960
         y: 440
-        scale: 1.0
-        editing_tool: false
       - !Advanced
         name: create_the_save_finally_button
         ap_name: button
         ap_vars:
-          - "str:Create Save: '{new_save_name}'"
+          - "str:{lang.create_save.create_finally}"
           - "40"
           - "str:on:r call(rust:create_save, [new_save_name, new_difficulty]); set(str:show_world, true); set(str:editor_mode, false); set(str:override_mode, false); load_save(new_save_name, false); call(open_play_menus);"
         x: 1560
@@ -365,12 +362,12 @@ layers:
         ap_name: slider
         ap_var:
           - "str:new_difficulty"
-          - "str:Difficulty"
+          - "str:{lang.create_save.slider.difficulty.name}"
           - "0"
           - "1"
           - "1"
           - "[str:Easy, str:Hard]"
-          - "[str:Easy, str:Hard]"
+          - "[str:{lang.create_save.slider.difficulty.options.easy}, str:{lang.create_save.slider.difficulty.options.hard}]"
           - "true"
         x: 1075
         y: 600

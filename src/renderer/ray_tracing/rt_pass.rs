@@ -5,7 +5,7 @@ use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_subsystem::{RTSubsystem, build_render_space_instances};
 use crate::renderer::render_core::create_color_attachment_load;
 use crate::renderer::ui_pipelines::multisample_state;
-use crate::world::camera::Camera;
+use crate::world::camera::camera::Camera;
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::car_subsystem::{CAR_BASE_LENGTH, CAR_BASE_WIDTH};
 use glam::Vec3;

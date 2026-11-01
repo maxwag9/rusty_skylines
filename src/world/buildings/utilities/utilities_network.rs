@@ -267,7 +267,7 @@ impl UtilityNetwork {
     pub fn mark_dirty(&mut self) {
         self.network_dirty = true;
     }
-    fn load(&mut self, mod_manager: &ModManager) {
+    pub fn load(&mut self, mod_manager: &ModManager) {
         let mut utilities = Vec::new();
 
         let paths = mod_manager.utility_paths();

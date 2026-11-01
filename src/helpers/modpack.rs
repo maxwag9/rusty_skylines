@@ -1,14 +1,22 @@
 use crate::app::GAME_VERSION;
+use crate::data::Settings;
 use crate::helpers::paths::{data_dir, mods_config_path, mods_root, user_mod_cache_dir};
+use crate::renderer::props::Props;
 use crate::renderer::shader_watcher::ShaderWatcher;
+use crate::ui::ui_editor::Ui;
+use crate::world::world::World;
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
-use tracing::{error, info, warn};
+use tracing::{error, event, info, warn};
 use unarc_rs::unified::{ArchiveFormat, ArchiveOptions};
+use wgpu::{Device, Queue};
+use wgpu_render_manager::renderer::RenderManager;
+use winit::dpi::PhysicalSize;
 
 const MOD_CONFIG_VERSION: u32 = 1;
 const MOD_MANIFEST: &str = "mod.yaml";
@@ -50,6 +58,7 @@ pub enum ModFileKind {
     Shaders,
     Textures,
     Fonts,
+    Locales,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -185,7 +194,7 @@ impl<W: Write> Write for BudgetWriter<'_, W> {
 pub struct ModManager {
     pub mods: Vec<Mod>,
     config: ModConfig,
-    resource_index: HashMap<String, PathBuf>,
+    resource_index: HashMap<String, SmallVec<PathBuf, 1>>,
 }
 
 impl ModManager {
@@ -306,6 +315,25 @@ impl ModManager {
         }
     }
 
+    pub fn reload_full(
+        &mut self,
+        shader_watcher: &mut ShaderWatcher,
+        window_size: PhysicalSize<f32>,
+        settings: &Settings,
+        queue: &Queue,
+        device: &Device,
+        world: &mut World,
+        ui: &mut Ui,
+        props: &Props,
+        render_manager: &mut RenderManager,
+    ) {
+        self.reload(Some(shader_watcher));
+
+        ui.reload_ui(settings, window_size, device, queue, self);
+        world.reload(settings, props, self);
+        render_manager.clear_all();
+    }
+
     fn rebuild_resource_index(&mut self) {
         let mut index = HashMap::new();
 
@@ -323,7 +351,7 @@ impl ModManager {
                 };
 
                 let key = relative.to_string_lossy().replace('\\', "/");
-                index.insert(key, path);
+                index.entry(key).or_insert_with(SmallVec::new).push(path);
             }
         }
 
@@ -432,6 +460,7 @@ impl ModManager {
             ModFileKind::Shaders => self.shader_paths(),
             ModFileKind::Textures => self.texture_paths(),
             ModFileKind::Fonts => self.font_paths(),
+            ModFileKind::Locales => self.locales_paths(),
         }
     }
 
@@ -443,6 +472,10 @@ impl ModManager {
 
     pub fn advanced_primitive_paths(&self) -> Vec<PathBuf> {
         self.effective_paths("ui/menus/advanced_primitives", Some(&["yaml"]), |_| true)
+    }
+
+    pub fn locales_paths(&self) -> Vec<PathBuf> {
+        self.effective_paths("ui/lang", Some(&["yaml"]), |_| true)
     }
 
     pub fn building_paths(&self) -> Vec<PathBuf> {
@@ -478,8 +511,15 @@ impl ModManager {
     }
 
     #[inline]
+    pub fn resource_paths(&self, relative_path: &str) -> Option<&SmallVec<PathBuf, 1>> {
+        self.resource_index.get(relative_path)
+    }
+
+    #[inline]
     pub fn resource_path(&self, relative_path: &str) -> Option<&Path> {
-        self.resource_index.get(relative_path).map(PathBuf::as_path)
+        self.resource_index
+            .get(relative_path)
+            .and_then(|v| v.last().map(PathBuf::as_path))
     }
 
     #[inline]

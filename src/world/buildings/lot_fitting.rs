@@ -1,6 +1,6 @@
 use crate::helpers::positions::WorldPos;
 use crate::world::buildings::zoning::{Lot, LotId, ZoningStorage};
-use crate::world::roads::road_mesh_manager::{Edges, RoadEdges, RoadMeshManager};
+use crate::world::roads::road_mesh_manager::{Edges, RoadMeshManager};
 use crate::world::roads::road_structs::{LaneId, SegmentId};
 use crate::world::roads::road_subsystem::Roads;
 use glam::{Vec2, Vec3};
@@ -24,44 +24,6 @@ pub struct LotFit {
     pub width: f64,
     pub depth: f64,
     pub snap_point: LotPoint,
-}
-pub fn collect_road_points(edges: &RoadEdges) -> Vec<&WorldPos> {
-    let points: Vec<&WorldPos> = match (
-        edges.left_sidewalk_edge.is_empty(),
-        edges.right_sidewalk_edge.is_empty(),
-    ) {
-        (true, _) => edges
-            .right_sidewalk_edge
-            .right_points
-            .iter()
-            .chain(
-                edges
-                    .lane_edges
-                    .values()
-                    .flat_map(|e| e.right_points.iter()),
-            )
-            .collect(),
-
-        (_, true) => edges
-            .left_sidewalk_edge
-            .left_points
-            .iter()
-            .chain(
-                edges
-                    .lane_edges
-                    .values()
-                    .flat_map(|e| e.right_points.iter()),
-            )
-            .collect(),
-
-        (false, false) => edges
-            .right_sidewalk_edge
-            .right_points
-            .iter()
-            .chain(edges.left_sidewalk_edge.right_points.iter())
-            .collect(),
-    };
-    points
 }
 
 #[derive(Clone)]

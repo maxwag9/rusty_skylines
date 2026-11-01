@@ -5,7 +5,7 @@ use crate::renderer::shadows::{CSM_CASCADES, CascadedShadowMap, create_csm_shado
 use crate::renderer::taa::taa_jitter_pair;
 use crate::renderer::textures::noise::create_blue_noise_texture_gpu;
 use crate::resources::{Time, Uniforms};
-use crate::world::camera::Camera;
+use crate::world::camera::camera::Camera;
 use glam::{Mat4, Vec3};
 use serde::{Deserialize, Serialize};
 use strum_macros::{Display, EnumString};
@@ -1038,6 +1038,7 @@ pub fn create_gtao_texture(
 pub fn make_new_camera_uniforms(
     sun: Vec3,
     moon: Vec3,
+    solar_eclipse_coverage: f32,
     time_system: &Time,
     light_view_proj: [Mat4; CSM_CASCADES],
     cascade_splits: [f32; CSM_CASCADES],
@@ -1090,5 +1091,7 @@ pub fn make_new_camera_uniforms(
             0
         },
         near_far_depth: [camera.near, camera.far],
+        solar_eclipse_coverage,
+        _pad_eclipse: [0.0; 3],
     }
 }

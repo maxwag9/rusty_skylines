@@ -1,7 +1,7 @@
 use crate::data::Settings;
 use crate::helpers::positions::chunk_size;
 use crate::ui::input::Input;
-use crate::world::camera::{Camera, CameraController};
+use crate::world::camera::camera::{Camera, CameraController};
 use crate::world::cars::car_structs::Car;
 use crate::world::cars::car_subsystem::Cars;
 use crate::world::terrain::terrain_subsystem::Terrain;
@@ -175,9 +175,9 @@ pub fn drive_car(
     dt: f32,
 ) {
     // drive_ai_cars(car_subsystem, terrain, dt);
-    if !settings.drive_car || dt <= 0.0 {
-        return;
-    }
+    // if !settings.drive_car || dt <= 0.0 {
+    //     return;
+    // }
 
     const G: f32 = 9.81;
     const MASS: f32 = 1620.0;

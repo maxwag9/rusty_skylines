@@ -6,7 +6,7 @@ use crate::renderer::pipelines::{
     ColorGrade, FogUniforms, MeshBuffers, PostProcessUniforms, make_dummy_buf,
 };
 use crate::resources::Uniforms;
-use crate::world::camera::Camera;
+use crate::world::camera::camera::Camera;
 use crate::world::terrain::sky::SkyUniform;
 use crate::world::terrain::water::{SimpleVertex, WaterUniform};
 use std::fs;
