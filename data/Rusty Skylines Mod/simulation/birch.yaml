@@ -1,0 +1,215 @@
+name: birch
+
+geometry:
+  shader: shaders/props/tree_geometry.wgsl
+  entry_point: main
+  workgroups: [ 1, 1, 1 ]
+  bounds_radius: 24.0
+
+  bindings:
+    - binding: 0
+      type: uniform
+      fields:
+        - name: iterations
+          type: u32
+          value: 5
+        - name: axiom_length
+          type: u32
+          value: 4
+        - name: rule_count
+          type: u32
+          value: 2
+        - name: command_capacity
+          type: u32
+          value: 4096
+        - name: base_length
+          type: f32
+          value: 1.6
+        - name: base_thickness
+          type: f32
+          value: 0.45
+        - name: base_angle
+          type: f32
+          value: 0.85
+        - name: length_decay
+          type: f32
+          value: 0.86
+        - name: thickness_decay
+          type: f32
+          value: 0.58
+        - name: seed
+          type: u32
+          value: 69
+        - name: radial_segments
+          type: u32
+          value: 8
+        - name: min_branch_thickness
+          type: f32
+          value: 0.005
+        - name: leaf_scale
+          type: f32
+          value: 1.8
+        - name: leaf_density
+          type: f32
+          value: 0.68
+        - name: leaf_thickness_threshold
+          type: f32
+          value: 0.04
+        - name: leaf_depth_threshold
+          type: u32
+          value: 3
+        - name: taper
+          type: f32
+          value: 0.94
+        - name: tropism
+          type: f32
+          value: 0.10
+        - name: jitter
+          type: f32
+          value: 0.12
+        - name: roll_angle
+          type: f32
+          value: 2.4
+        - name: billboard
+          type: vec4<u32>
+          value: [ 0, 0, 0, 0 ]
+        - name: axiom
+          type: array<vec4<u32>, 4>
+          value:
+            - [ 70, 70, 70, 88 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+        - name: rules
+          type: array<vec4<u32>, 4>
+          value:
+            - [ 65, 0, 20, 0 ]
+            - [ 88, 20, 23, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+        - name: productions
+          type: array<vec4<u32>, 32>
+          value:
+            - [ 70, 91, 38, 65 ]
+            - [ 93, 92, 70, 91 ]
+            - [ 38, 65, 93, 92 ]
+            - [ 70, 91, 38, 65 ]
+            - [ 93, 92, 70, 76 ]
+            - [ 91, 38, 65, 93 ]
+            - [ 92, 91, 38, 65 ]
+            - [ 93, 92, 91, 38 ]
+            - [ 65, 93, 92, 91 ]
+            - [ 38, 65, 93, 92 ]
+            - [ 91, 65, 93, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+
+    - binding: 1
+      type: storage
+      access: read_write
+      format: u32
+      capacity: 524288
+      usage: [ storage, vertex ]
+
+    - binding: 2
+      type: storage
+      access: read_write
+      format: u32
+      capacity: 262144
+      usage: [ storage, index ]
+
+    - binding: 3
+      type: storage
+      access: read_write
+      format: u32
+      capacity: 4
+      usage: [ storage, copy_src ]
+
+  lods:
+    - distance: 0
+      alpha_cutoff: 0.85
+
+    - distance: 30
+      alpha_cutoff: 0.65
+      overrides:
+        0:
+          iterations: 4
+          command_capacity: 1536
+          radial_segments: 6
+          min_branch_thickness: 0.01
+          leaf_scale: 2.2
+          leaf_density: 0.80
+
+    - distance: 180
+      alpha_cutoff: 0.40
+      overrides:
+        0:
+          iterations: 3
+          command_capacity: 512
+          radial_segments: 4
+          min_branch_thickness: 0.02
+          leaf_scale: 2.8
+          leaf_density: 0.95
+          leaf_depth_threshold: 2
+
+    - distance: 500
+      alpha_cutoff: 0.15
+      overrides:
+        0:
+          iterations: 2
+          command_capacity: 128
+          radial_segments: 3
+          min_branch_thickness: 0.03
+          leaf_scale: 4.0
+          leaf_density: 1.0
+          leaf_depth_threshold: 1
+
+textures:
+  - slot: 1
+    shader: shaders/textures/leaves.wgsl
+    resolution: 256
+    mipmap_mode: Generate
+    params:
+      color_primary: [ 0.30, 0.48, 0.18, 1.0 ]
+      color_secondary: [ 0.40, 0.55, 0.25, 1.0 ]
+      seed: 69
+      scale: 1.5
+      roughness: 0.8
+      octaves: 0.6
+      persistence: 0.5
+      lacunarity: 0.3
+    compression: Bc7
+
+  - slot: 2
+    shader: shaders/textures/bark.wgsl
+    resolution: 256
+    mipmap_mode: Generate
+    params:
+      color_primary: [ 0.80, 0.78, 0.72, 1.0 ]
+      color_secondary: [ 0.48, 0.44, 0.38, 1.0 ]
+      seed: 69
+      scale: 1.5
+      roughness: 0.8
+      octaves: 0.0
+      persistence: 0.0
+      lacunarity: 0.0
+    compression: Bc7Opaque

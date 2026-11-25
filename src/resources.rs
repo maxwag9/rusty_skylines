@@ -2,8 +2,7 @@ use crate::app::GAME_VERSION;
 use crate::data::FullScreenMode;
 use crate::data::Settings;
 use crate::helpers::paths::rusty_skylines_dir;
-use crate::renderer::props::Props;
-use crate::renderer::render_core::{
+use crate::renderer::renderer::{
     Renderer, create_device, create_surface_and_adapter, create_surface_config,
 };
 use crate::renderer::shadows::CSM_CASCADES;
@@ -14,16 +13,23 @@ use crate::ui::ui_editor::Ui;
 use crate::ui::variables::{Variables, load_colors};
 use crate::world::astronomy::Astronomy;
 use crate::world::game_state::GameState;
+use crate::world::props::props::Props;
 use crate::world::statisticals::demands::HOURS_PER_DAY;
 use crate::world::world::World;
-use gfxinfo::active_gpu;
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{LazyLock, RwLock};
+use std::sync::{Arc, mpsc};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 use sysinfo::System;
-use wgpu::Surface;
+use wgpu::{Adapter, AdapterInfo, Surface};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
+use crate::helpers::implementations::{gpu_telemetry, GpuTelemetry};
+use crate::mini_renderer::MiniRenderer;
+
+pub static GPU_TELEMETRY: LazyLock<Arc<RwLock<GpuTelemetry>>> =
+    LazyLock::new(|| Arc::new(RwLock::new(GpuTelemetry::default())));
 
 pub struct CommandQueues {
     pub ui_command_queue: CommandQueue,
@@ -46,14 +52,18 @@ pub struct Resources {
     pub game_state: GameState,
     // The GPU + render-only subsystems:
     pub render_core: Renderer,
-
+    pub adapter: Adapter,
     pub ui: Ui,
     pub surface: Surface<'static>,
     pub pending_fullscreen_change: Option<FullScreenMode>,
     pub pending_present_mode_change: bool,
+    pub gpu_rx: Receiver<GpuTelemetry>,
+    pub sys: Option<System>,
+    pub gpu_telemetry: GpuTelemetry,
+    pub mini_renderer: MiniRenderer
 }
 
-fn ram_comment(sys: System) -> String {
+fn ram_comment(sys: &System) -> String {
     let total_ram = sys.total_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
     match total_ram {
         ..0.4 => format!(
@@ -75,7 +85,7 @@ fn ram_comment(sys: System) -> String {
             total_ram
         ),
         33.6..69.1 => format!(
-            "{:.2} GiB of RAM... Insane Ram size!!!!! Either you are rich or you bought it before AI fucked us over!",
+            "{:.2} GiB of RAM... Insane Ram size!!!!! Either you are rich or you bought it before AI fucked us over! Hispanic Bungalow.",
             total_ram
         ),
         69.1..132.9 => format!(
@@ -112,7 +122,7 @@ fn ram_comment(sys: System) -> String {
         ),
     }
 }
-fn format_memory(bytes: u64) -> String {
+pub fn format_memory(bytes: u64) -> String {
     let mib = bytes as f64 / 1024.0 / 1024.0;
     let gib = mib / 1024.0;
     let tib = gib / 1024.0;
@@ -127,7 +137,7 @@ fn format_memory(bytes: u64) -> String {
 }
 impl Resources {
     pub fn new(window: Arc<Box<dyn Window>>, event_loop: &dyn ActiveEventLoop) -> Self {
-        let mut settings = crate::data::Settings::load(rusty_skylines_dir("settings.toml"));
+        let mut settings = Settings::load(rusty_skylines_dir("settings.toml"));
         let mut variables = Variables::new();
         variables.set_string("GAME_VERSION", GAME_VERSION);
 
@@ -147,86 +157,39 @@ impl Resources {
             "Surface size: {}x{}, Format: {:?}, Alpha Mode: {:?}",
             config.width, config.height, config.format, config.alpha_mode
         );
-
-        let gpu_info = active_gpu();
         let adapter_info = adapter.get_info();
-        if let Ok(gpu_info) = gpu_info {
-            println!(
-                "GPU: {} ({}), Driver: {} {}, Type: {:?}, VRAM: {}",
-                gpu_info.model(),
-                gpu_info.family(),
-                adapter_info.driver,
-                adapter_info.driver_info,
-                adapter_info.device_type,
-                format_memory(gpu_info.info().total_vram())
-            );
-        } else {
-            println!(
-                "GPU: {}, Driver: {} {}, Type: {:?}",
-                adapter_info.name,
-                adapter_info.driver,
-                adapter_info.driver_info,
-                adapter_info.device_type
-            );
-        }
+        let gpu_rx = gpu_telemetry(&adapter_info, &mut variables);
+        let sys = cpu_telemetry(&adapter_info, &mut variables, &settings);
 
-        let mut sys = System::new_all().expect("Could not create system system, lol");
-        sys.refresh_all(); // Need to unwrap for no reason
-        let cpus = sys.cpus();
-
-        if let Some(cpu) = cpus.first() {
-            let physical_cores = System::physical_core_count().unwrap_or(0);
-            //let cpu_name = cpu.name().split(" cpu").next().unwrap_or(cpu.name());
-            println!(
-                "CPU: {}, Cores: {}/{}, Architecture: {}",
-                cpu.brand(),
-                physical_cores,
-                cpus.len(),
-                std::env::consts::ARCH
-            );
-        }
-
-        println!("RAM: {}", ram_comment(sys));
-        println!(
-            "OS: {}, OS kernel: {:?}, System name: {}, Average System load last 5 minutes: {}%",
-            System::long_os_version().unwrap_or_default(),
-            System::kernel_long_version(),
-            System::name().unwrap_or_default(),
-            System::load_average().unwrap_or_default().five
-        );
-        println!(
-            "Backend: {}, Present mode: {}, MSAA: {}x",
-            adapter_info.backend, settings.present_mode, settings.msaa_samples
-        );
-        let (device, queue) = &create_device(&adapter);
-
+        let ((device, queue), gpu_timestamps_enabled) = create_device(&adapter);
+        let device = &device;
+        let queue = &queue;
         surface.configure(device, &config);
         println!("[app] surface configured");
 
         let game_state = GameState::new();
-        let props = Props::new(device);
-        let mut world = World::new(device, queue, &settings, &props, &game_state.mod_manager);
+
+        let mut world = World::new(device, queue, &settings);
         let camera = &mut world.world_state.camera;
 
         let render_core = Renderer::new(
             device,
             queue,
+            &settings,
             &config,
             size.cast::<f32>(),
-            adapter,
-            &settings,
             camera,
-            props,
             &game_state.mod_manager,
+            gpu_timestamps_enabled
         );
 
         let mut ui = Ui::new(
             &settings,
             variables,
-            window.surface_size().cast::<f32>(),
-            device,
-            queue,
-            &game_state.mod_manager,
+            // window.surface_size().cast::<f32>(),
+            // device,
+            // queue,
+            // &game_state.mod_manager,
         );
         ui.variables.set_bool("editor_mode", settings.editor_mode);
         load_colors(
@@ -237,6 +200,7 @@ impl Resources {
         let command_queues = CommandQueues::new();
         world.time.update_hour();
         let pending_fullscreen_change = Some(settings.fullscreen_mode);
+        let mini_renderer = MiniRenderer::new(device, queue, &settings, &config, &game_state.mod_manager, &world);
         Self {
             surface,
             settings,
@@ -249,13 +213,18 @@ impl Resources {
             render_core,
             pending_fullscreen_change,
             pending_present_mode_change: false,
+            gpu_rx,
+            sys,
+            gpu_telemetry: GpuTelemetry::default(),
+            mini_renderer,
+            adapter,
         }
     }
 
     pub fn reconfigure_surface(&mut self) {
         let (config, msaa_samples) = create_surface_config(
             &self.surface,
-            &self.render_core.adapter,
+            &self.adapter,
             &mut self.settings,
             &mut self.ui.variables,
             self.window.surface_size(),
@@ -263,9 +232,52 @@ impl Resources {
         );
         self.render_core.config = config;
         self.render_core.update_msaa(&self.settings);
-        self.surface
-            .configure(&self.render_core.device, &self.render_core.config);
+        self.surface.configure(&self.render_core.device, &self.render_core.config);
     }
+}
+
+fn cpu_telemetry(adapter_info: &AdapterInfo, variables: &mut Variables, settings: &Settings) -> Option<System> {
+    let sys = System::new_all();
+    let mut sys = sys.inspect_err(|err| println!("Failed to create System Info, no CPU info available. Error: {}", err)).ok();
+
+    if let Some(sys) = sys.as_mut() {
+        // Need to unwrap for no reason
+        let cpus = sys.cpus();
+
+        if let Some(cpu) = cpus.first() {
+            let physical_cores = System::physical_core_count().unwrap_or(0);
+            //let cpu_name = cpu.name().split(" cpu").next().unwrap_or(cpu.name());
+            println!(
+                "CPU: {}, Cores: {}/{}, Architecture: {}",
+                cpu.brand(),
+                physical_cores,
+                cpus.len(),
+                std::env::consts::ARCH
+            );
+            variables.set_string("CPU_BRAND", cpu.brand());
+            variables.set_i64("LOGICAL_CORES", cpus.len() as i64);
+            variables.set_i64("PHYSICAL_CORES", physical_cores as i64);
+            variables.set_string("ARCH", std::env::consts::ARCH);
+        }
+
+        println!("RAM: {}", ram_comment(sys));
+    }
+
+    println!(
+        "OS: {}, OS kernel: {:?}, System name: {}, Average System load last 5 minutes: {}%",
+        System::long_os_version().unwrap_or_default(),
+        System::kernel_long_version(),
+        System::name().unwrap_or_default(),
+        System::load_average().unwrap_or_default().five
+    );
+    variables.set_string("SYSTEM_NAME", System::name().unwrap_or_default());
+    variables.set_string("OS", System::long_os_version().unwrap_or_default());
+    variables.set_string("KERNEL", System::kernel_long_version().unwrap_or_default());
+    println!(
+        "Backend: {}, Present mode: {}, MSAA: {}x",
+        adapter_info.backend, settings.present_mode, settings.msaa_samples
+    );
+    sys
 }
 
 pub const DAYS_PER_YEAR: f64 = 20.0;
@@ -316,7 +328,7 @@ pub struct Time {
 
 impl Time {
     pub(crate) fn get_spring(&self) -> f64 {
-        self.day_length * DAYS_PER_YEAR * 0.3 // Somewhere in Spring
+        self.day_length * DAYS_PER_YEAR * 0.3 + self.day_length * 0.4 // Somewhere in Spring
     }
 }
 
@@ -638,7 +650,8 @@ pub struct Uniforms {
     pub csm_enabled: u32,
     pub near_far_depth: [f32; 2],
     pub solar_eclipse_coverage: f32,
-    pub _pad_eclipse: [f32; 3],
+    pub game_time: f32,
+    pub _pad_eclipse: [f32; 2],
 }
 
 pub trait IntoTimerPath {
@@ -750,11 +763,11 @@ impl Timer {
     }
 
     pub fn totals(&mut self) -> Vec<(Vec<String>, Duration)> {
-        if self.totals_started.elapsed() < Duration::from_millis(500) {
-            return Vec::new();
-        }
+        // if self.totals_started.elapsed() < Duration::from_millis(500) {
+        //     return Vec::new();
+        // }
 
-        self.totals_started = Instant::now();
+        //self.totals_started = Instant::now();
 
         let mut totals: Vec<(Vec<String>, Duration)> = self
             .checkpoints
@@ -823,9 +836,11 @@ impl Timer {
         self.checkpoints.clear();
         self.totals_started = Instant::now();
     }
-}
-use std::collections::BTreeMap;
 
+    pub fn total_elapsed(&self) -> Duration {
+        self.totals_started.elapsed()
+    }
+}
 #[derive(Default)]
 struct TimingNode {
     duration: Option<Duration>,
@@ -854,3 +869,5 @@ impl TimingNode {
         Value::Array(values)
     }
 }
+
+

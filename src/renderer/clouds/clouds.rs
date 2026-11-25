@@ -11,7 +11,7 @@ use wgpu::{
 use wgpu_render_manager::renderer::RenderManager;
 
 use crate::helpers::modpack::ModManager;
-use crate::helpers::positions::WorldPos;
+use rusty_skylines_utils::positions::WorldPos;
 use crate::impl_cycle;
 use crate::renderer::clouds::cloud_terrain_height::CloudTerrainHeightMap;
 use crate::renderer::clouds::noise::CloudNoiseResources;

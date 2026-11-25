@@ -122,18 +122,18 @@ layers:
           active: true
           touchable: true
           editable: false
-      - !Advanced
-        name: add_plus_icon
-        ap_name: plus_icon
-        ap_var: ''
-        actions:
-          - in:any button:any as:["overlay", "add"], set(str:self.center, {as.center}); set(str:self.color.fill, [1.0, 1.0, 1.0, 1.0]);
-        x: 0.0
-        y: 0.0
-        scale: 4.0
-        misc:
-          active: true
-          touchable: false
-          editable: true
-        editing_tool: true
+    #      - !Advanced
+    #        name: add_plus_icon
+    #        ap_name: plus_icon
+    #        ap_var: ''
+    #        actions:
+    #          - in:any button:any a//this is illegal, advanced has no self elements:["overlay", "add"], set(str:self.center, {as.center}); set(str:self.color.fill, [1.0, 1.0, 1.0, 1.0]);
+    #        x: 0.0
+    #        y: 0.0
+    #        scale: 4.0
+    #        misc:
+    #          active: true
+    #          touchable: false
+    #          editable: true
+    #        editing_tool: true
     editing_tool: true

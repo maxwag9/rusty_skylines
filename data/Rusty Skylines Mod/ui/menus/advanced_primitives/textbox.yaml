@@ -24,19 +24,24 @@ elements:
   - !Text
     id: button_text
     actions:
-      - 'on:startup, set(str:self.anchor, str:{ap.2}); set(str:open_chat, str:text_utils(self.menu, self.layer, self.id, str:TextEditStart); text_utils(self.menu, self.layer, self.id, str:BlockLinebreak); set(str:self.color.fill, [1.0, 1.0, 1.0, 1.0]); ifvareq(self.template, ap.0, set(str:self.tt, str:);); ); set(str:post_chat, "call(ap.4); set(str:self.tt, ap:ap.0); deselect_all();"); set(str:close_chat, str:deselect_all());'
-      - 'in:any as:[Button_Background], set(str:self.pt, expr:scaled_pt({ap.1})); set(str:as.size, expr:{self.size}+15.0); set(str:as.center, expr:{self.anchor_center}+{as.size}*0.5);  call({ap.3});'
-      - "on:hovering as:[Button_Background], set(str:as.color.border, [1.0, 1.0, 1.0, 1.0])"
+      - 'on:startup, set(str:self.anchor, str:{ap.2}); set(str:start_textbox, text_utils(self.menu, self.layer, self.id, str:TextEditStart); text_utils(self.menu, self.layer, self.id, str:BlockLinebreak); set(str:self.color.fill, [1.0, 1.0, 1.0, 1.0]); ifvareq(self.template, ap.0, set(str:self.tt, str:);); call(ap.4);); 
+        set(str:post_textbox, "call(ap.5); set(str:self.tt, ap:ap.0); call(stop_textbox)"); 
+        set(str:stop_textbox, deselect_all(); call(ap.6););'
+      - 'in:any as:["Button_Background"], set(str:self.pt, expr:scaled_size({ap.1})); set(str:as.size, expr:{self.size}+15.0); set(str:as.center, expr:{self.topleft}+{as.size}*0.5);  call({ap.3});'
+      - 'on:hovering as:["Button_Background"], set(str:as.color.border, [1.0, 1.0, 1.0, 1.0])'
       - "on:hover_exit on:activated as:[Button_Background], set(str:as.color.border, [0.1, 0.1, 0.1, 1.0])"
 
-      - 'on:desel, ifvareq(self.template, "", set(str:self.tt, {ap.0}); ); set(str:self.color.fill, [0.4, 0.4, 0.4, 0.8]); call(str:{ap.5});' # Shit, deselect is global...
+      - 'on:desel, call(str:{ap.7}); ifvareq(self.template, "", set(str:self.tt, {ap.0}); ); set(str:self.color.fill, [0.4, 0.4, 0.4, 0.8]);' # Shit, deselect is global...
       - "on:startup, set(str:self.tt, str:{ap.0}); set(str:self.color.fill, [0.4, 0.4, 0.4, 0.8]);"
-      - 'button:"Enter*" trigger:r, call(post_chat)'
-      - 'on:press, call(open_chat); '
+      - 'button:"Enter*" trigger:r, call(post_textbox)'
+      - 'on:press, call(start_textbox); '
 
     x: 0
     y: 0
     pt: 25.0
+    resize_behaviour:
+      width: uniform
+      height: y
     color:
       - 1.0
       - 1.0

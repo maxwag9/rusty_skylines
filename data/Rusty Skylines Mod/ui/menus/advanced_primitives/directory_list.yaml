@@ -1,0 +1,73 @@
+name: directory_list
+elements:
+  - !Rect
+    id: Directory List Header Background
+    actions:
+      - 'on:activated, set(str:{ap.0}_open, bool:false); set(str:self.size.y, expr:scaled_size({ap.2})); set(str:self.size.x, expr:scaled_size({ap.3}))'
+      - 'on:screen_resize, set(str:self.size.y, expr:scaled_size({ap.2})); set(str:self.size.x, expr:scaled_size({ap.3})); forin(expr:range(0, {{ap.0}_shown} ?? 0), del_ap(self.menu, self.layer, expr:"{ap.0}_Row_" + {idx})); set(str:{ap.0}_shown, expr:0)'
+      - 'on:release on:activated as:["Directory List Expand Indicator"], set(str:as.center.x, expr:{self.center.x}+{self.size.x}*0.45)'
+      - 'on:screen_resize as:["Directory List Expand Indicator"], set(str:as.center.x, expr:{self.center.x}+{self.size.x}*0.45)'
+      - 'on:release button:left, toggle(str:{ap.0}_open)'
+      - 'on:nothing, set(str:{ap.0}_rows, expr:{{ap.0}_open ?? false} ? flatten_tree(sort_tree({{ap.0} ?? []}, "{ap.4}"), "{ap.0}_open") : [])'
+      - 'on:nothing, if(expr:abs(count({{ap.0}_rows} ?? []) - {{ap.0}_shown ?? 0}) > 0, forin(expr:range(0, {{ap.0}_shown ?? 0}), del_ap(self.menu, self.layer, expr:"{ap.0}_Row_" + {idx})); set(str:{ap.0}_shown, expr:count({{ap.0}_rows} ?? [])); forin(expr:count({{ap.0}_rows} ?? []), add_ap(self.menu, expr:"{ap.0}_Row_" + {idx}, "directory_list_option", [str:{ap.0}, expr:{idx}, expr:scaled_size({ap.2}), expr:scaled_size({ap.3})], [self.center.x, expr:{self.center.y} + {self.size.y} * 0.5 + scaled_size({ap.2}) * ({idx} + 0.5)], 1.0, true)))'
+      - 'on:hover_enter, call(rust:play_sound, str:ButtonHover)'
+      - 'on:press, call(rust:play_sound, str:ButtonPress)'
+      - 'call(show_interaction, [[0.01, 0.01, 0.01, 0.95], false])'
+    x: 0
+    y: 0
+    w: 300
+    h: 34
+    color:
+      - 0.01
+      - 0.01
+      - 0.01
+      - 0.95
+    border_color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    roundness: 0.05
+    border_thickness: 1
+
+  - !Text
+    id: Directory List Header Text
+    actions:
+      - 'on:activated on:screen_resize as:["Directory List Header Background"], set(str:self.pt, expr:fit_text_pt(({as.size.y}*0.55 < 16.0 ? {as.size.y}*0.55 : 16.0), {as.size.x}*0.80))'
+    x: 0
+    y: 0
+    pt: 16.0
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    text: "{ap.1}"
+    anchor: Center
+    decorations:
+      - color: [ 0.0, 0.0, 0.0, 1.0 ]
+        spread: 2.0
+    misc:
+      active: true
+      touchable: false
+      editable: true
+
+  - !Text
+    id: Directory List Expand Indicator
+    x: 0
+    y: 0
+    pt: 20.0
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    text: '{expr:{{ap.0}_open ?? false} ? "v" : ">"}'
+    anchor: Center
+    decorations:
+      - color: [ 0.3, 0.3, 0.3, 1.0 ]
+        spread: 2.0
+    misc:
+      active: true
+      touchable: false
+      editable: false

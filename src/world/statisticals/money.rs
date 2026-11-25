@@ -1,7 +1,7 @@
 use crate::resources::HOURS_PER_YEAR;
 use crate::world::buildings::buildings::BuildingLevel;
 use crate::world::buildings::zoning::ZoningType;
-use crate::world::roads::road_structs::{CrossingPoint, RoadType};
+use crate::world::roads::road_structs::{CrossingPoint, RoadGeometry, RoadType};
 use crate::world::statisticals::demands::JobOccupancy;
 use crate::world::statisticals::demography::{Groups, LifeStage, MAX_AGE};
 use rand::{Rng, RngExt};
@@ -28,13 +28,13 @@ impl Default for Economy {
 
 impl Economy {
     #[inline]
-    pub fn can_buy(&mut self, cost: i64) -> bool {
-        if self.money > cost { true } else { false }
+    pub fn can_buy(&self, cost: i64) -> bool {
+        if self.money >= cost { true } else { false }
     }
     #[inline]
     pub fn buy(&mut self, cost: i64) -> bool {
-        if self.money > cost {
-            self.money -= cost;
+        if self.can_buy(cost) {
+            self.money = self.money.saturating_sub(cost);
             true
         } else {
             false
@@ -43,7 +43,7 @@ impl Economy {
 
     #[inline]
     pub fn add_money(&mut self, amount: i64) {
-        self.money += amount;
+        self.money = self.money.saturating_add(amount);
     }
 }
 

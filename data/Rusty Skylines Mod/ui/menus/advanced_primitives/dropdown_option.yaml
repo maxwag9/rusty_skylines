@@ -26,8 +26,8 @@ elements:
       - call(show_interaction, [[0.0, 0.761, 0.820, 0.7], false]))
     x: 0
     y: 0
-    w: 240
-    h: 60
+    w: 180
+    h: 40
     color:
       - 0.0
       - 0.761

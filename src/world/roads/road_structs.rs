@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::helpers::positions::WorldPos;
+use rusty_skylines_utils::positions::WorldPos;
 use crate::systems::systems::RoadDestroyType;
 use crate::world::roads::roads::{EMA, RoadCommand, RoadStorage, RoadTypes};
 use glam::Vec3;
@@ -10,7 +10,7 @@ use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use strum_macros::EnumString;
 
-pub type RoadTypeId = u32;
+pub type RoadTypeId = u64;
 #[derive(Clone, Debug)]
 pub struct RoadStyleParams {
     state: EditorState,
@@ -300,10 +300,8 @@ impl AttachedControl {
 pub type LeftLaneCount = usize;
 pub type RightLaneCount = usize;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[revisioned(revision = 1)]
-pub struct RoadType {
-    pub name: String,
-
+#[revisioned(revision = 2)]
+pub struct RoadGeometry {
     pub lanes_each_direction: (LeftLaneCount, RightLaneCount),
 
     pub lane_width: f32,
@@ -318,16 +316,11 @@ pub struct RoadType {
     pub median_height: f32,
     pub median_material_id: u32,
 
-    pub speed_limit: f32,
-    pub vehicle_mask: u32,
-    pub structure: StructureType,
     pub turn_tightness: f32,
 }
-impl Default for RoadType {
+impl Default for RoadGeometry {
     fn default() -> Self {
         Self {
-            name: "Small Road".to_string(),
-
             lanes_each_direction: (1, 1),
 
             lane_width: 3.6,
@@ -342,26 +335,66 @@ impl Default for RoadType {
             median_height: 0.15,
             median_material_id: 0, // concrete
 
-            speed_limit: 16.7,
-            vehicle_mask: 1,
-            structure: StructureType::Surface,
             turn_tightness: 1.0,
         }
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[revisioned(revision = 1)]
+pub struct RoadSettings {
+    pub structure: StructureType,
+    pub vehicle_mask: u32,
+    pub speed_limit: f32,
+}
+impl Default for RoadSettings {
+    fn default() -> Self {
+        Self {
+            structure: StructureType::Surface,
+            vehicle_mask: 1,
+            speed_limit: 16.7,
+        }
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[revisioned(revision = 2)]
+pub struct RoadType {
+    #[revision(start = 2)]
+    #[serde(default)]
+    pub id: String,
+    #[serde(skip)]
+    pub stable_id: RoadTypeId,
+    #[serde(skip)]
+    pub identity: String,
+    pub road_geom: RoadGeometry,
+    pub road_settings: RoadSettings,
+}
+impl Default for RoadType {
+    fn default() -> Self {
+        Self {
+            id: "small_road".to_string(),
+            stable_id: 0,
+            identity: "".to_string(),
+            road_geom: Default::default(),
+            road_settings: Default::default(),
+        }
+    }
+}
+fn default_road_category() -> String {
+    "Default".to_string()
+}
 impl RoadType {
     pub fn cost_per_meter(&self) -> f64 {
-        let (left, right) = self.lanes_each_direction;
+        let (left, right) = self.road_geom.lanes_each_direction;
 
         // Core carriageway width
-        let carriageway_width = (left + right) as f64 * self.lane_width as f64;
+        let carriageway_width = (left + right) as f64 * self.road_geom.lane_width as f64;
 
         // Sidewalks (both sides if present)
-        let sidewalk_width = self.sidewalk_width as f64 * 2.0;
+        let sidewalk_width = self.road_geom.sidewalk_width as f64 * 2.0;
 
         // Median only matters if it exists
-        let median_width = self.median_width as f64;
+        let median_width = self.road_geom.median_width as f64;
 
         // Base physical width
         let total_width = carriageway_width + sidewalk_width + median_width;
@@ -370,7 +403,7 @@ impl RoadType {
         let base_cost_per_m2 = 15.0;
 
         // Structure multiplier
-        let structure_multiplier = match self.structure {
+        let structure_multiplier = match self.road_settings.structure {
             StructureType::Surface => 1.0,
             StructureType::Bridge => 4.0,
             StructureType::Tunnel => 7.0,
@@ -381,7 +414,7 @@ impl RoadType {
         let lane_complexity = lane_count.sqrt();
 
         // Small quality/speed factor (higher speed roads cost slightly more)
-        let speed_factor = 1.0 + (self.speed_limit.clamp(30.0, 200.0) as f64 / 50.0) * 0.15;
+        let speed_factor = 1.0 + (self.road_settings.speed_limit.clamp(30.0, 200.0) as f64 / 50.0) * 0.15;
 
         let raw = total_width * base_cost_per_m2;
 
@@ -390,45 +423,80 @@ impl RoadType {
 
     #[inline]
     pub fn total_lanes(&self) -> usize {
-        self.lanes_each_direction.0 + self.lanes_each_direction.1
+        self.road_geom.lanes_each_direction.0 + self.road_geom.lanes_each_direction.1
     }
 
     #[inline]
     pub fn capacity(&self) -> u32 {
         let lanes = self.total_lanes() as f32;
         let base_per_lane = 900.0;
-        let speed_factor = (self.speed_limit / 13.9).clamp(0.5, 3.0);
+        let speed_factor = (self.road_settings.speed_limit / 13.9).clamp(0.5, 3.0);
 
         (lanes * base_per_lane * speed_factor) as u32
     }
     #[inline]
     pub fn speed_limit(&self) -> f32 {
-        self.speed_limit
+        self.road_settings.speed_limit
     }
 
     #[inline]
     pub fn vehicle_mask(&self) -> u32 {
-        self.vehicle_mask
+        self.road_settings.vehicle_mask
     }
 
     #[inline]
     pub fn structure(&self) -> StructureType {
-        self.structure
+        self.road_settings.structure
     }
 
     #[inline]
     pub fn lanes_each_direction(&self) -> (LeftLaneCount, RightLaneCount) {
-        self.lanes_each_direction
-    }
-
-    #[inline]
-    pub fn name(&self) -> &str {
-        self.name.as_str()
+        self.road_geom.lanes_each_direction
     }
 
     #[inline]
     pub fn half_width(&self) -> f32 {
-        self.sidewalk_width * 2.0 + self.lane_width * self.total_lanes() as f32
+        self.road_geom.sidewalk_width * 2.0 + self.road_geom.lane_width * self.total_lanes() as f32
+    }
+    #[inline]
+    pub fn lane_width(&self) -> f32 {
+        self.road_geom.lane_width
+    }
+    #[inline]
+    pub fn turn_tightness(&self) -> f32 {
+        self.road_geom.turn_tightness
+    }
+    #[inline]
+    pub fn lane_height(&self) -> f32 {
+        self.road_geom.lane_height
+    }
+    #[inline]
+    pub fn sidewalk_width(&self) -> f32 {
+        self.road_geom.sidewalk_width
+    }
+    #[inline]
+    pub fn sidewalk_height(&self) -> f32 {
+        self.road_geom.sidewalk_height
+    }
+    #[inline]
+    pub fn median_width(&self) -> f32 {
+        self.road_geom.median_width
+    }
+    #[inline]
+    pub fn median_height(&self) -> f32 {
+        self.road_geom.median_height
+    }
+    #[inline]
+    pub fn lane_material_id(&self) -> u32 {
+        self.road_geom.lane_material_id
+    }
+    #[inline]
+    pub fn sidewalk_material_id(&self) -> u32 {
+        self.road_geom.sidewalk_material_id
+    }
+    #[inline]
+    pub fn median_material_id(&self) -> u32 {
+        self.road_geom.median_material_id
     }
 }
 

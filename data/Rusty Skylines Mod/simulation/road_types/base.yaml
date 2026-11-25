@@ -1,0 +1,234 @@
+Expensive:
+  - id: suburban_road
+    road_geom:
+      lanes_each_direction: [ 1, 1 ]
+      lane_width: 3.25
+      lane_height: 0.0
+      lane_material_id: 2
+      sidewalk_width: 2.0
+      sidewalk_height: 0.15
+      sidewalk_material_id: 0
+      median_width: 0.0
+      median_height: 0.15
+      median_material_id: 0
+      turn_tightness: 1.3
+    road_settings:
+      structure: Surface
+      vehicle_mask: 1
+      speed_limit: 13.89
+
+  - id: urban_road
+    road_geom:
+      lanes_each_direction: [ 1, 1 ]
+      lane_width: 3.5
+      lane_height: 0.0
+      lane_material_id: 2
+      sidewalk_width: 2.5
+      sidewalk_height: 0.15
+      sidewalk_material_id: 0
+      median_width: 0.0
+      median_height: 0.15
+      median_material_id: 0
+      turn_tightness: 1.0
+    road_settings:
+      structure: Surface
+      vehicle_mask: 1
+      speed_limit: 13.89
+
+  - id: urban_avenue
+    road_geom:
+      lanes_each_direction: [ 2, 2 ]
+      lane_width: 3.4
+      lane_height: 0.0
+      lane_material_id: 2
+      sidewalk_width: 3.0
+      sidewalk_height: 0.15
+      sidewalk_material_id: 0
+      median_width: 1.5
+      median_height: 0.15
+      median_material_id: 0
+      turn_tightness: 0.9
+    road_settings:
+      structure: Surface
+      vehicle_mask: 1
+      speed_limit: 13.89
+
+  - id: major_avenue
+    road_geom:
+      lanes_each_direction: [ 3, 3 ]
+      lane_width: 3.5
+      lane_height: 0.0
+      lane_material_id: 2
+      sidewalk_width: 3.0
+      sidewalk_height: 0.15
+      sidewalk_material_id: 0
+      median_width: 2.0
+      median_height: 0.15
+      median_material_id: 0
+      turn_tightness: 0.85
+    road_settings:
+      structure: Surface
+      vehicle_mask: 1
+      speed_limit: 16.67
+Cheap:
+  - id: boulevard
+    road_geom:
+      lanes_each_direction: [ 2, 2 ]
+      lane_width: 3.5
+      lane_height: 0.0
+      lane_material_id: 2
+      sidewalk_width: 4.0
+      sidewalk_height: 0.15
+      sidewalk_material_id: 0
+      median_width: 4.0
+      median_height: 0.15
+      median_material_id: 0
+      turn_tightness: 0.8
+    road_settings:
+      structure: Surface
+      vehicle_mask: 1
+      speed_limit: 13.89
+
+  - id: rural_road
+    road_geom:
+      lanes_each_direction: [ 1, 1 ]
+      lane_width: 3.25
+      lane_height: 0.0
+      lane_material_id: 2
+      sidewalk_width: 0.0
+      sidewalk_height: 0.15
+      sidewalk_material_id: 0
+      median_width: 0.0
+      median_height: 0.15
+      median_material_id: 0
+      turn_tightness: 1.5
+    road_settings:
+      structure: Surface
+      vehicle_mask: 1
+      speed_limit: 22.22
+
+  - id: country_lane
+    road_geom:
+      lanes_each_direction: [ 1, 1 ]
+      lane_width: 2.5
+      lane_height: 0.0
+      lane_material_id: 2
+      sidewalk_width: 0.0
+      sidewalk_height: 0.15
+      sidewalk_material_id: 0
+      median_width: 0.0
+      median_height: 0.15
+      median_material_id: 0
+      turn_tightness: 2.0
+    road_settings:
+      structure: Surface
+      vehicle_mask: 1
+      speed_limit: 16.67
+
+  - id: highway
+    road_geom:
+      lanes_each_direction: [ 2, 2 ]
+      lane_width: 3.75
+      lane_height: 0.0
+      lane_material_id: 2
+      sidewalk_width: 0.0
+      sidewalk_height: 0.15
+      sidewalk_material_id: 0
+      median_width: 4.0
+      median_height: 0.15
+      median_material_id: 0
+      turn_tightness: 0.5
+    road_settings:
+      structure: Surface
+      vehicle_mask: 1
+      speed_limit: 33.33
+
+  - id: motorway
+    road_geom:
+      lanes_each_direction: [ 3, 3 ]
+      lane_width: 3.75
+      lane_height: 0.0
+      lane_material_id: 2
+      sidewalk_width: 0.0
+      sidewalk_height: 0.15
+      sidewalk_material_id: 0
+      median_width: 0.85
+      median_height: 0.75
+      median_material_id: 0
+      turn_tightness: 0.5
+    road_settings:
+      structure: Surface
+      vehicle_mask: 1
+      speed_limit: 36.11
+
+  - id: pedestrian_street
+    road_geom:
+      lanes_each_direction: [ 0, 0 ]
+      lane_width: 3.0
+      lane_height: 0.0
+      lane_material_id: 0
+      sidewalk_width: 4.0
+      sidewalk_height: 0.15
+      sidewalk_material_id: 0
+      median_width: 0.0
+      median_height: 0.15
+      median_material_id: 0
+      turn_tightness: 1.5
+    road_settings:
+      structure: Surface
+      vehicle_mask: 0
+      speed_limit: 5.56
+KnockOff:
+  - id: pedestrian_street
+    road_geom:
+      lanes_each_direction: [ 0, 0 ]
+      lane_width: 3.0
+      lane_height: 0.0
+      lane_material_id: 0
+      sidewalk_width: 4.0
+      sidewalk_height: 0.15
+      sidewalk_material_id: 0
+      median_width: 0.0
+      median_height: 0.15
+      median_material_id: 0
+      turn_tightness: 1.5
+    road_settings:
+      structure: Surface
+      vehicle_mask: 0
+      speed_limit: 5.56
+KnockOff2:
+  - id: pedestrian_street
+    road_geom:
+      lanes_each_direction: [ 0, 0 ]
+      lane_width: 3.0
+      lane_height: 0.0
+      lane_material_id: 0
+      sidewalk_width: 4.0
+      sidewalk_height: 0.15
+      sidewalk_material_id: 0
+      median_width: 0.0
+      median_height: 0.15
+      median_material_id: 0
+      turn_tightness: 1.5
+    road_settings:
+      structure: Surface
+      vehicle_mask: 0
+      speed_limit: 5.56
+KnockOff1:
+  - id: pedestrian_street
+    road_geom:
+      lanes_each_direction: [ 0, 0 ]
+      lane_width: 3.0
+      lane_height: 0.0
+      lane_material_id: 0
+      sidewalk_width: 4.0
+      sidewalk_height: 0.15
+      sidewalk_material_id: 0
+      median_width: 0.0
+      median_height: 0.15
+      median_material_id: 0
+      turn_tightness: 1.5
+    road_settings:
+      structure: Surface
+      vehicle_mask: 0
+      speed_limit: 5.56

@@ -2,11 +2,11 @@ use crate::data::Settings;
 use crate::helpers::modpack::ModManager;
 use crate::helpers::stupid_color_from_rgba;
 use crate::renderer::pipelines::{COLOR_FORMAT, Pipelines};
-use crate::renderer::render_core::{create_color_attachment_clear, create_color_attachment_load};
+use crate::renderer::renderer::{create_color_attachment_clear, create_color_attachment_load};
 use crate::renderer::render_passes::{color_target, color_target_ui};
-use crate::renderer::ui_pipelines::{Background, UI_DEPTH_FORMAT, UiPipelines, multisample_state};
-use crate::renderer::ui_text_rendering::{Anchor, anchor_to};
-use crate::renderer::ui_upload::*;
+use crate::renderer::ui::ui_pipelines::{Background, UI_DEPTH_FORMAT, UiPipelines, multisample_state};
+use crate::renderer::ui::ui_text_rendering::{Anchor};
+use crate::renderer::ui::ui_upload::*;
 use crate::resources::Time;
 use crate::ui::action_parser::compile_actions;
 use crate::ui::input::Input;
@@ -24,6 +24,7 @@ use wgpu::*;
 use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions};
 use wgpu_render_manager::renderer::RenderManager;
 use winit::dpi::PhysicalSize;
+use crate::mini_renderer::MiniRenderer;
 
 /// I'm sorry god for all my sins, may Jesus have attoned my sins. ↓
 pub static FONT_SYSTEM: OnceLock<Mutex<FontSystem>> = OnceLock::new();
@@ -236,8 +237,6 @@ impl UiRenderer {
     ) -> anyhow::Result<Self> {
         let pipelines = UiPipelines::new(device, config, msaa_samples, size)?;
 
-        let font_system = FontSystem::new();
-
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let mut text_atlas = TextAtlas::new(device, queue, &cache, COLOR_FORMAT);
@@ -267,7 +266,7 @@ impl UiRenderer {
                 height: config.height,
             },
         );
-        init_global_font_system(font_system);
+
         Ok(Self {
             pipelines,
 
@@ -280,7 +279,168 @@ impl UiRenderer {
             text_decoration_vbo: None,
         })
     }
+    fn rebuild_layer_indices(
+        &mut self,
+        ui: &mut Ui,
+        menu_name: &str,
+        mut pending_indices: Vec<usize>,
+        force_dirty: bool,
+        time: &Time,
+        device: &Device,
+        queue: &Queue,
+        window_size: PhysicalSize<f32>,
+        settings: &Settings,
+        mod_manager: &ModManager,
+    ) {
+        let (menus, variables, touch_manager, aps) = (
+            &mut ui.menus,
+            &ui.variables,
+            &mut ui.touch_manager,
+            &ui.aps,
+        );
 
+        let mut generated_indices = Vec::new();
+
+        {
+            let Some(menu) = menus.get_mut(menu_name) else {
+                return;
+            };
+
+            let mut cursor = 0;
+
+            while cursor < pending_indices.len() {
+                let layer_index = pending_indices[cursor];
+                cursor += 1;
+
+                if layer_index >= menu.layers.len() {
+                    continue;
+                }
+
+                if force_dirty {
+                    menu.layers[layer_index].dirty.mark_all();
+                }
+
+                if !menu.layers[layer_index].active
+                    || !menu.layers[layer_index].dirty.any()
+                {
+                    continue;
+                }
+
+                let ap_layers = with_font_system(|font_system| {
+                    menu.rebuild_layer_cache_index(
+                        settings,
+                        variables,
+                        font_system,
+                        layer_index,
+                        &mut touch_manager.runtimes,
+                        aps,
+                        window_size,
+                        device,
+                        queue,
+                        mod_manager,
+                    )
+                });
+
+                self.upload_layer(
+                    queue,
+                    &mut menu.layers[layer_index],
+                    touch_manager,
+                    time,
+                    menu_name,
+                );
+
+                for mut ap_layer in ap_layers {
+                    ap_layer.dirty.mark_all();
+
+                    let index = menu.layers.len();
+                    menu.layers.push(ap_layer);
+
+                    generated_indices.push(index);
+                    pending_indices.push(index);
+                }
+            }
+        }
+
+        for layer_idx in generated_indices {
+            let layer_string_actions = menus[menu_name].layers[layer_idx].string_actions.clone();
+            // Layer Actions
+            let layer_compiled_actions = compile_actions(menus, None, layer_string_actions);
+
+            menus.get_mut(menu_name).unwrap().layers[layer_idx].compiled_actions = layer_compiled_actions;
+
+            let element_count = menus[menu_name].layers[layer_idx].elements.len();
+
+            for element_idx in 0..element_count {
+                let (element_ref, element_string_actions) = {
+                    let layer = &menus[menu_name].layers[layer_idx];
+                    let element = &layer.elements[element_idx];
+
+                    let element_ref = ElementRef {
+                        menu: menu_name.to_string(),
+                        layer: layer.name.clone(),
+                        id: element.id().to_string(),
+                        kind: element.kind(),
+                    };
+
+                    (element_ref, element.string_actions())
+                };
+                // Element Actions
+                let element_compiled_actions = compile_actions(menus, Some(element_ref), element_string_actions);
+
+                menus.get_mut(menu_name).unwrap().layers[layer_idx].elements[element_idx].set_compiled_actions(element_compiled_actions);
+            }
+        }
+    }
+    pub fn rebuild_layers_now(
+        &mut self,
+        ui: &mut Ui,
+        menu_name: &str,
+        layer_names: &[String],
+        time: &Time,
+        device: &Device,
+        queue: &Queue,
+        window_size: PhysicalSize<f32>,
+        settings: &Settings,
+        mod_manager: &ModManager,
+    ) -> Result<(), String> {
+        let layer_indices = {
+            let Some(menu) = ui.menus.get(menu_name) else {
+                return Err(format!("Menu '{}' doesn't exist", menu_name));
+            };
+
+            let missing: Vec<String> = layer_names.iter()
+                .filter(|name| {
+                    !menu.layers.iter().any(|layer| {
+                        layer.name.as_str() == name.as_str()
+                    })
+                }).cloned().collect();
+
+            if !missing.is_empty() {
+                return Err(format!("Layer(s) not found in menu '{}': {}", menu_name, missing.join(", ")));
+            }
+
+            menu.layers.iter().enumerate()
+                .filter(|(_, layer)| {
+                    layer_names.iter().any(|name| name == &layer.name)
+                })
+                .map(|(idx, _)| idx).collect()
+        };
+
+        self.rebuild_layer_indices(
+            ui,
+            menu_name,
+            layer_indices,
+            true,
+            time,
+            device,
+            queue,
+            window_size,
+            settings,
+            mod_manager,
+        );
+
+        Ok(())
+    }
     pub fn update(
         &mut self,
         ui: &mut Ui,
@@ -318,79 +478,38 @@ impl UiRenderer {
             0,
             bytemuck::bytes_of(&bg_uniform),
         );
-        let mut layer_actions_to_update = vec![];
-        for (menu_name, menu) in ui.menus.iter_mut().filter(|(_, menu)| menu.active) {
-            let dirty_indices: Vec<usize> = menu
+        let active_menu_names: Vec<String> = ui
+            .menus
+            .iter()
+            .filter(|(_, menu)| menu.active)
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        for menu_name in active_menu_names {
+            let dirty_indices: Vec<usize> = ui.menus[&menu_name]
                 .layers
                 .iter()
                 .enumerate()
-                .filter(|(_, l)| l.active && l.dirty.any())
-                .map(|(i, _)| i)
+                .filter(|(_, layer)| layer.active && layer.dirty.any())
+                .map(|(idx, _)| idx)
                 .collect();
 
-            let mut ap_layers = vec![];
-
-            for idx in dirty_indices {
-                ap_layers.append(&mut with_font_system(|font_system| {
-                    menu.rebuild_layer_cache_index(
-                        settings,
-                        &ui.variables,
-                        font_system,
-                        idx,
-                        &mut ui.touch_manager.runtimes,
-                        &ui.aps,
-                        window_size,
-                        device,
-                        queue,
-                        mod_manager,
-                    )
-                }));
-
-                let layer = &mut menu.layers[idx];
-                self.upload_layer(queue, layer, &ui.touch_manager, time, menu_name);
+            if dirty_indices.is_empty() {
+                continue;
             }
 
-            for ap_layer in ap_layers {
-                menu.layers.push(ap_layer);
-                layer_actions_to_update.push((menu_name.clone(), menu.layers.len() - 1));
-                let Some(layer) = menu.layers.last_mut() else {
-                    continue;
-                };
-                self.upload_layer(queue, layer, &ui.touch_manager, time, menu_name);
-                layer.dirty.mark_all();
-            }
-        }
-        for (menu_name, layer_idx) in layer_actions_to_update {
-            // Layer actions
-            let layer_string_actions = ui.menus[&menu_name].layers[layer_idx]
-                .string_actions
-                .clone();
-
-            let layer_compiled_actions = compile_actions(&ui.menus, None, layer_string_actions);
-
-            ui.menus.get_mut(&menu_name).unwrap().layers[layer_idx].compiled_actions =
-                layer_compiled_actions;
-
-            // Element actions
-            let element_count = ui.menus[&menu_name].layers[layer_idx].elements.len();
-
-            for element_idx in 0..element_count {
-                let element = &ui.menus[&menu_name].layers[layer_idx].elements[element_idx];
-                let element_ref = ElementRef {
-                    menu: menu_name.clone(),
-                    layer: ui.menus[&menu_name].layers[layer_idx].name.clone(),
-                    id: element.id().to_string(),
-                    kind: element.kind(),
-                };
-                let element_string_actions =
-                    ui.menus[&menu_name].layers[layer_idx].elements[element_idx].string_actions();
-
-                let element_compiled_actions =
-                    compile_actions(&ui.menus, Some(element_ref), element_string_actions); // Suuper important ElementRef!!
-
-                ui.menus.get_mut(&menu_name).unwrap().layers[layer_idx].elements[element_idx]
-                    .set_compiled_actions(element_compiled_actions);
-            }
+            self.rebuild_layer_indices(
+                ui,
+                &menu_name,
+                dirty_indices,
+                false,
+                time,
+                device,
+                queue,
+                window_size,
+                settings,
+                mod_manager,
+            );
         }
     }
 
@@ -403,6 +522,7 @@ impl UiRenderer {
         ui: &mut Ui,
         pipelines: &Pipelines,
         settings: &Settings,
+        mini_renderer: Option<&mut MiniRenderer>,
     ) {
         self.draw_background(render_manager, mod_manager, encoder, pipelines, settings);
 
@@ -689,6 +809,21 @@ impl UiRenderer {
                                             rect_image_shader,
                                         );
                                     }
+                                    RectTextureType::MiniRender(id) => {
+                                        //println!("Yes I do! In fact, it is: {id}");
+                                        if let Some(view) = mini_renderer.as_ref().and_then(|m| m.get_view(*id)) {
+                                            //println!("Got it too! Size: {:?}", view.texture().size());
+                                            self.draw_rect_image(
+                                                render_manager,
+                                                pipelines,
+                                                &mut pass,
+                                                view,
+                                                bg1,
+                                                rect_idx,
+                                                rect_image_shader,
+                                            );
+                                        }
+                                    }
                                 }
                             }
 
@@ -815,7 +950,7 @@ impl UiRenderer {
         layer: &mut RuntimeLayer,
         touch_manager: &UiTouchManager,
         time_system: &Time,
-        menu_name: &String,
+        menu_name: &str,
     ) {
         upload_circles(self, queue, layer);
         upload_outlines(self, queue, layer);
@@ -1364,7 +1499,7 @@ impl UiRenderer {
 
         let width = cache.width.max(1.0);
         let height = cache.height.max(1.0);
-        let top_left = anchor_to(cache.anchor, cache.pos, width, height);
+        let top_left = cache.anchor.anchor_to(cache.pos, width, height);
         let (left, top) = (top_left[0], top_left[1]);
 
         let depth = depth_for(layer_order, element_idx);
@@ -1455,7 +1590,7 @@ impl UiRenderer {
 
         let width = cache.width.max(1.0);
         let height = cache.height.max(1.0);
-        let top_left = anchor_to(cache.anchor, cache.pos, width, height);
+        let top_left = cache.anchor.anchor_to(cache.pos, width, height);
         let (left, top) = (top_left[0], top_left[1]);
         let depth = depth_for(layer_order, element_idx);
 

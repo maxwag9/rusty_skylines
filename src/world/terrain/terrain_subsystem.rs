@@ -2,11 +2,9 @@ use crate::commands::Command;
 use crate::data::{LodCenterType, Settings};
 use crate::helpers::modpack::ModManager;
 use crate::helpers::mouse_ray::*;
-use crate::helpers::positions::*;
 use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
-use crate::renderer::props::Props;
 use crate::resources::Time;
 use crate::simulation::Ticker;
 use crate::ui::input::Input;
@@ -14,10 +12,12 @@ use crate::ui::variables::Variables;
 use crate::ui::vertex::Vertex;
 use crate::world::buildings::building_mesher::BuildingMeshBuilder;
 use crate::world::buildings::buildings::BuildingId;
+use crate::world::buildings::utilities::utilities::Utility;
 use crate::world::buildings::zoning::{LotId, ZoningType};
 use crate::world::camera::camera::Camera;
+use crate::world::props::props::Props;
 use crate::world::roads::road_mesh_manager::ChunkCoord;
-use crate::world::roads::road_structs::RoadType;
+use crate::world::roads::road_structs::RoadGeometry;
 use crate::world::roads::road_subsystem::Roads;
 use crate::world::terrain::chunk_builder::*;
 use crate::world::terrain::terrain_editing::*;
@@ -27,10 +27,15 @@ use crate::world::terrain::terrain_threads::{
     TerrainEditsSnapshot,
 };
 use glam::{Mat4, Vec3};
+use noisy_skylines::compiler::{GenBackend, GenWorkspace};
+use noisy_skylines::presets::{CompiledPreset, PresetFile, compile_preset};
+use rusty_skylines_utils::positions::*;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
+use tracing::error;
 use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,7 +134,7 @@ pub struct PreviewBuilding {
 #[derive(Debug)]
 pub struct Cursor {
     pub mode: CursorMode,
-    pub road_type: RoadType,
+    //pub road_type: RoadType,
     pub prop_name: String,
     pub zoning_type: Option<ZoningType>,
     pub preview_building: Option<PreviewBuilding>,
@@ -139,7 +144,7 @@ impl Cursor {
     pub fn new() -> Self {
         Self {
             mode: CursorMode::Roads,
-            road_type: RoadType::default(),
+            //road_type: RoadType::default(),
             prop_name: "oak".to_string(),
             zoning_type: None,
             preview_building: None,
@@ -159,8 +164,8 @@ impl TerrainJobs {
         Self {
             workers,
             job_config: ChunkJobConfig::default(),
-            max_close_jobs_per_frame: 4, // was 1
-            max_far_jobs_per_frame: 4,   // was 1
+            max_close_jobs_per_frame: 8, // was 1
+            max_far_jobs_per_frame: 8,   // was 1
         }
     }
     fn dispatch_jobs_for_visible(
@@ -312,10 +317,12 @@ impl TerrainRenderSubsystem {
             if !aabb_in_frustum(&planes, min, max) {
                 continue;
             }
-
-            let p = chunk.handle.page;
+            let Some(handle) = chunk.handle.as_ref() else {
+                continue;
+            };
+            let p = handle.page;
             if p < per_page.len() {
-                per_page[p].push(chunk.handle);
+                per_page[p].push(*handle);
             }
         }
         let mut total_indices: usize = 0;
@@ -363,7 +370,7 @@ impl TerrainRenderSubsystem {
                 continue;
             }
 
-            let page = &terrain.arena.pages[pi];
+            let Some(page) = &terrain.arena.pages[pi] else { continue };
             pass.set_vertex_buffer(0, page.vertex_buf.slice(..));
             pass.set_index_buffer(page.index_buf.slice(..), IndexFormat::Uint32);
 
@@ -379,6 +386,7 @@ impl TerrainRenderSubsystem {
         //let total_ms = t_frame.elapsed().as_secs_f32() * 1000.0;
         // println!("{}", total_ms);
     }
+
 }
 
 pub struct Terrain {
@@ -404,7 +412,7 @@ pub struct Terrain {
     pub frame_timings: FrameTimings,
     pub visible: Vec<VisibleChunk>,
     pub terrain_gen: TerrainGenerator,
-
+    pub current_preset_name: String,
     // Cache for LOD computation to avoid rebuilding every frame
     lod_coord_to_index: HashMap<ChunkCoord, usize>,
     lod_steps_buffer: Vec<LodStep>,
@@ -415,6 +423,7 @@ pub struct Terrain {
     pub pending_results: VecDeque<CpuChunkMesh>,
     pub device: Device,
     pub queue: Queue,
+    pub presets: HashMap<String, CompiledPreset>
 }
 const VERTEX_SIZE_BYTES: usize = size_of::<Vertex>();
 impl Terrain {
@@ -434,12 +443,19 @@ impl Terrain {
 
         let mut terrain_params = TerrainParams::default();
         terrain_params.seed = 144;
-        let terrain_gen = TerrainGenerator::new(terrain_params, props);
+
+        println!(
+            "[Terrain] Generation backend: {:?}",
+            GenBackend::detected()
+        );
+        let terrain_gen = TerrainGenerator::new(terrain_params, props, CompiledPreset::default());
 
         let threads = num_cpus::get_physical().saturating_sub(1).max(1);
-        println!("Using {} chunk workers", threads);
+        println!("[Terrain] Using {} chunk workers", threads);
+
 
         let workers = ChunkWorkerPool::new(threads, &terrain_gen);
+
         let mut terrain = Self {
             tick: Ticker::new(60.0),
             cursor: Cursor::new(),
@@ -471,19 +487,76 @@ impl Terrain {
             pending_results: VecDeque::with_capacity(64),
             device: device.clone(),
             queue: queue.clone(),
+            current_preset_name: Default::default(),
+            presets: Default::default(),
         };
         terrain.update_spiral();
         terrain
     }
+    pub fn clear(&mut self) {
+        self.chunks.clear();
+        self.arena.clear();
+        self.last_picked = None;
+        self.terrain_editor = TerrainEditor::default();
+        self.visible.clear();
+        self.terrain_jobs.workers.clear();
+    }
+    pub fn load_presets(&mut self, mod_manager: &ModManager) {
+        let paths = mod_manager.terrain_preset_paths();
+        let mut presets = HashMap::with_capacity(paths.len());
+
+        for path in paths {
+            let Some(preset) = Terrain::compile_preset_handled(&path) else { continue };
+            if presets.values().any(|old_preset: &CompiledPreset| old_preset.name == preset.name)
+            {
+                tracing::warn!(
+                    "[Terrain] Warning: Duplicate Terrain preset name '{}'. The Terrain preset from file '{}' overwrote the previously loaded Terrain preset with the same name.",
+                    preset.name,
+                    path.display()
+                );
+            } else {
+                presets.insert(preset.name.clone(), preset);
+            }
+        }
+        println!("[Terrain] Loaded {} Terrain preset files", presets.len());
+        self.presets = presets;
+    }
+    pub fn compile_preset_handled(path: impl AsRef<Path>) -> Option<CompiledPreset> {
+        let path = path.as_ref();
+
+        match compile_preset(path) {
+            Ok(preset) => {
+                println!(
+                    "[Terrain] Compiled Terrain Preset called: '{}' with {} instructions, {} registers and {} Noises.",
+                    preset.name,
+                    preset.program.instructions.len(),
+                    preset.program.register_count,
+                    preset.noises.len()
+                );
+                Some(preset)
+            }
+            Err(e) => {
+                error!(
+                "[Terrain] Error while compiling Terrain preset: '{}' Error: '{}'",
+                path.display(),
+                e
+            );
+                None
+            }
+        }
+    }
     pub fn recreate_generator(&mut self, props: &Props, mod_manager: &ModManager) {
         let mut terrain_params = TerrainParams::default();
         terrain_params.seed = 144;
-        self.terrain_gen = TerrainGenerator::new(terrain_params, props);
-
+        self.load_presets(mod_manager);
+        let preset = self.get_current_preset();
         let threads = num_cpus::get_physical().saturating_sub(1).max(1);
-        println!("Using {} chunk workers", threads);
-
+        println!("Using {} chunk workers and Terrain Gen Preset: '{}'", threads, preset.name); // German capitalization Zed
+        self.terrain_gen = TerrainGenerator::new(terrain_params, props, preset);
         self.terrain_jobs = TerrainJobs::new(ChunkWorkerPool::new(threads, &self.terrain_gen));
+    }
+    pub fn get_current_preset(&self) -> CompiledPreset {
+        self.presets.get(&self.current_preset_name).cloned().unwrap_or_default()
     }
     pub fn update(
         &mut self,
@@ -501,20 +574,25 @@ impl Terrain {
         let t_frame = Instant::now();
 
         if settings.world_generation_benchmark_mode {
-            self.benchmark
-                .run(self.chunks.len(), &mut self.terrain_jobs.job_config, || {
+            self.benchmark.run(
+                self.chunks.len(),
+                &mut self.terrain_jobs.job_config,
+                || {
                     self.chunks.clear();
+                    self.arena.clear();
+
+                    self.pending_results.clear();
+                    self.visible.clear();
+
                     self.terrain_jobs.workers.clear();
                     self.lod_map.clear();
-                });
+
+                    self.terrain_editor.pristine_grids.clear();
+                },
+            );
         }
 
         let frame = self.frame_state(settings, camera, aspect);
-
-        let t0 = Instant::now();
-        self.drain_finished_meshes(props, mod_manager);
-        self.frame_timings.drain_ms = t0.elapsed().as_secs_f32() * 1000.0;
-
         let t0 = Instant::now();
         let current_chunk = camera.target.chunk;
         // if current_chunk != self.last_camera_chunk {
@@ -539,6 +617,14 @@ impl Terrain {
         self.frame_timings.lod_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
+        self.unload_out_of_range(&frame, props, mod_manager);
+        self.frame_timings.unload_ms = t0.elapsed().as_secs_f32() * 1000.0;
+
+        let t0 = Instant::now();
+        self.drain_finished_meshes(props, mod_manager);
+        self.frame_timings.drain_ms = t0.elapsed().as_secs_f32() * 1000.0;
+
+        let t0 = Instant::now();
         self.terrain_jobs.dispatch_jobs_for_visible(
             &self.terrain_editor,
             &self.chunks,
@@ -549,9 +635,7 @@ impl Terrain {
         );
         self.frame_timings.dispatch_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
-        let t0 = Instant::now();
-        self.unload_out_of_range(&frame);
-        self.frame_timings.unload_ms = t0.elapsed().as_secs_f32() * 1000.0;
+
 
         let t0 = Instant::now();
 
@@ -638,41 +722,48 @@ impl Terrain {
         }
     }
 
-    pub fn drain_finished_meshes(&mut self, props: &mut Props, mod_manager: &ModManager) {
+    pub fn drain_finished_meshes(
+        &mut self,
+        props: &mut Props,
+        mod_manager: &ModManager,
+    ) {
         let mut recv_ms = 0.0;
         let mut rebuild_ms = 0.0;
         let mut gpu_ms = 0.0;
         let mut insert_ms = 0.0;
+
         let detail = DrainDetailTimings::default();
 
         let t0 = Instant::now();
+
         while let Ok(cpu) = self.terrain_jobs.workers.result_rx.try_recv() {
             self.pending_results.push_back(cpu);
         }
+
         recv_ms += t0.elapsed().as_secs_f32() * 1000.0;
 
-        let mut processed = 0;
-        let max_per_frame = 8;
+        let mut processed = 0usize;
+        let max_per_frame = 80;
 
+        let mut arena_rebuild_attempted = false;
+        let mut scratch = GeometryScratch::<Vertex>::default();
         while processed < max_per_frame {
             let Some(cpu) = self.pending_results.pop_front() else {
                 break;
             };
+
             processed += 1;
 
             let coord = cpu.chunk_coord;
 
-            if !self
-                .terrain_jobs
-                .workers
-                .is_current_version(coord, cpu.version)
-            {
+            if !self.terrain_jobs.workers.is_current_version(coord, cpu.version) {
                 continue;
             }
 
             let t0 = Instant::now();
 
-            let (vertices, indices, height_grid) = (cpu.vertices, cpu.indices, cpu.height_grid);
+            let (vertices, indices, height_grid) =
+                (cpu.vertices, cpu.indices, cpu.height_grid);
 
             rebuild_ms += t0.elapsed().as_secs_f32() * 1000.0;
 
@@ -680,13 +771,35 @@ impl Terrain {
 
             self.free_chunk_gpu(coord);
 
-            let handle = self.arena.alloc_and_upload(
+            let mut handle = self.arena.alloc_and_upload(
                 &self.device,
                 &self.queue,
                 &vertices,
                 &indices,
-                &mut GeometryScratch::default(),
+                &mut scratch,
             );
+
+            if handle.is_none()
+                && !arena_rebuild_attempted
+                && self.arena.should_rebuild_for_fragmentation()
+            {
+                arena_rebuild_attempted = true;
+
+                tracing::warn!(
+                    reclaimable_pages = self.arena.potentially_reclaimable_pages(),
+                    "Terrain allocation failed; attempting arena defragmentation"
+                );
+
+                self.rebuild_terrain_arena();
+
+                handle = self.arena.alloc_and_upload(
+                    &self.device,
+                    &self.queue,
+                    &vertices,
+                    &indices,
+                    &mut scratch,
+                );
+            }
 
             gpu_ms += t0.elapsed().as_secs_f32() * 1000.0;
 
@@ -703,6 +816,14 @@ impl Terrain {
             let nx_pos = *self.lod_map.get(&coord_x_pos).unwrap_or(&step);
             let nz_neg = *self.lod_map.get(&coord_z_neg).unwrap_or(&step);
             let nz_pos = *self.lod_map.get(&coord_z_pos).unwrap_or(&step);
+
+            if handle.is_none() {
+                tracing::error!(
+                chunk_x = coord.x,
+                chunk_z = coord.z,
+                "Terrain chunk retained without GPU allocation"
+            );
+            }
 
             self.chunks.insert(
                 coord,
@@ -731,21 +852,13 @@ impl Terrain {
             );
         }
 
+        self.arena.trim_empty_pages();
+
         self.frame_timings.drain_recv_ms = recv_ms;
         self.frame_timings.drain_cpu_rebuild_ms = rebuild_ms;
         self.frame_timings.drain_detail = detail;
         self.frame_timings.drain_gpu_upload_ms = gpu_ms;
         self.frame_timings.drain_chunk_insert_ms = insert_ms;
-    }
-    fn free_chunk_gpu(&mut self, coord: ChunkCoord) {
-        if let Some(old) = self.chunks.remove(&coord) {
-            self.arena.free::<Vertex>(old.handle);
-        }
-    }
-
-    fn unload_chunk(&mut self, coord: ChunkCoord) {
-        self.free_chunk_gpu(coord);
-        self.terrain_jobs.workers.forget_chunk(coord);
     }
 
     fn collect_visible(&self, camera: &Camera, frame: &FrameState) -> Vec<VisibleChunk> {
@@ -847,33 +960,68 @@ impl Terrain {
         }
     }
 
-    fn unload_out_of_range(&mut self, frame: &FrameState) {
-        // Avoid thrash: unload outside render radius + generous margin.
+    fn unload_out_of_range(
+        &mut self,
+        frame: &FrameState,
+        props: &mut Props,
+        mod_manager: &ModManager,
+    ) {
         let margin = (self.render_distance / 2) as u64;
         let r = self.render_distance as u64 + margin;
         let r2 = r * r;
 
-        // Build a set of currently-visible coords so we never unload them.
-        let mut visible_set: HashSet<ChunkCoord> = HashSet::with_capacity(self.visible.len());
-        for v in self.visible.iter() {
-            visible_set.insert(v.chunk_coord);
-        }
+        let visible_set: HashSet<ChunkCoord> = self.visible
+            .iter()
+            .map(|v| v.chunk_coord)
+            .collect();
 
         let mut to_remove = Vec::new();
-        for (&coord @ chunk_coord, _) in self.chunks.iter() {
+
+        for &coord in self.chunks.keys() {
             if visible_set.contains(&coord) {
                 continue;
             }
-            let dist2 = chunk_coord.dist2(frame.cam_pos.chunk);
 
-            if dist2 > r2 {
+            if coord.dist2(frame.cam_pos.chunk) > r2 {
                 to_remove.push(coord);
             }
         }
 
+        let removed_len = to_remove.len();
+
         for coord in to_remove {
             self.unload_chunk(coord);
             self.terrain_editor.pristine_grids.remove(&coord);
+
+            props.replace_generated_instances(
+                coord,
+                vec![],
+                vec![],
+                mod_manager,
+            );
+        }
+
+        if removed_len > 0 {
+            tracing::debug!(
+            unloaded_chunks = removed_len,
+            resident_chunks = self.chunks.len(),
+            allocated_mib = self.arena.allocated_bytes() / (1024 * 1024),
+            active_pages = self.arena.active_page_count(),
+            "Terrain chunks unloaded"
+        );
+        }
+    }
+
+    fn unload_chunk(&mut self, coord: ChunkCoord) {
+        self.free_chunk_gpu(coord);
+        self.terrain_jobs.workers.forget_chunk(coord);
+    }
+
+    fn free_chunk_gpu(&mut self, coord: ChunkCoord) {
+        if let Some(old) = self.chunks.remove(&coord) {
+            if let Some(handle) = old.handle {
+                self.arena.free::<Vertex>(handle);
+            }
         }
     }
 
@@ -986,12 +1134,13 @@ impl Terrain {
     }
 
     pub fn get_height_at(&self, pos: WorldPos, high_res: bool) -> f32 {
+        let point = pos.to_dvec2();
         let chunk = match self.chunks.get(&pos.chunk) {
             Some(c) => c,
-            None => return self.terrain_gen.height(&pos),
+            None => return self.terrain_gen.height(point),
         };
         if high_res && chunk.state.step != 1 {
-            return self.terrain_gen.height(&pos);
+            return self.terrain_gen.height(point);
         }
         height_bilinear_world(&chunk.height_grid, &pos)
     }
@@ -1001,12 +1150,13 @@ impl Terrain {
         pos: WorldPos,
         high_res: bool,
     ) -> f32 {
+        let point = pos.to_dvec2();
         let chunk = match chunks.get(&pos.chunk) {
             Some(c) => c,
-            None => return terrain_gen.height(&pos),
+            None => return terrain_gen.height(point),
         };
         if high_res && chunk.state.step != 1 {
-            return terrain_gen.height(&pos);
+            return terrain_gen.height(point);
         }
         height_bilinear_world(&chunk.height_grid, &pos)
     }
@@ -1021,9 +1171,9 @@ impl Terrain {
                 let pos = WorldPos::new(
                     grid.chunk_coord,
                     LocalPos::new(gx as f32 * cell, h, gz as f32 * cell),
-                );
-                let m = self.terrain_gen.moisture(&pos, h);
-                colors.push(self.terrain_gen.color(&pos, h, m));
+                ).to_dvec2();
+                //let m = self.terrain_gen.moisture(pos, h);
+                colors.push(self.terrain_gen.color(h, 1.0));
             }
         }
         colors
@@ -1087,6 +1237,138 @@ impl Terrain {
 
     pub fn update_spiral(&mut self) {
         self.spiral = generate_spiral_offsets(self.generation_distance as i32);
+    }
+    pub fn rebuild_terrain_arena(&mut self) -> (usize, usize) {
+        let mut chunks: Vec<_> = self.chunks.iter()
+            .map(|(coord, chunk)| {
+                let bytes = chunk.handle.as_ref().map(|handle| {
+                    (handle.vertex_count as u64)
+                        .saturating_mul(size_of::<Vertex>() as u64)
+                        .saturating_add(
+                            (handle.index_count_above as u64
+                                + handle.index_count_under as u64)
+                                .saturating_mul(4),
+                        )
+                }).unwrap_or_else(|| {
+                    (chunk.cpu_vertices.len() as u64)
+                        .saturating_mul(size_of::<Vertex>() as u64)
+                        .saturating_add(
+                            (chunk.cpu_indices.len() as u64).saturating_mul(4),
+                        )
+                });
+
+                (*coord, bytes)
+            })
+            .collect();
+
+        chunks.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+
+        let pages_before = self.arena.active_page_count();
+        let bytes_before = self.arena.allocated_bytes();
+
+        for chunk in self.chunks.values_mut() {
+            chunk.handle = None;
+        }
+
+        self.arena.clear();
+
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+
+        let mut scratch = GeometryScratch::<Vertex>::default();
+
+        let mut restored = 0usize;
+        let mut failed = 0usize;
+
+        for (coord, _) in chunks {
+            let handle = {
+                let Some(chunk) = self.chunks.get(&coord) else {
+                    continue;
+                };
+
+                self.arena.alloc_and_upload(
+                    &self.device,
+                    &self.queue,
+                    &chunk.cpu_vertices,
+                    &chunk.cpu_indices,
+                    &mut scratch,
+                )
+            };
+
+            match handle {
+                Some(handle) => {
+                    if let Some(chunk) = self.chunks.get_mut(&coord) {
+                        chunk.handle = Some(handle);
+                        restored += 1;
+                    }
+                }
+                None => {
+                    failed += 1;
+
+                    error!(
+                        chunk_x = coord.x,
+                        chunk_z = coord.z,
+                        "Failed to restore terrain chunk after arena rebuild"
+                    );
+                }
+            }
+        }
+
+        self.arena.trim_empty_pages();
+
+        tracing::info!(
+        restored,
+        failed,
+        pages_before,
+        pages_after = self.arena.active_page_count(),
+        allocated_before_mib = bytes_before / (1024 * 1024),
+        allocated_after_mib = self.arena.allocated_bytes() / (1024 * 1024),
+        "Terrain GPU arena rebuild completed"
+    );
+
+        (restored, failed)
+    }
+    fn reclaim_fragmented_terrain_vram(&mut self) -> bool {
+        self.arena.trim_empty_pages();
+
+        let has_missing_handles = self.chunks.values()
+            .any(|chunk| chunk.handle.is_none());
+
+        if !has_missing_handles
+            && !self.arena.should_rebuild_for_fragmentation()
+        {
+            return false;
+        }
+
+        let pages_before = self.arena.active_page_count();
+        let bytes_before = self.arena.allocated_bytes();
+
+        tracing::info!(
+        pages_before,
+        allocated_mib = bytes_before / (1024 * 1024),
+        missing_handles = has_missing_handles,
+        "Terrain arena reclamation triggered"
+    );
+
+        let (restored, failed) = self.rebuild_terrain_arena();
+
+        let pages_after = self.arena.active_page_count();
+        let bytes_after = self.arena.allocated_bytes();
+
+        tracing::info!(
+        restored,
+        failed,
+        pages_before,
+        pages_after,
+        pages_released = pages_before.saturating_sub(pages_after),
+        allocated_before_mib = bytes_before / (1024 * 1024),
+        allocated_after_mib = bytes_after / (1024 * 1024),
+        "Terrain arena reclamation finished"
+    );
+
+        restored > 0 || pages_after < pages_before
     }
 }
 
@@ -1190,10 +1472,10 @@ fn make_vertex(
     uv: [f32; 2],
     chunk_xz: [i32; 2],
 ) -> Vertex {
-    let world_pos = WorldPos::new(chunk_coord, LocalPos::new(pos[0], pos[1], pos[2]));
+    let world_pos = WorldPos::new(chunk_coord, LocalPos::new(pos[0], pos[1], pos[2])).to_dvec2();
     let h = pos[1];
-    let moisture = terrain_generator.moisture(&world_pos, h);
-    let color = terrain_generator.color(&world_pos, h, moisture);
+    //let moisture = terrain_generator.moisture(&world_pos, h);
+    let color = terrain_generator.color(h, 1.0);
     Vertex {
         local_position: pos,
         normal,

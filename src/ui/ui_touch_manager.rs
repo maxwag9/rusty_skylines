@@ -75,7 +75,7 @@ impl fmt::Display for ElementRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{}/{}/{} ({})",
+            "'{}'/'{}'/'{}' ({})",
             self.menu, self.layer, self.id, self.kind
         )
     }
@@ -1286,6 +1286,7 @@ impl UiTouchManager {
             // Enter new hover
             if let Some(new) = &new_hover {
                 self.push_event(new.clone(), ElementEvent::HoverEnter);
+                self.push_event(new.clone(), ElementEvent::Hovering);
                 let state = self.element_states.entry(new.id.clone()).or_default();
                 if state.state == ElementTouchState::Idle {
                     state.state = ElementTouchState::Hovered;

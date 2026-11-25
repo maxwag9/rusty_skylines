@@ -4,7 +4,7 @@
 
 use crate::data::Settings;
 use crate::helpers::modpack::ModManager;
-use crate::renderer::render_core::Renderer;
+use crate::renderer::renderer::Renderer;
 use crate::resources::{CommandQueues, Time};
 use crate::simulation::Simulation;
 use crate::ui::action_parser::{ActionEvent, CompiledAction, compile_actions, run_action_with_events, run_actions};
@@ -35,13 +35,15 @@ use crate::world::world::World;
 use sanitize_filename::sanitize;
 use serde::{Deserialize, Serialize};
 use sluggrs_skylines::cosmic_text::skrifa::raw::tables::postscript::dict::entries;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
-use tracing::error;
+use owo_colors::OwoColorize;
+use tracing::{error, event};
 use wgpu::{Device, Queue};
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
+use crate::mini_renderer::MiniRenderer;
 
 /// Captured state when a drag operation begins
 #[derive(Clone, Debug)]
@@ -122,10 +124,10 @@ impl GlobalActions {
 }
 
 impl Ui {
-    pub fn new(settings: &Settings, mut variables: Variables, window_size: PhysicalSize<f32>, device: &Device, queue: &Queue, mod_manager: &ModManager) -> Self {
-        let locales_manager = LocalesManager::new(settings.locale.as_str(), &mut variables, mod_manager);
+    pub fn new(settings: &Settings, variables: Variables) -> Self {
+        //let locales_manager = LocalesManager::new(settings.locale.as_str(), &mut variables, mod_manager);
         //println!("Global Actions loaded: {:?}", global_actions);
-        let mut loader = Self {
+        let loader = Self {
             menus: HashMap::new(),
             aps: HashMap::new(),
             global_actions: GlobalActions::default(),
@@ -135,11 +137,11 @@ impl Ui {
             drag_start_state: None,
             element_clipboard: None,
             action_events: vec![],
-            locales_manager,
+            locales_manager: LocalesManager::default(),
             just_reloaded: true,
         };
 
-        loader.reload_ui(settings, window_size, device, queue, mod_manager);
+        //loader.reload_ui(settings, window_size, device, queue, mod_manager); // Handled in mod manager reload function
         loader
     }
     pub fn reload_ui(&mut self, settings: &Settings, window_size: PhysicalSize<f32>, device: &Device, queue: &Queue, mod_manager: &ModManager) {
@@ -280,7 +282,7 @@ impl Ui {
     }
     pub fn handle_touches(
         &mut self, dt: f32, world: &mut World, renderer: &mut Renderer, window_size: PhysicalSize<f32>, command_queues: &mut CommandQueues, settings: &mut Settings,
-        event_loop: &dyn ActiveEventLoop, game_state: &mut GameState, simulation: &mut Simulation
+        event_loop: &dyn ActiveEventLoop, game_state: &mut GameState, simulation: &mut Simulation, mini_renderer: &mut MiniRenderer,
     ) {
         self.touch_manager.editor.enabled = settings.editor_mode;
         if !self.touch_manager.options.show_gui {
@@ -304,7 +306,7 @@ impl Ui {
         // Collect elements - borrow only self.menus
         let elements = Self::collect_touchable_elements(&self.menus, settings.editor_mode);
         self.touch_manager.update(dt, input, &elements, &world.time);
-
+        let mut current_elements = HashSet::new();
         for (menu_name, menu) in self.menus.iter() {
             for layer in menu.layers.iter() {
                 for element in layer.iter_all() {
@@ -314,6 +316,8 @@ impl Ui {
                         element.id(),
                         element.kind(),
                     );
+
+                    current_elements.insert(element_ref.clone());
 
                     let is_active = element.is_active() && layer.active && menu.active;
 
@@ -335,13 +339,6 @@ impl Ui {
                         );
                     }
 
-                    if world.time.game_just_started() {
-                        // Only on frame 0
-                        self.touch_manager.global_events.push(GlobalEvent::StartUp);
-                    }
-                    if self.touch_manager.add_screen_resize_event {
-                        self.touch_manager.global_events.push(GlobalEvent::ScreenResize); // Selbstverständlich
-                    }
                     // Important for when not hovering and such, super important for always-on functions!
                     //if is_active {
                     self.touch_manager.push_event(element_ref, ElementEvent::Nothing); // TODO: Huge CPU performance impact! Cuts down UI logic time from 4.3ms to 0.3ms.  UPDATE: Less relevant now, much less so
@@ -352,7 +349,14 @@ impl Ui {
                 }
             }
         }
-        self.touch_manager.add_screen_resize_event = false;
+        self.touch_manager.element_actives.retain(|element_ref, _| current_elements.contains(element_ref));
+        if world.time.game_just_started() {
+            // Only on frame 0
+            self.touch_manager.global_events.push(GlobalEvent::StartUp);
+        }
+        if std::mem::take(&mut self.touch_manager.add_screen_resize_event) { // mem::take resets it to false.
+            self.touch_manager.global_events.push(GlobalEvent::ScreenResize); // Selbstverständlich
+        }
         // Process all emitted events and // COLLECTING ui actions
         let result = self.process_touch_events(
             &mut command_queues.ui_command_queue,
@@ -362,7 +366,8 @@ impl Ui {
             settings,
             event_loop,
             game_state,
-            simulation
+            simulation,
+            mini_renderer
         );
         //println!("{:?}", result);
         let input = &mut world.input;
@@ -402,7 +407,7 @@ impl Ui {
             settings,
             event_loop,
             game_state,
-            simulation
+            simulation, mini_renderer
         );
         self.just_reloaded = false;
     }
@@ -452,7 +457,8 @@ impl Ui {
         settings: &mut Settings,
         event_loop: &dyn ActiveEventLoop,
         game_state: &mut GameState,
-        simulation: &mut Simulation
+        simulation: &mut Simulation,
+        mini_renderer: &mut MiniRenderer,
     ) -> EventProcessingResult {
         let mut result = EventProcessingResult::default();
         // Drain events from touch manager
@@ -470,7 +476,8 @@ impl Ui {
             event_loop,
             game_state,
             simulation,
-            element_ctx: Default::default()
+            element_ctx: Default::default(),
+            mini_renderer
         };
         // COLLECTING ui actions
         run_all_actions(ui_command_queue, ctx); // BEFORE DRAINING EVENTS!
@@ -2194,7 +2201,7 @@ fn run_all_actions(ui_command_queue: &mut CommandQueue, ctx: &mut CommandContext
         //println!("{:?}", action.commands);
         run_action_with_events(ui_command_queue, action, ctx, global_action_events);
     }
-
+    let global_events: Vec<ActionEvent> = ctx.ui.touch_manager.global_events.iter().map(|global_event| ActionEvent::from_global_event(global_event)).collect();
     for (element_ref, events) in ctx.ui.touch_manager.events.clone().into_iter() {
         //println!("{:?}", events);
         let Some(element) = get_element_borrowed(&ctx.ui.menus, &element_ref) else {
@@ -2206,8 +2213,10 @@ fn run_all_actions(ui_command_queue: &mut CommandQueue, ctx: &mut CommandContext
 
         let events: Vec<ActionEvent> = events.iter()
             .map(|element_event| ActionEvent::from_element_event(element_event))
-            .chain(ctx.ui.touch_manager.global_events.iter()
-                .map(|global_event| ActionEvent::from_global_event(global_event))).collect();
+            .chain(global_events.iter().copied()).collect();
+        // if !events.is_empty() && events.iter().any(|a|matches!(a, &ActionEvent::ScreenResize)||matches!(a, &ActionEvent::Activated)) {
+        //     println!("EXTREMELY SUS EVENTs::::::       '{:?}'", events);
+        // };
         ctx.ui.action_events = events;
 
         run_actions(ui_command_queue, ctx, &element_ref, actions);
@@ -2424,7 +2433,7 @@ pub struct TouchableElement<'a> {
     pub element: &'a UiElement
 }
 
-
+#[derive(Default)]
 pub struct LocalesManager {
     pub current_locale: String,
     pub current_language_name: String,

@@ -4,41 +4,42 @@ pub mod drag_hue_point;
 use crate::data::{SettingKey, SettingOp, Settings};
 use crate::helpers::get_splash_message;
 use crate::helpers::paths::rusty_skylines_dir;
-use crate::renderer::props::Props;
-use crate::renderer::render_core::Renderer;
-use crate::renderer::ui_text_rendering::Anchor;
+use crate::renderer::renderer::Renderer;
+use crate::renderer::ui::ui_text_rendering::Anchor;
 use crate::simulation::Simulation;
 use crate::ui::action_parser::{compile_actions, run_action};
 use crate::ui::parser::Value;
-use crate::ui::ui_edit_manager::{
-    ChangeColorCommand, ColorComponent, CreateAPCommand, CreateElementCommand, DeleteAPCommand,
-    DeleteElementCommand, DuplicateElementCommand, MoveElementCommand, ResizeElementCommand,
-};
+use crate::ui::ui_edit_manager::{delete_aps_in_layer, ChangeColorCommand, ColorComponent, CreateAPCommand, CreateElementCommand, DeleteAPCommand, DeleteElementCommand, DuplicateElementCommand, MoveElementCommand, ResizeElementCommand};
 use crate::ui::ui_editor::{
     Ui, get_element, get_element_main_size, get_element_mut, get_element_mut_dirty_layer,
     get_element_position,
 };
-use crate::ui::ui_edits::{SizeProperty, create_element, delete_element};
-use crate::ui::ui_touch_manager::{ElementEvent, ElementRef, GlobalEvent};
+use crate::ui::ui_edits::{SizeProperty, create_element, delete_element, get_element_color};
+use crate::ui::ui_touch_manager::{ElementEvent, ElementRef, GlobalEvent, Touchable};
 use crate::ui::variables::{Variables, initialize_value, save_colors};
-use crate::ui::vertex::{
-    AdvancedPrimitive, ElementKind, UiButtonCircle, UiButtonHandle, UiButtonOutline,
-    UiButtonPolygon, UiButtonRect, UiButtonText, UiElement,
-};
+use crate::ui::vertex::{get_rect_texture, AdvancedPrimitive, ElementKind, UiButtonCircle, UiButtonHandle, UiButtonOutline, UiButtonPolygon, UiButtonRect, UiButtonText, UiElement};
 use crate::world::buildings::zoning::ZoningType;
 use crate::world::game_state::{
     GameState, LoadResult, NewSavePackage, SaveInfo, SaveResult, get_available_saves,
     make_safe_save_name,
 };
+use crate::world::props::props::Props;
 use crate::world::roads::road_structs::{BuildMode, LeftLaneCount, RightLaneCount};
 use crate::world::terrain::terrain_subsystem::CursorMode;
 use crate::world::world::World;
-use glam::Vec2;
-use std::cmp::{Ordering, PartialEq};
+use glam::{DVec3, Vec2, Vec3};
+use std::cmp::{Ordering, PartialEq, max, min};
 use std::collections::{HashMap, VecDeque};
+use std::env::{args, set_var};
+use std::fmt::Display;
 use std::str::FromStr;
+use rusty_skylines_utils::positions::WorldPos;
+use tracing::error;
+use tracing_subscriber::fmt::layer;
+use usvg::filter::CompositeOperator::In;
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
+use crate::mini_renderer::{MiniRender, MiniRenderer};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum UiCommand {
@@ -65,7 +66,11 @@ pub enum UiCommand {
     MenuActive {
         menu_name: String,
     },
-
+    LayerActive {
+        menu_name: String,
+        layer_name: String,
+    },
+    UnDirty { menu_name: String, layer_name: String },
     // ===== LAYER COMMANDS =====
     OpenLayer {
         menu_name: String,
@@ -153,6 +158,10 @@ pub enum UiCommand {
         layer: String,
         reference_id: String,
     },
+    DeleteAPsInLayer {
+        menu: String,
+        layer: String,
+    },
     CloneElement {
         from_menu: String,
         from_layer: String,
@@ -193,6 +202,9 @@ pub enum UiCommand {
     Print {
         statement: String,
     },
+    PrintNoChat {
+        statement: String,
+    },
     DebugVars,
     DebugMenus,
 
@@ -201,6 +213,7 @@ pub enum UiCommand {
         args: Option<String>,
     },
     Noop,
+
 }
 
 // ==================== ACTION STATE ====================
@@ -283,6 +296,7 @@ pub struct CommandContext<'a> {
     pub game_state: &'a mut GameState,
     pub simulation: &'a mut Simulation,
     pub element_ctx: ElementContext,
+    pub mini_renderer: &'a mut MiniRenderer,
 }
 
 // ==================== COMMAND QUEUE ====================
@@ -671,7 +685,110 @@ impl CommandQueue {
                     )
                 }
             }
+            UiCommand::LayerActive { menu_name, layer_name } => {
+                let menu_names = string_to_value(ctx, menu_name);
+                let layer_names = string_to_value(ctx, layer_name);
 
+                let menu_names: Vec<String> = if let Some(name) = menu_names.as_str() {
+                    vec![name.to_string()]
+                } else if let Some(names) = menu_names.as_array() {
+                    let mut result = Vec::with_capacity(names.len());
+                    for name in names {
+                        let Some(name) = name.as_str() else {
+                            return CommandResult::Error(
+                                "Menu name in layer_active() array wasn't resolved to string".to_string(),
+                            );
+                        };
+                        result.push(name.to_string());
+                    }
+                    result
+                } else {
+                    return CommandResult::Error(
+                        "Menu name in layer_active() wasn't resolved to string".to_string(),
+                    );
+                };
+
+                let layer_names: Vec<String> = if let Some(name) = layer_names.as_str() {
+                    vec![name.to_string()]
+                } else if let Some(names) = layer_names.as_array() {
+                    let mut result = Vec::with_capacity(names.len());
+                    for name in names {
+                        let Some(name) = name.as_str() else {
+                            return CommandResult::Error(
+                                "Layer name in layer_active() array wasn't resolved to string".to_string(),
+                            );
+                        };
+                        result.push(name.to_string());
+                    }
+                    result
+                } else {
+                    return CommandResult::Error(
+                        "Layer name in layer_active() wasn't resolved to string".to_string(),
+                    );
+                };
+
+                let is_active = menu_names.iter().any(|menu_name| {
+                    ctx.ui.menus.get(menu_name).is_some_and(|menu| {
+                        layer_names.iter().any(|layer_name| {
+                            menu.layers
+                                .iter()
+                                .any(|layer| layer.name == *layer_name && layer.active)
+                        })
+                    })
+                });
+
+                ctx.ui.variables.set_bool("_result", is_active);
+                CommandResult::Ok
+            }
+            UiCommand::UnDirty { menu_name, layer_name } => {
+                let menu_names = string_to_value(ctx, menu_name);
+                let layer_names = string_to_value(ctx, layer_name);
+
+                let menu_names = if let Some(name) = menu_names.as_str() {
+                    name.to_string()
+                } else {
+                    return CommandResult::Error(
+                        "Menu name in undirty() wasn't resolved to string".to_string(),
+                    );
+                };
+
+                let layer_names: Vec<String> = if let Some(name) = layer_names.as_str() {
+                    vec![name.to_string()]
+                } else if let Some(names) = layer_names.as_array() {
+                    let mut result = Vec::with_capacity(names.len());
+
+                    for name in names {
+                        let Some(name) = name.as_str() else {
+                            return CommandResult::Error(
+                                "Layer name in undirty() array wasn't resolved to string".to_string(),
+                            );
+                        };
+
+                        result.push(name.to_string());
+                    }
+
+                    result
+                } else {
+                    return CommandResult::Error(
+                        "Layer name in undirty() wasn't resolved to string".to_string(),
+                    );
+                };
+
+                match ctx.renderer.ui_renderer.rebuild_layers_now(
+                    ctx.ui,
+                    &menu_names,
+                    &layer_names,
+                    &ctx.world.time,
+                    &ctx.renderer.device,
+                    &ctx.renderer.queue,
+                    ctx.window_size,
+                    ctx.settings,
+                    &ctx.game_state.mod_manager,
+                ) {
+                    Ok(()) => CommandResult::Ok,
+                    Err(error) => CommandResult::Error(error),
+                }
+            }
             // ===== LAYER COMMANDS =====
             UiCommand::OpenLayer {
                 menu_name,
@@ -1204,18 +1321,19 @@ impl CommandQueue {
                 let menu = string_to_value(ctx, menu).into_string();
                 let name = string_to_value(ctx, name).into_string();
                 let ap_name = string_to_value(ctx, ap_name).into_string();
-                //println!("{}", ap_var);
+                //println!("[AddAP before string_to_value()] << {} >>", ap_var);
                 let ap_vars = string_to_value(ctx, ap_var);
-                //println!("{:?}", ap_vars);
+
                 let Some(ap_vars) = ap_vars
                     .as_array()
-                    .map(|arr| arr.iter().map(|v| v.to_string()).collect())
+                    .map(|arr| arr.iter().map(|v| v.to_literal()).collect())
                     .or(ap_vars.as_str().map(|str| vec![str.to_string()]))
                 else {
                     return CommandResult::Error(
                         "AP Vars in AddAP was not an array or single argument".to_string(),
                     );
                 };
+                //println!("[AddAP after string_to_value()] << {:?} >>", ap_vars);
                 //println!("Adding AP: {} {} {} {:?} {}", name, ap_name, ap_var, center, scale);
                 let ap = {
                     let mut ap = AdvancedPrimitive::default();
@@ -1224,7 +1342,7 @@ impl CommandQueue {
                     ap.ap_name = ap_name;
                     ap.ap_vars = ap_vars;
                     ap.scale = scale as f32;
-                    ap.is_temporary = is_temporary;
+                    ap.discard_reference = is_temporary;
                     ap.scale_my_coords = false;
                     ap
                 };
@@ -1269,6 +1387,19 @@ impl CommandQueue {
                     &mut ctx.ui.variables,
                     &ctx.world.input.mouse,
                 );
+                CommandResult::Ok
+            }
+            UiCommand::DeleteAPsInLayer {
+                menu,
+                layer,
+            } => {
+                let menu = string_to_value(ctx, menu).into_string();
+                let layer = string_to_value(ctx, layer).into_string();
+                if let Some(menu) = ctx.ui.menus.get_mut(&menu) {
+                    delete_aps_in_layer(menu, &layer);
+                } else {
+                    return CommandResult::Error(format!("Menu '{}' not found in DeleteAPsInLayer!", menu));
+                }
                 CommandResult::Ok
             }
             UiCommand::CloneElement {
@@ -1466,9 +1597,7 @@ impl CommandQueue {
                 save_game(
                     ctx.game_state,
                     ctx.world,
-                    &ctx.renderer.props,
                     ctx.settings,
-                    &mut ctx.ui.variables,
                     and_exit,
                 );
                 CommandResult::Ok
@@ -1480,6 +1609,9 @@ impl CommandQueue {
                 let element_ctx = &ctx.element_ctx.clone();
                 let save_name = string_to_value(ctx, save_name);
                 let Some(save_name) = save_name.as_str() else {
+                    if save_name.is_none() {
+                        return CommandResult::Ok;
+                    }
                     return CommandResult::Error(format!(
                         "Save name '{}' in load_save() wasn't resolved to string",
                         save_name
@@ -1489,18 +1621,14 @@ impl CommandQueue {
                     save_game(
                         ctx.game_state,
                         ctx.world,
-                        &ctx.renderer.props,
                         ctx.settings,
-                        &mut ctx.ui.variables,
                         false,
                     );
                 }
                 load_save(
                     ctx.game_state,
                     ctx.world,
-                    &mut ctx.renderer.props,
                     ctx.settings,
-                    &mut ctx.ui.variables,
                     save_name,
                 );
                 CommandResult::Ok
@@ -1511,7 +1639,6 @@ impl CommandQueue {
                     ctx.settings,
                     &mut ctx.ui.variables,
                     ctx.world,
-                    &ctx.renderer.props,
                     ctx.event_loop,
                 );
                 CommandResult::Ok
@@ -1522,8 +1649,15 @@ impl CommandQueue {
                 let msg: String = string_to_value(ctx, statement).to_string();
                 ctx.ui
                     .variables
-                    .push_array("CHAT", Value::String(msg.clone()));
+                    .push_array("CHAT", Value::Array(vec![Value::String(msg.clone()), Value::F64(ctx.world.time.total_time)]));
                 println!("[UI Chat] {}", msg);
+                CommandResult::Ok
+            }
+            UiCommand::PrintNoChat { statement } => {
+                let element_ctx = &ctx.element_ctx.clone();
+                //println!("printing: {}", statement);
+                let msg: String = string_to_value(ctx, statement).to_string();
+                println!("[UI PrintNC] {}", msg);
                 CommandResult::Ok
             }
 
@@ -1564,9 +1698,9 @@ impl CommandQueue {
                     args: Option<String>,
                 ) -> CommandResult {
                     let element_ctx = &ctx.element_ctx.clone();
-                    //println!("[Action Call] {}", function_name);
+                    //println!("[Action Call before] Name: {}, Args: {:?}", function_name, args);
                     let actions = string_to_value(ctx, function_name);
-                    //println!("[Action Call] {:?}", actions);
+                    //println!("[Action Call after] {:?}", actions);
                     let actions: Vec<String> = if let Some(action) = actions.as_str() {
                         vec![action.to_string()]
                     } else if let Some(actions) = actions.as_array() {
@@ -1641,7 +1775,6 @@ impl CommandQueue {
                     parse_action_call(self, ctx, function_name, args)
                 }
             }
-
             UiCommand::Noop => CommandResult::Ok,
         }
     }
@@ -1649,12 +1782,141 @@ impl CommandQueue {
 
 fn call_rust(ctx: &mut CommandContext, function_name: &str, args: Vec<Value>) {
     match function_name {
+        "queue_mini_render" => {
+            let Some(pos_arg) = args.get(0) else {
+                println!("[MiniRender] queue_mini_render(): Missing argument 0 'pos'. Expected [f64, f64, f64].");
+                return;
+            };
+
+            let Some(pos_array) = pos_arg.as_array() else {
+                println!("[MiniRender] queue_mini_render(): Argument 0 'pos' must be an Array [f64, f64, f64], got: {:?}.", pos_arg);
+                return;
+            };
+
+            if pos_array.len() != 3 {
+                println!("[MiniRender] queue_mini_render(): Argument 0 'pos' must contain exactly 3 values, got {}.", pos_array.len());
+                return;
+            }
+
+            let Some(pos_x) = pos_array[0].as_f64() else {
+                println!("[MiniRender] queue_mini_render(): Argument 0 'pos'[0] (X) must be an f64, got: {:?}.", pos_array[0]);
+                return;
+            };
+
+            let Some(pos_y) = pos_array[1].as_f64() else {
+                println!("[MiniRender] queue_mini_render(): Argument 0 'pos'[1] (Y height) must be an f64, got: {:?}.", pos_array[1]);
+                return;
+            };
+
+            let Some(pos_z) = pos_array[2].as_f64() else {
+                println!("[MiniRender] queue_mini_render(): Argument 0 'pos'[2] (Z) must be an f64, got: {:?}.", pos_array[2]);
+                return;
+            };
+            let Some(dir_arg) = args.get(1) else {
+                println!("[MiniRender] queue_mini_render(): Missing argument 1 'dir'. Expected [f64, f64, f64].");
+                return;
+            };
+
+            let Some(dir_array) = dir_arg.as_array() else {
+                println!("[MiniRender] queue_mini_render(): Argument 1 'dir' must be an Array [f64, f64, f64], got: {:?}.", dir_arg);
+                return;
+            };
+
+            if dir_array.len() != 3 {
+                println!("[MiniRender] queue_mini_render(): Argument 1 'dir' must contain exactly 3 values, got {}.", dir_array.len());
+                return;
+            }
+
+            let mut rotation_values = [0.0; 3];
+
+            for (i, value) in dir_array.iter().enumerate() {
+                let Some(value) = value.as_f64() else {
+                    println!("[MiniRender] queue_mini_render(): Argument 1 'rotation'[{}] must be an f64, got: {:?}.", i, value);
+                    return;
+                };
+
+                rotation_values[i] = value as f32;
+            }
+
+            let rotation = Vec3::from_array(rotation_values);
+
+            let Some(size_arg) = args.get(2) else {
+                println!("[MiniRender] queue_mini_render(): Missing argument 2 'size'. Expected [f64, f64].");
+                return;
+            };
+
+            let Some(size_array) = size_arg.as_array() else {
+                println!("[MiniRender] queue_mini_render(): Argument 2 'size' must be an Array [f64, f64], got: {:?}.", size_arg);
+                return;
+            };
+
+            if size_array.len() != 2 {
+                println!("[MiniRender] queue_mini_render(): Argument 2 'size' must contain exactly 2 values, got {}.", size_array.len());
+                return;
+            }
+
+            let Some(size_x) = size_array[0].as_f64() else {
+                println!("[MiniRender] queue_mini_render(): Argument 2 'size'[0] must be an f64 or i64, got: {:?}.", size_array[0]);
+                return;
+            };
+
+            let Some(size_y) = size_array[1].as_f64() else {
+                println!("[MiniRender] queue_mini_render(): Argument 2 'size'[1] must be an f64 or i64, got: {:?}.", size_array[1]);
+                return;
+            };
+            let Some(fov_arg) = args.get(3) else {
+                println!("[MiniRender] queue_mini_render(): Missing argument 3 'fov'. Expected f64.");
+                return;
+            };
+            let Some(fov) = fov_arg.as_f64() else {
+                println!("[MiniRender] queue_mini_render(): Argument 3 'fov' must be an f64 or i64, got: {:?}.", fov_arg);
+                return;
+            };
+            let Some(mw_arg) = args.get(4) else {
+                println!("[MiniRender] queue_mini_render(): Missing argument 4 'mini_world_name'. Expected String.");
+                return;
+            };
+            let Some(mwn) = mw_arg.as_string() else {
+                println!("[MiniRender] queue_mini_render(): Argument 4 'mini_world_name' must be a String, got: {:?}.", mw_arg);
+                return;
+            };
+            let Some(commands_arg) = args.get(5) else {
+                println!("[MiniRender] queue_mini_render(): Missing argument 5 'commands'. Expected String.");
+                return;
+            };
+            let commands = commands_arg.as_array().map(|a| a.into_iter().map(|s| s.to_string()).collect::<Vec<String>>()).unwrap_or_else(|| vec![commands_arg.to_string()]); // else {
+            //     println!("[MiniRender] queue_mini_render(): Argument 5 'commands' must be a String or Array, got: {:?}.", commands_arg);
+            //     return;
+            // };
+            let pos = WorldPos::from_dvec3(DVec3::new(pos_x, pos_y, pos_z));
+            let size = PhysicalSize::new(size_x as u32, size_y as u32);
+            println!("Queueing Mini Render with: Pos: '{}', Rotation: '{}', Size: '{:?}', FOV: '{}', Mini World Name: '{}, {} commands.'", pos, rotation, size, fov, mwn, commands.len());
+            let mini_render = MiniRender::new(pos, rotation, size, fov as f32, mwn.clone(), commands);
+            let id = ctx.mini_renderer.queue_render(mini_render);
+            ctx.ui.variables.set_i64("_mini_render_id", id as i64);
+        }
+        "render_mini_render" => {
+            let Some(id_arg) = args.get(0) else {
+                println!("[MiniRender] render_mini_render(): Missing argument 0 'id'. Expected f64 or i64.");
+                return;
+            };
+            let Some(id) = id_arg.as_i64() else {
+                println!("[MiniRender] render_mini_render(): Argument 0 'id' must be an f64 or i64, got: {:?}.", id_arg);
+                return;
+            };
+
+            ctx.mini_renderer.render_single_id(id as u64, &ctx.settings, &ctx.game_state.mod_manager, &ctx.world);
+        }
         "get_saves" => {
             let saves: Vec<Value> = get_available_saves()
                 .into_iter()
                 .map(|save| Value::Array(save.to_values()))
                 .collect();
             ctx.ui.variables.set_array("saves", saves);
+        }
+        "get_road_types" => {
+            let rts: Value = ctx.world.roads.road_manager.road_types.to_value();
+            ctx.ui.variables.set_var("road_types", rts);
         }
         "create_save" => {
             let save_name = args
@@ -1671,26 +1933,26 @@ fn call_rust(ctx: &mut CommandContext, function_name: &str, args: Vec<Value>) {
                     .get(1)
                     .and_then(|s| s.as_str())
                     .unwrap_or_else(|| {
-                        println!(
-                            "Argument 1 of create_save() must be a String, it's the Difficulty."
-                        );
+                        println!("Argument 1 of create_save() must be a String, it's the Difficulty.");
                         "Easy"
-                    })
-                    .to_string(),
+                    }).to_string(),
+                preset_name: args
+                    .get(2)
+                    .and_then(|s| s.as_str())
+                    .unwrap_or_else(|| {
+                        println!("Argument 2 of create_save() must be a String, it's the Terrain Preset name.");
+                        "Default"
+                    }).to_string(),
             };
             save_game(
                 ctx.game_state,
                 ctx.world,
-                &ctx.renderer.props,
                 ctx.settings,
-                &mut ctx.ui.variables,
                 false,
             );
             let create_result = ctx.game_state.create_save(
                 ctx.world,
-                &ctx.renderer.props,
                 ctx.settings,
-                &mut ctx.ui.variables,
                 new_save_package,
             );
             println!("Created Save '{}': {:?}", save_name, create_result);
@@ -1835,6 +2097,11 @@ pub struct ElementContext {
     pub self_element: Option<ElementRef>,
     pub as_element: Option<ElementRef>,
 }
+impl Display for ElementContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Self: {}, As: {}", if let Some(s) = self.self_element.as_ref() { format!("Some({s})") } else { "None".to_string() }, if let Some(a) = self.as_element.as_ref() { format!("Some({a})") } else { "None".to_string() })
+    }
+}
 impl ElementContext {
     pub fn from_self(self_element: ElementRef) -> ElementContext {
         ElementContext {
@@ -1889,6 +2156,7 @@ pub fn process_commands(
     event_loop: &dyn ActiveEventLoop,
     game_state: &mut GameState,
     simulation: &mut Simulation,
+    mini_renderer: &mut MiniRenderer,
 ) {
     let mut ctx = CommandContext {
         world,
@@ -1900,6 +2168,7 @@ pub fn process_commands(
         game_state,
         simulation,
         element_ctx: Default::default(),
+        mini_renderer
     };
 
     command_queue.drain(&mut ctx);
@@ -1910,7 +2179,6 @@ pub fn exit_game(
     settings: &mut Settings,
     variables: &mut Variables,
     world: &mut World,
-    props: &Props,
     event_loop: &dyn ActiveEventLoop,
 ) {
     match settings.save(rusty_skylines_dir("settings.toml")) {
@@ -1918,7 +2186,7 @@ pub fn exit_game(
         Err(e) => eprintln!("Failed to save Settings: {e}"),
     }
     save_colors(rusty_skylines_dir("colors.toml"), variables);
-    save_game(game_state, world, props, settings, variables, false);
+    save_game(game_state, world, settings, false);
 
     event_loop.exit();
 
@@ -1927,17 +2195,13 @@ pub fn exit_game(
 pub fn save_game(
     game_state: &mut GameState,
     world: &mut World,
-    props: &Props,
     settings: &Settings,
-    variables: &mut Variables,
     and_exit: bool,
 ) {
-    let name = game_state
-        .current_save_info
-        .as_ref()
+    let name = game_state.current_save_info.as_ref()
         .map(|s| s.name.clone())
         .unwrap_or("No save!!! Report to maxwag9!!".to_string());
-    match game_state.save(world, props, settings, variables, and_exit) {
+    match game_state.save(world, settings, and_exit) {
         SaveResult::Success => println!("World '{}' saved", name),
         SaveResult::TriedToSaveEmptySave => {}
         e => eprintln!("Failed to save World '{}': {:?}", name, e),
@@ -1946,32 +2210,28 @@ pub fn save_game(
 pub fn load_save(
     game_state: &mut GameState,
     world: &mut World,
-    props: &mut Props,
-    settings: &mut Settings,
-    variables: &mut Variables,
+    settings: &Settings,
     save_name: &str,
 ) {
     let save_name = make_safe_save_name(save_name);
-    match game_state.load(save_name.as_str(), world, props, settings, variables) {
+    match game_state.load(save_name.as_str(), world, settings) {
         LoadResult::Success(version) => println!(
-            "World '{}', Version {} loaded, {} Terrain Edited Chunks, {} Road Nodes",
+            "World '{}', Version {} loaded, {} Terrain Edited Chunks, {} Road Nodes, Terrain preset '{}'",
             game_state.current_save_info.as_ref().unwrap().name,
             version,
             world.terrain.terrain_editor.edits.len(),
-            world.roads.road_manager.roads.nodes.len()
+            world.roads.road_manager.roads.nodes.len(), game_state.current_save_info.as_ref().unwrap().terrain_preset_name
         ),
         LoadResult::FileNonExistent(e) => {
             eprintln!("Failed to load World '{}': {:?}", save_name, e);
             let mut save_info = SaveInfo::default();
             save_info.name = save_name.clone();
             game_state.current_save_info = Some(save_info);
-            game_state.save(world, props, settings, variables, false);
+            game_state.save(world, settings, false);
             load_save(
                 game_state,
                 world,
-                props,
                 settings,
-                variables,
                 save_name.as_str(),
             );
         }
@@ -2035,7 +2295,7 @@ pub fn set_element_property(
                 &mut ctx.world.terrain.cursor,
                 &mut ctx.world.zoning,
                 &mut ctx.world.terrain.terrain_editor,
-                &mut ctx.renderer.props,
+                &mut ctx.world.props,
                 &mut ctx.ui.variables,
                 &mut ctx.world.roads.road_manager.roads,
             );
@@ -2071,30 +2331,30 @@ pub fn set_element_property(
         //     ctx.world.terrain.cursor.road_type = road_type;
         //     ctx.ui.variables.set_string(name, road_type);
         // }
-        "lanes" => {
-            if let Some(lanes) = new_val.as_i64() {
-                let road_type = &mut ctx.world.terrain.cursor.road_type;
-                road_type.lanes_each_direction = (lanes as LeftLaneCount, lanes as RightLaneCount);
-
-                ctx.ui.variables.set_i64(name, lanes);
-            }
-        }
-        "left_lanes" => {
-            if let Some(lanes) = new_val.as_i64() {
-                let road_type = &mut ctx.world.terrain.cursor.road_type;
-                road_type.lanes_each_direction.0 = lanes as LeftLaneCount;
-
-                ctx.ui.variables.set_i64(name, lanes);
-            }
-        }
-        "right_lanes" => {
-            if let Some(lanes) = new_val.as_i64() {
-                let road_type = &mut ctx.world.terrain.cursor.road_type;
-                road_type.lanes_each_direction.1 = lanes as RightLaneCount;
-
-                ctx.ui.variables.set_i64(name, lanes);
-            }
-        }
+        // "lanes" => {
+        //     if let Some(lanes) = new_val.as_i64() {
+        //         let road_type = &mut ctx.world.terrain.cursor.road_type;
+        //         road_type.lanes_each_direction = (lanes as LeftLaneCount, lanes as RightLaneCount);
+        //
+        //         ctx.ui.variables.set_i64(name, lanes);
+        //     }
+        // }
+        // "left_lanes" => {
+        //     if let Some(lanes) = new_val.as_i64() {
+        //         let road_type = &mut ctx.world.terrain.cursor.road_type;
+        //         road_type.lanes_each_direction.0 = lanes as LeftLaneCount;
+        //
+        //         ctx.ui.variables.set_i64(name, lanes);
+        //     }
+        // }
+        // "right_lanes" => {
+        //     if let Some(lanes) = new_val.as_i64() {
+        //         let road_type = &mut ctx.world.terrain.cursor.road_type;
+        //         road_type.lanes_each_direction.1 = lanes as RightLaneCount;
+        //
+        //         ctx.ui.variables.set_i64(name, lanes);
+        //     }
+        // }
         "sim_running" => {
             let sim_running = new_val.is_truthy();
 
@@ -2110,10 +2370,11 @@ pub fn set_element_property(
     }
     // ONLY USE EXECUTE_COMMAND SO IT EXECUTES IMMEDIATELY!!
     let Some((base, suffix)) = name.split_once('.') else {
-        return CommandResult::AnnoyingError(format!(
-            "set_element_property: invalid property name '{}', expected '.' separator",
-            name
-        ));
+        return CommandResult::Ok;
+        // return CommandResult::AnnoyingError(format!(
+        //     "set_element_property: invalid property name '{}', expected '.' separator",
+        //     name
+        // ));
     };
     let (property, component) = match suffix.split_once('.') {
         Some((property, component)) => (property, component),
@@ -2122,23 +2383,23 @@ pub fn set_element_property(
 
     let selections: Vec<ElementRef>;
     let element_ctx = &ctx.element_ctx;
-    match base {
+    selections = match base {
         "self" => {
-            selections = if let Some(self_element_ref) = element_ctx.self_element.clone() {
+            if let Some(self_element_ref) = element_ctx.self_element.clone() {
                 vec![self_element_ref]
             } else {
                 vec![]
             }
         }
         "as" => {
-            selections = if let Some(as_element_ref) = element_ctx.as_element.clone() {
+            if let Some(as_element_ref) = element_ctx.as_element.clone() {
                 vec![as_element_ref]
             } else {
                 vec![]
             }
         }
         "editing" => {
-            selections = ctx.ui.touch_manager.selection.selected.clone();
+            ctx.ui.touch_manager.selection.selected.clone()
         }
         _ => {
             return CommandResult::AnnoyingError(format!(
@@ -2146,85 +2407,161 @@ pub fn set_element_property(
                 base
             ));
         }
-    }
+    };
 
     for element_ref in selections {
         let after = match property {
-            "center" => {
-                let Some(before) = get_element_position(&ctx.ui.menus, &element_ref) else {
-                    return CommandResult::Error(
-                        format!("get_element_position() failed in set_element_property for element {:?}", element_ref).to_string(),
-                    );
+            "center" | "topleft" | "bottomleft" | "topright" | "bottomright" => {
+                let Some(element) = get_element(&ctx.ui.menus, &element_ref) else {
+                    return CommandResult::Error(format!(
+                        "get_element() failed in set_element_property for element {:?}",
+                        element_ref
+                    ));
                 };
 
+                let (corner_x, corner_y) = match property {
+                    "topleft" => (0.0, 0.0),
+                    "topright" => (1.0, 0.0),
+                    "bottomleft" => (0.0, 1.0),
+                    "bottomright" => (1.0, 1.0),
+                    _ => (0.5, 0.5),
+                };
+
+                let (before, text_anchor, element_size) =
+                    if let Some(text) = element.as_text() {
+                        let width = text.width;
+                        let height = text.height;
+                        let anchor = text.anchor.clone();
+
+                        let top_left = anchor.anchor_to(
+                            text.center(),
+                            width,
+                            height,
+                        );
+
+                        (
+                            [
+                                top_left[0] + width * corner_x,
+                                top_left[1] + height * corner_y,
+                            ],
+                            Some((anchor, width, height)),
+                            None,
+                        )
+                    } else {
+                        let center = element.center();
+
+                        if property == "center" {
+                            (center, None, None)
+                        } else {
+                            let Some(size) = element.size2() else {
+                                return CommandResult::Error(format!(
+                                    "set_element_property: cannot determine bounding size of element {:?}",
+                                    element_ref
+                                ));
+                            };
+
+                            (
+                                [
+                                    center[0] + size[0] * (corner_x - 0.5),
+                                    center[1] + size[1] * (corner_y - 0.5),
+                                ],
+                                None,
+                                Some(size),
+                            )
+                        }
+                    };
+
                 let after = match Variables::component_index(component) {
-                    // Setting full vector
                     None => {
                         let Some(arr) = new_val.as_array() else {
                             return CommandResult::Error(format!(
-                                "set_element_property: center requires an array value when no component specified, but got: {}",
-                                new_val.to_string()
+                                "set_element_property: '{}' requires an array value, got: {}",
+                                property,
+                                new_val
                             ));
                         };
+
                         if arr.len() != 2 {
                             return CommandResult::Error(format!(
-                                "set_element_property: center array must have exactly 2 elements, got {}",
+                                "set_element_property: '{}' array must have exactly 2 elements, got {}",
+                                property,
                                 arr.len()
                             ));
                         }
 
                         let Some(x) = arr[0].as_f64() else {
                             return CommandResult::Error(format!(
-                                "set_element_property: center array[0] must be a number, got: {}",
-                                arr[0].to_string()
+                                "set_element_property: '{}' array[0] must be a number, got: {}",
+                                property,
+                                arr[0]
                             ));
                         };
 
                         let Some(y) = arr[1].as_f64() else {
                             return CommandResult::Error(format!(
-                                "set_element_property: center array[1] must be a number, got: {}",
-                                arr[1].to_string()
+                                "set_element_property: '{}' array[1] must be a number, got: {}",
+                                property,
+                                arr[1]
                             ));
                         };
 
                         [x as f32, y as f32]
                     }
-
-                    // Setting single component
                     Some(idx) => {
                         let Some(val) = new_val.as_f64() else {
                             return CommandResult::Error(format!(
-                                "set_element_property: center component value must be a number, got: {}",
-                                new_val.to_string()
+                                "set_element_property: {} component must be a number, got: {}",
+                                property,
+                                new_val
                             ));
                         };
 
                         let mut after = before;
+
                         match idx {
                             0 => after[0] = val as f32,
                             1 => after[1] = val as f32,
                             _ => {
                                 return CommandResult::Error(format!(
-                                    "set_element_property: invalid center component index {}",
+                                    "set_element_property: invalid {} component index {}",
+                                    property,
                                     idx
                                 ));
                             }
                         }
+
                         after
                     }
                 };
-                //println!("Setting CENTER to: {:?}, with {:?} and {:?}", after, name, new_val);
+
+                let command_after = if let Some((anchor, width, height)) = text_anchor {
+                    let center = [
+                        after[0] + width * (0.5 - corner_x),
+                        after[1] + height * (0.5 - corner_y),
+                    ];
+
+                    anchor.anchor_position_from_center(center, width, height)
+                } else if let Some(size) = element_size {
+                    [
+                        after[0] + size[0] * (0.5 - corner_x),
+                        after[1] + size[1] * (0.5 - corner_y),
+                    ]
+                } else {
+                    after
+                };
+
                 ctx.ui.ui_edit_manager.execute_command(
                     MoveElementCommand {
                         affected_element: element_ref,
                         before: None,
-                        after,
+                        after: command_after,
                     },
                     &mut ctx.ui.touch_manager,
                     &mut ctx.ui.menus,
                     &mut ctx.ui.variables,
                     &ctx.world.input.mouse,
                 );
+
                 Value::from_vec(after)
             }
 
@@ -2401,13 +2738,59 @@ pub fn set_element_property(
                 Value::F64(size)
             }
             "color" => {
-                let color_property = ColorComponent::from_str(component); // MSRV!!
-                //println!("in set_element_property: {} to {}", color_property, new_val);
-                let Some(new_color) = new_val.as_color4() else {
-                    return CommandResult::Error(format!(
-                        "set_element_property: expected color4 value, but got: {}",
-                        new_val.to_string()
-                    ));
+                let (color_name, channel_index) = match component.rsplit_once('.') {
+                    Some((color_name, channel_name))
+
+                    if !(
+                        (component.starts_with("vertex_index.") && color_name == "vertex_index")
+                            || (component.starts_with("deco.") && color_name == "deco")
+                    ) =>
+                        {
+                            //println!("Balls: {} {}", color_name, channel_name); // It just works all of a sudden, are you kidding me? 😩
+                            match Variables::component_index(channel_name) {
+                                Some(index) if index < 4 => (color_name, Some(index)),
+                                Some(index) => {
+                                    return CommandResult::Error(format!(
+                                        "set_element_property: invalid color channel index {}, expected 0..3",
+                                        index
+                                    ));
+                                }
+                                None => (component, None),
+                            }
+                        }
+                    _ => (component, None),
+                };
+
+                let color_property = ColorComponent::from_str(color_name);
+
+                let new_color = if let Some(channel_index) = channel_index {
+                    let Some(mut color) =
+                        get_element_color(&ctx.ui.menus, &element_ref, &color_property)
+                    else {
+                        return CommandResult::Error(format!(
+                            "set_element_property: couldn't retrieve existing '{}' color",
+                            color_property
+                        ));
+                    };
+
+                    let Some(channel_value) = new_val.as_f64() else {
+                        return CommandResult::Error(format!(
+                            "set_element_property: color channel requires a numeric value, got: {}",
+                            new_val
+                        ));
+                    };
+
+                    color[channel_index] = channel_value as f32;
+                    color
+                } else {
+                    let Some(color) = new_val.as_color4() else {
+                        return CommandResult::Error(format!(
+                            "set_element_property: expected color4 value, but got: {}",
+                            new_val
+                        ));
+                    };
+
+                    color
                 };
 
                 ctx.ui.ui_edit_manager.execute_command(
@@ -2422,6 +2805,7 @@ pub fn set_element_property(
                     &mut ctx.ui.variables,
                     &ctx.world.input.mouse,
                 );
+
                 Value::from_vec(new_color)
             }
 
@@ -2578,7 +2962,58 @@ pub fn set_element_property(
                 }
                 new_val.clone()
             }
+            "active" => {
+                let active = new_val.is_truthy();
 
+                if let Some(element) = get_element_mut_dirty_layer(&mut ctx.ui.menus, &element_ref) { element.set_active(active); } else {
+                    return CommandResult::Error(format!(
+                        "set_element_property: element with ID: '{}' doesn't exist",
+                        element_ref.id
+                    ));
+                }
+                Value::Bool(active)
+            }
+            "touchable" => {
+                //println!("Setting touchable of element {:?}' to '{}'", element_ref, new_val.to_string());
+                let touchable = new_val.is_truthy();
+
+                if let Some(element) = get_element_mut_dirty_layer(&mut ctx.ui.menus, &element_ref) { element.set_touchable(touchable); } else {
+                    return CommandResult::Error(format!(
+                        "set_element_property: element with ID: '{}' doesn't exist",
+                        element_ref.id
+                    ));
+                }
+                Value::Bool(touchable)
+            }
+            "texture" => {
+                //println!("Trying to set template of element '{element_ref:?}' with '{new_val:?}'");
+                if let Some(new_tex) = new_val.as_str() {
+                    if let Some(element) = get_element_mut_dirty_layer(&mut ctx.ui.menus, &element_ref) {
+                        if let Some(rect) = element.as_rect_mut() {
+                            rect.texture = Some(new_tex.to_string());
+                            rect.cached_texture = get_rect_texture(&rect.texture, &ctx.renderer.device, &ctx.renderer.queue, &ctx.game_state.mod_manager)
+                        } else {
+                            return CommandResult::Error(format!(
+                                "set_element_property: element with ID: '{}' isn't Rect, only Rects have texture support!",
+                                element_ref.id
+                            ));
+                        }
+                    } else {
+                        return CommandResult::Error(format!(
+                            "set_element_property: element with ID: '{}' doesn't exist",
+                            element_ref.id
+                        ));
+                    }
+                } else {
+                    return CommandResult::Error(format!(
+                        "set_element_property: {}.{} expected string value, but got: {}",
+                        base,
+                        property,
+                        new_val.to_string()
+                    ));
+                }
+                new_val.clone()
+            }
             _ => {
                 return CommandResult::Error(format!(
                     "set_element_property: unknown property '{}'",
@@ -2586,9 +3021,7 @@ pub fn set_element_property(
                 ));
             }
         };
-        ctx.ui
-            .variables
-            .set_var(format!("{}.{}", base, property).as_str(), after)
+        ctx.ui.variables.set_var(format!("{}.{}", base, property).as_str(), after)
     }
     CommandResult::Ok
 }
@@ -2711,7 +3144,7 @@ pub fn make_element(id: String, kind: ElementKind, center: [f32; 2]) -> Option<U
 //
 //                     variables.set_array(&format!("{prefix}.center"), element.center());
 //                     // if let Some(text) = element.as_text() {
-//                     //     variables.set_array(&format!("{prefix}.anchor_center"), anchor_to(text.anchor, text.center(), text.width, text.height));
+//                     //     variables.set_array(&format!("{prefix}.topleft"), anchor_to(text.anchor, text.center(), text.width, text.height));
 //                     // }
 //
 //                     for prop in element.sizes() {
@@ -2776,7 +3209,13 @@ fn get_setting_key(name: &str) -> Option<SettingKey> {
 
 fn set_variable_or_property(ctx: &mut CommandContext, name: &str, value: Value) -> CommandResult {
     match set_element_property(ctx, name, &value) {
-        CommandResult::Error(e) => return CommandResult::Ok,
+        CommandResult::Error(e) => {
+            error!("[UI Actions] In set_variable_or_property with Name: '{}' and value: '{}', Error: {}; {}", name, value.to_string(), e, ctx.element_ctx);
+            return CommandResult::Ok
+        },
+        CommandResult::AnnoyingError(e) => {
+            //error!("[UI Actions] In set_variable_or_property: ({}, {}): {}", name, value.to_string(), e);
+        },
         _ => {}
     }
 

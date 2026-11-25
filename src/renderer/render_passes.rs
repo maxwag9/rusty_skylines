@@ -5,12 +5,11 @@ use crate::renderer::clouds::clouds::CloudSubsystem;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
-use crate::renderer::props::{GpuPropInstance, PropVertex, Props};
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
-use crate::renderer::render_core::create_color_attachment_load;
+use crate::renderer::renderer::create_color_attachment_load;
 use crate::renderer::textures::material_keys::*;
-use crate::renderer::ui::{UiRenderer, with_font_system};
-use crate::renderer::ui_pipelines::multisample_state;
+use crate::renderer::ui::ui::{UiRenderer, with_font_system};
+use crate::renderer::ui::ui_pipelines::multisample_state;
 use crate::ui::vertex::{FlowingThickLineVtxRender, ThickLineVtxRender, ThinLineVtxRender, Vertex};
 use crate::world::buildings::building_mesher::BuildingVertex;
 use crate::world::buildings::building_renderer::BuildingRenderer;
@@ -20,9 +19,10 @@ use crate::world::cars::car_mesh::CarVertex;
 use crate::world::cars::car_render::CarInstance;
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::car_subsystem::CarRenderSubsystem;
+use crate::world::props::props::{Props};
 use crate::world::roads::road_mesh_manager::AdvancedVertex;
 use crate::world::roads::road_subsystem::RoadRenderSubsystem;
-use crate::world::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
+use crate::world::terrain::sky::{STARS_VERTEX_LAYOUT, STAR_COUNT};
 use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
 use crate::world::terrain::water::SimpleVertex;
 use tracing::error;
@@ -31,6 +31,7 @@ use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
 use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions, ShadowOptions};
 use wgpu_render_manager::renderer::RenderManager;
+use crate::world::props::props_renderer::{GpuPropInstance, PropVertex, PropsRenderer};
 
 pub struct RenderPassConfig {
     pub background_color: Color,
@@ -1211,84 +1212,84 @@ pub fn render_cars<'a>(
 
     car_renderer.render(pipelines, rt_subsystem, car_storage, camera, pass);
 }
-pub fn render_instance_ids<'a>(
-    pass: &mut RenderPass<'a>,
-    render_manager: &mut RenderManager,
-    pipelines: &Pipelines,
-    car_renderer: &mut CarRenderSubsystem,
-    settings: &Settings,
-    camera: &'a Camera,
-    props: &'a mut Props,
-    terrain: &'a Terrain,
-    mod_manager: &ModManager,
-) {
-    let Some(shader) = mod_manager.resource_path("shaders/car_instance_id.wgsl") else {
-        error!("[Renderer] Missing shader 'shaders/car_instance_id.wgsl'");
-        return;
-    };
-
-    render_manager.render(
-        cars_material_keys(mod_manager).as_slice(),
-        shader,
-        &PipelineOptions {
-            topology: TriangleList,
-            depth_stencil: None,
-            multisample_state: multisample_state(1), // IMPORTANT MSAA = 1!
-            vertex_layouts: vec![Some(CarVertex::layout()), Some(CarInstance::layout())],
-            cull_mode: Some(Face::Back),
-            fragment: FragmentOption::Default {
-                targets: vec![Some(ColorTargetState {
-                    format: TextureFormat::R32Uint,
-                    blend: None,
-                    write_mask: ColorWrites::ALL,
-                })],
-            },
-            ..Default::default()
-        },
-        &[&pipelines.buffers.camera],
-        pass,
-    );
-
-    car_renderer.render_last(pass);
-    let Some(shader) = mod_manager.resource_path("shaders/props_instance_id.wgsl") else {
-        error!("[Renderer] Missing shader 'shaders/props_instance_id.wgsl'");
-        return;
-    };
-    let shadow = make_shadow_option(settings, pipelines);
-    //let targets = color_and_normals_and_motion_targets(pipelines);
-
-    let opts = PipelineOptions {
-        topology: TriangleList,
-        depth_stencil: None,
-        multisample_state: multisample_state(1), // IMPORTANT MSAA = 1!
-        vertex_layouts: Vec::from([Some(PropVertex::layout()), Some(GpuPropInstance::layout())]),
-        cull_mode: Some(Face::Back),
-        fragment: FragmentOption::Default {
-            targets: vec![Some(ColorTargetState {
-                format: TextureFormat::R32Uint,
-                blend: None,
-                write_mask: ColorWrites::ALL,
-            })],
-        },
-        shadow: shadow.clone(),
-        ..Default::default()
-    };
-    props.render(
-        render_manager,
-        pass,
-        shader,
-        opts,
-        camera,
-        terrain,
-        pipelines,
-        settings,
-    );
-}
+// pub fn render_instance_ids<'a>(
+//     pass: &mut RenderPass<'a>,
+//     render_manager: &mut RenderManager,
+//     pipelines: &Pipelines,
+//     car_renderer: &mut CarRenderSubsystem,
+//     settings: &Settings,
+//     camera: &'a Camera,
+//     props: &'a mut Props,
+//     terrain: &'a Terrain,
+//     mod_manager: &ModManager,
+// ) {
+//     let Some(shader) = mod_manager.resource_path("shaders/car_instance_id.wgsl") else {
+//         error!("[Renderer] Missing shader 'shaders/car_instance_id.wgsl'");
+//         return;
+//     };
+//
+//     render_manager.render(
+//         cars_material_keys(mod_manager).as_slice(),
+//         shader,
+//         &PipelineOptions {
+//             topology: TriangleList,
+//             depth_stencil: None,
+//             multisample_state: multisample_state(1), // IMPORTANT MSAA = 1!
+//             vertex_layouts: vec![Some(CarVertex::layout()), Some(CarInstance::layout())],
+//             cull_mode: Some(Face::Back),
+//             fragment: FragmentOption::Default {
+//                 targets: vec![Some(ColorTargetState {
+//                     format: TextureFormat::R32Uint,
+//                     blend: None,
+//                     write_mask: ColorWrites::ALL,
+//                 })],
+//             },
+//             ..Default::default()
+//         },
+//         &[&pipelines.buffers.camera],
+//         pass,
+//     );
+//
+//     car_renderer.render_last(pass);
+//     let Some(shader) = mod_manager.resource_path("shaders/props_instance_id.wgsl") else {
+//         error!("[Renderer] Missing shader 'shaders/props_instance_id.wgsl'");
+//         return;
+//     };
+//     let shadow = make_shadow_option(settings, pipelines);
+//     //let targets = color_and_normals_and_motion_targets(pipelines);
+//
+//     let opts = PipelineOptions {
+//         topology: TriangleList,
+//         depth_stencil: None,
+//         multisample_state: multisample_state(1), // IMPORTANT MSAA = 1!
+//         vertex_layouts: Vec::from([Some(PropVertex::layout()), Some(GpuPropInstance::layout())]),
+//         cull_mode: Some(Face::Back),
+//         fragment: FragmentOption::Default {
+//             targets: vec![Some(ColorTargetState {
+//                 format: TextureFormat::R32Uint,
+//                 blend: None,
+//                 write_mask: ColorWrites::ALL,
+//             })],
+//         },
+//         shadow: shadow.clone(),
+//         ..Default::default()
+//     };
+//     props.render(
+//         render_manager,
+//         pass,
+//         shader,
+//         opts,
+//         camera,
+//         terrain,
+//         pipelines,
+//         settings,
+//     );
+// }
 
 pub fn render_props<'a>(
     encoder: &'a mut CommandEncoder,
     render_manager: &mut RenderManager,
-    props: &'a mut Props,
+    props_renderer: &'a mut PropsRenderer,
     pipelines: &Pipelines,
     settings: &Settings,
     camera: &'a Camera,
@@ -1304,7 +1305,8 @@ pub fn render_props<'a>(
         return;
     };
     let shadow = make_shadow_option(settings, pipelines);
-    let targets = color_and_normals_and_motion_targets(pipelines);
+    let mut targets = color_and_normals_and_motion_targets(pipelines);
+    targets[0].as_mut().unwrap().blend = None;
 
     let opts = PipelineOptions {
         topology: TriangleList,
@@ -1312,19 +1314,17 @@ pub fn render_props<'a>(
         multisample_state: MultisampleState {
             count: settings.msaa_samples,
             mask: !0,
-            alpha_to_coverage_enabled: false, //settings.msaa_samples > 2
+            alpha_to_coverage_enabled: settings.msaa_samples > 2
         },
         vertex_layouts: Vec::from([Some(PropVertex::layout()), Some(GpuPropInstance::layout())]),
         cull_mode: Some(Face::Back),
-        fragment: FragmentOption::Default {
-            targets: targets.clone(),
-        },
+        fragment: FragmentOption::Default { targets },
         shadow: shadow.clone(),
         ..Default::default()
     };
 
     // Draw all props
-    props.render(
+    props_renderer.render(
         render_manager,
         pass,
         shader,

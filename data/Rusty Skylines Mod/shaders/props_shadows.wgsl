@@ -33,6 +33,7 @@ struct VSOut {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) texture_id: u32,
+    @location(2) alpha_multiplier: f32,
 };
 
 
@@ -44,7 +45,7 @@ struct VSOut {
 
 @group(1) @binding(0) var<uniform> uniforms: Uniforms;
 @group(1) @binding(1) var<uniform> shadow_uniforms: ShadowUniform;
-
+@group(1) @binding(2) var<uniform> alpha_cutoff: vec4<f32>;
 
 fn get_instance_position(instance: InstanceInput) -> vec3<f32> {
     let dc = instance.chunk_xz - uniforms.camera_chunk;
@@ -99,14 +100,11 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VSOut {
 
     out.uv = vertex.uv;
     out.texture_id = vertex.texture_id;
-
+    out.alpha_multiplier = vertex.color.a * instance.color.a;
     return out;
 }
-
-
 @fragment
 fn fs_main(in: VSOut) {
-
     var alpha = 1.0;
 
     switch(in.texture_id) {
@@ -125,10 +123,9 @@ fn fs_main(in: VSOut) {
         default: {}
     }
 
-    let t = f32(shadow_uniforms.cascade_idx) / 3.0;
-    let cutoff = mix(0.75, 0.0, t);
+    alpha *= in.alpha_multiplier;
 
-    if (alpha < cutoff) {
+    if (alpha < alpha_cutoff.x) {
         discard;
     }
 }

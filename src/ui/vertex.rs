@@ -1,9 +1,9 @@
 use crate::data::Settings;
 use crate::helpers::modpack::ModManager;
-use crate::helpers::positions::WorldPos;
+use rusty_skylines_utils::positions::WorldPos;
 use crate::helpers::{rgba_from_stupid_color, stupid_color_from_rgba};
-use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
-use crate::renderer::ui_text_rendering::Anchor;
+use crate::renderer::ui::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
+use crate::renderer::ui::ui_text_rendering::Anchor;
 use crate::ui::action_parser::CompiledAction;
 use crate::ui::helper::ensure_ccw;
 use crate::ui::parser::Value;
@@ -18,7 +18,8 @@ use sluggrs_skylines::{DecorationMode, TextDecoration};
 use std::collections::HashMap;
 use std::fmt;
 use std::mem::size_of;
-use tracing::error;
+use clipper2_rust::errors;
+use tracing::{error, warn};
 use wgpu::{vertex_attr_array, *};
 use winit::dpi::PhysicalSize;
 
@@ -335,7 +336,7 @@ pub struct AdvancedPrimitive {
     pub scale: f32,
     pub misc: MiscButtonSettings,
     pub editing_tool: bool,
-    pub is_temporary: bool,
+    pub discard_reference: bool,
     pub scale_my_coords: bool,
 }
 
@@ -357,7 +358,7 @@ impl AdvancedPrimitive {
                 editable: Editability::from_bool(yaml.misc.editable),
             },
             editing_tool: yaml.editing_tool,
-            is_temporary: false,
+            discard_reference: false,
             scale_my_coords: true,
         }
     }
@@ -509,26 +510,27 @@ impl ResizeBehaviour {
 pub enum RectTextureType {
     Shader(String),
     Image(TextureView),
+    MiniRender(u64)
 }
 
 impl RectTextureType {
     pub fn from_str(
         kind: &str,
-        path: &str,
+        val: &str,
         device: &Device,
         queue: &Queue,
         mod_manager: &ModManager,
     ) -> Option<Self> {
         match kind.to_lowercase().as_str() {
             "shader" => {
-                let relative_path = path;
+                let relative_path = val;
 
                 Some(Self::Shader(relative_path.to_owned()))
             }
 
             "image" | "texture" => {
-                let Some(path) = mod_manager.resource_path(path) else {
-                    error!("[Renderer] Missing shader '{path}' for UI Rect Image");
+                let Some(path) = mod_manager.resource_path(val) else {
+                    error!("[Renderer] Missing shader '{val}' for UI Rect Image");
                     return None;
                 };
 
@@ -587,9 +589,17 @@ impl RectTextureType {
                 Some(Self::Image(view))
             }
 
+            "minirender" => {
+                if let Some(id) = Value::from_str_pure(val).as_i64() {
+                    Some(Self::MiniRender(id as u64))
+                } else {
+                    None
+                }
+            }
+
             _ => {
                 error!(
-                    "[UI] In 'texture' field of Rect UI element: {kind} isn't an option. Use 'shader', 'texture' or 'image' instead."
+                    "[UI] In 'texture' field of Rect UI element: '{kind}' isn't an option. Use 'minirender', 'shader', 'texture' or 'image' instead."
                 );
 
                 None
@@ -597,23 +607,23 @@ impl RectTextureType {
         }
     }
 }
-fn get_rect_texture(
-    texture_string: Option<String>,
+pub fn get_rect_texture(
+    texture_string: &Option<String>,
     device: &Device,
     queue: &Queue,
     mod_manager: &ModManager,
 ) -> Option<RectTextureType> {
-    let Some(texture_string) = texture_string.as_ref() else {
+    let Some(texture_string) = texture_string else {
         return None;
     };
     match texture_string.split_once(':') {
         None => None,
-        Some((texture_type, path)) => {
+        Some((texture_type, val)) => {
             //println!("Trying texture: '{texture_type}', '{path}'");
-            RectTextureType::from_str(texture_type, path, device, queue, mod_manager)
+            RectTextureType::from_str(texture_type, val, device, queue, mod_manager)
         }
     }
-    // 1. Path to shader relative to data folder  2. Path to an actual texture image relative to the data folder    // -3. Procedural texture (NO NOT YET)-
+    // 1. Path to shader relative to data folder  2. Path to an actual texture image relative to the data folder    // -3. Procedural texture (NO NOT YET)- // 4. Mini Render Texture!
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -706,7 +716,7 @@ impl UiButtonRect {
         mod_manager: &ModManager,
     ) -> Self {
         let yaml_element = Some(e.clone());
-
+        let cached_texture = get_rect_texture(&e.texture, device, queue, mod_manager);
         UiButtonRect {
             id: e.id,
             string_actions: e.actions,
@@ -723,8 +733,8 @@ impl UiButtonRect {
             rotation: e.rotation,
             color: e.color,
             border_color: e.border_color,
-            texture: e.texture.clone(),
-            cached_texture: get_rect_texture(e.texture, device, queue, mod_manager),
+            texture: e.texture,
+            cached_texture,
             roundness: e.roundness,
             border_thickness: e.border_thickness,
             fade: e.fade,
@@ -1124,6 +1134,32 @@ impl UiElement {
         }
     }
 
+    pub fn set_touchable(&mut self, touchable: bool) {
+        match self {
+            UiElement::Text(e) => {
+                e.misc.touchable = touchable;
+            }
+            UiElement::Circle(e) => {
+                e.misc.touchable = touchable;
+            }
+            UiElement::Handle(e) => {
+                e.misc.touchable = touchable;
+            }
+            UiElement::Outline(e) => {
+                e.misc.touchable = touchable;
+            }
+            UiElement::Polygon(e) => {
+                e.misc.touchable = touchable;
+            }
+            UiElement::Rect(e) => {
+                e.misc.touchable = touchable;
+            }
+            UiElement::Advanced(e) => {
+                e.misc.touchable = touchable;
+            }
+        }
+    }
+
     pub fn center(&self) -> [f32; 2] {
         match self {
             UiElement::Text(t) => [t.x, t.y],
@@ -1233,6 +1269,7 @@ impl UiElement {
 
             UiElement::Text(t) => match component {
                 ColorComponent::Fill => Some(t.color),
+                ColorComponent::DecorationIndex(i) => t.decorations.get(i as usize).map(|deco| rgba_from_stupid_color(deco.color)),
                 _ => None,
             },
 
@@ -1284,6 +1321,7 @@ impl UiElement {
                 let scale = resize_behaviour.uniform_scale(x_scale, y_scale, uniform_scale);
 
                 t.pt *= scale;
+                t.decorations.iter_mut().for_each(|d| d.spread *= scale);
             }
 
             UiElement::Circle(c) => {
@@ -1434,36 +1472,103 @@ impl UiElement {
         }
     }
     pub fn get_ap(ap: &str, ap_vars: &[String]) -> Option<String> {
-        let replacement = if ap == "ap" {
-            ap_vars.first().cloned().unwrap_or("None".into())
-        } else if ap == "ap.all" {
-            format!("[{}]", ap_vars.join(", "))
-        } else if let Some(component) = ap.strip_prefix("ap.") {
-            let idx = Variables::component_index(component).unwrap_or(0);
-            ap_vars.get(idx).cloned().unwrap_or("None".into())
+        if ap == "ap" {
+            return Some(ap_vars.first().cloned().unwrap_or("None".into()));
+        }
+
+        let path = ap.strip_prefix("ap.")?;
+        let mut components = path.split('.');
+
+        let selector = components.next()?;
+        let indices = components
+            .map(Variables::component_index)
+            .collect::<Option<Vec<_>>>()?;
+
+        let mut value = if selector == "all" {
+            if indices.is_empty() {
+                return Some(format!("[{}]", ap_vars.join(", ")));
+            }
+
+            Value::Array(
+                ap_vars
+                    .iter()
+                    .map(|s| Value::from_str_pure(s))
+                    .collect(),
+            )
         } else {
-            return None;
+            let index = Variables::component_index(selector)?;
+            let Some(raw) = ap_vars.get(index) else {
+                return Some("None".into());
+            };
+
+            if indices.is_empty() {
+                return Some(raw.clone());
+            }
+
+            Value::from_str_pure(raw)
         };
 
-        Some(replacement)
+        for index in indices {
+            value = match value {
+                Value::Array(values) => values
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| Value::String("None".into())),
+                _ => Value::String("None".into()),
+            };
+        }
+
+        Some(value.into_string())
     }
 
     fn replace_aps(text: &mut String, ap_vars: &[String]) {
-        while let Some(start) = text.find("{ap") {
-            let rest = &text[start..];
+        let mut search_from = 0;
 
-            let Some(close_rel) = rest.find('}') else {
+        while let Some(relative_start) = text[search_from..].find("{ap") {
+            let start = search_from + relative_start;
+
+            let mut brace_depth = 0;
+            let mut close_rel = None;
+
+            for (i, c) in text[start..].char_indices() {
+                match c {
+                    '{' => brace_depth += 1,
+                    '}' => {
+                        brace_depth -= 1;
+
+                        if brace_depth == 0 {
+                            close_rel = Some(i);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            let Some(close_rel) = close_rel else {
                 break;
             };
 
             let end = start + close_rel + 1;
-            let expression = &text[start + 1..end - 1];
+            let expression = text[start + 1..end - 1].to_string();
 
-            let Some(replacement) = Self::get_ap(expression, ap_vars) else {
-                break;
-            };
+            let mut resolved_expression = expression.clone();
+            Self::replace_aps(&mut resolved_expression, ap_vars);
 
-            text.replace_range(start..end, &replacement);
+            if resolved_expression != expression {
+                text.replace_range(start + 1..end - 1, &resolved_expression);
+                continue;
+            }
+
+            if let Some(replacement) = Self::get_ap(&expression, ap_vars) {
+                let replacement_len = replacement.len();
+
+                text.replace_range(start..end, &replacement);
+
+                search_from = start + replacement_len;
+            } else {
+                search_from = end;
+            }
         }
     }
     fn replace_actions(actions: &mut Vec<String>, ap_vars: &[String]) {
@@ -2373,10 +2478,10 @@ impl UiButtonText {
         let length = e.text.len();
         let yaml_element = Some(e.clone());
         let (decorations, errors) = e.decorations_to_runtime();
-        for err in errors {
+        for (idx, err) in errors {
             error!(
-                "[UI] Error while converting YAML text to Runtime Text: '{:?}' in element: {}",
-                err, e.id
+                "[UI] Error while converting YAML text decorations to Runtime Text. Deco idx: '{}', Error: '{:?}' In Element: '{}'",
+                idx, err, e.id
             );
         }
         UiButtonText {
@@ -3056,7 +3161,7 @@ impl Default for AdvancedPrimitive {
             scale: 1.0,
             misc: MiscButtonSettings::default(),
             editing_tool: false,
-            is_temporary: false,
+            discard_reference: false,
             scale_my_coords: true,
         }
     }
@@ -3193,10 +3298,10 @@ pub struct UiButtonTextYaml {
 impl UiButtonTextYaml {
     pub fn decorations_to_runtime(&self) -> (Vec<TextDecoration>, Vec<(usize, String)>) {
         let mut result = Vec::with_capacity(self.decorations.len());
-        let mut ring_count = 0;
+        let mut ring_found = false;
         let mut errors = Vec::new();
         for (idx, decoration) in self.decorations.iter().enumerate() {
-            let decoration = match decoration.to_runtime() {
+            let mut decoration = match decoration.to_runtime() {
                 Ok(decoration) => decoration,
                 Err(e) => {
                     errors.push((idx, e));
@@ -3205,13 +3310,12 @@ impl UiButtonTextYaml {
             };
 
             if decoration.mode == DecorationMode::Ring {
-                ring_count += 1;
-                if ring_count > 1 {
-                    errors.push((
-                        idx,
-                        "At most one Ring decoration per text area!! 🖕".to_string(),
-                    ));
-                    continue;
+                if ring_found {
+                    decoration.mode = DecorationMode::Solid;
+                    errors.push((idx, "At most one Ring decoration per text area!!🖕 I'm only keeping the first Ring. Fix it by setting one decoration to 'mode: Ring' and the others to 'mode: Solid'".to_string()));
+                } else {
+                    ring_found = true;
+                    decoration.offset = Default::default();
                 }
             }
 

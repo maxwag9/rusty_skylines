@@ -1,4 +1,4 @@
-use crate::helpers::positions::WorldPos;
+use rusty_skylines_utils::positions::WorldPos;
 use crate::world::buildings::zoning::{
     Lot, LotEntrance, ParkingSpot, ParkingSpotLotInfo, Tile, TilePos, TileType, point_in_polygon_xz,
 };

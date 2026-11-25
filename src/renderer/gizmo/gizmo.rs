@@ -2,7 +2,7 @@
 
 use crate::data::Settings;
 use crate::helpers::hsv::{HSV, depth_to_color, hsv_to_rgb, lerp};
-use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
+use rusty_skylines_utils::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 
 use crate::helpers::stupid_color_from_rgba;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
@@ -371,7 +371,7 @@ impl Gizmo {
 
                     let lane_offset = ((local_rail_index as f32 + 0.7) / rails_on_lane as f32
                         - 0.7)
-                        * road_type.lane_width;
+                        * road_type.lane_width();
 
                     let points = WorldPos::offset_polyline(geometry.points.as_slice(), lane_offset);
                     let saturation = (utility_rail.usage

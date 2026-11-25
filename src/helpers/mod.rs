@@ -12,7 +12,7 @@ pub mod implementations;
 pub mod modpack;
 pub mod mouse_ray;
 pub mod paths;
-pub mod positions;
+pub mod brain;
 
 fn f32_to_u8(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
@@ -53,12 +53,20 @@ fn is_birthday() -> bool {
     matches!((now.month(), now.day()), (10, 23..=24) | (5, 3))
 } // It has something to do with the game, or me.
 
-static GAME_AGE: std::sync::LazyLock<f32> = std::sync::LazyLock::new(|| game_age()); // Or 256 or usize. Thursday, the 23rd October 2025.
-fn game_age() -> f32 {
+//static game_age(): std::sync::LazyLock<f64> = std::sync::LazyLock::new(|| game_age()); // Or 256 or usize. Thursday, the 23rd October 2025.
+fn game_age() -> f64 {
+    const SECONDS_PER_YEAR: f64 = 31_557_600.0;
+
     let start = NaiveDate::from_ymd_opt(2025, 10, 23).unwrap();
     let now = Local::now().naive_local();
 
-    (now - start.and_hms_opt(0, 0, 0).unwrap()).num_seconds() as f32 / 31_557_600.0
+    let elapsed = (now - start.and_hms_opt(0, 0, 0).unwrap()).as_seconds_f64();
+
+    let phase = elapsed
+        + (elapsed * 0.8).sin()
+        + 0.8 * (elapsed * 0.4).sin();
+
+    phase.floor() / SECONDS_PER_YEAR
 }
 const MRHANDS: &str = "[Mr. Hand§]";
 
@@ -75,6 +83,7 @@ pub fn get_splash_message() -> String {
     let idx = rng.random_range(0..splash_messages.len());
     splash_messages[idx].to_string()
     //twelve_days_of_christmas().unwrap()
+    //"Weirdness: {WEIRDNESS}".to_string()
 }
 
 fn get_combined_splash_messages() -> Vec<String> {
@@ -185,20 +194,38 @@ fn get_base_messages() -> Vec<String> {
         "Gangnam".to_string(),
         "Spooky!".to_string(),
         "SCOTTISH TESTIFICATE".to_string(),
-        format!("{} years old!", GAME_AGE.to_string()),
-        format!("{} chickens long!", (*GAME_AGE * 3.0).to_string()),
-        format!("{} Amogi long!", (*GAME_AGE * 2.1).to_string()),
-        format!("{} Amogus wide!", ((*GAME_AGE * 12.1).sqrt().midpoint(502.6)).to_string()),
+        format!("{} years old!", game_age().to_string()),
+        format!("{} chickens long!", (game_age() * 3.0).to_string()),
+        format!("{} Amogi long!", (game_age() * 2.1).to_string()),
+        format!("{} Amogus wide!", ((game_age() * 12.1).sqrt().midpoint(502.6)).to_string()),
         "Stop to take a pic!".to_string(),
         "Arrgh!!".to_string(),
         "Califragilistic!".to_string(),
         "Buongiorno Herr Müller!".to_string(),
         "Why are you sleeping, look at the stars!".to_string(),
         "Being interested makes you interesting - maxwag9".to_string(), // 2022
-        format!("{} kg!", (*GAME_AGE * 502.6).abs().div_euclid(GAME_VERSION.len() as f32).to_string()),
-        format!("Weirdness: {}", get_game_weirdness()),
-        format!("{} Ws amount!", get_game_weirdness()),
-        format!("{} Ws rich!", get_game_weirdness()),
+        format!("{} kg!", (game_age() * 502.6).abs().div_euclid(GAME_VERSION.len() as f64).to_string()),
+        "Weirdness: {WEIRDNESS}".to_string(),
+        "{WEIRDNESS} Ws amount!".to_string(),
+        "{WEIRDNESS} Ws rich!".to_string(),
+        "Weirder...".to_string(),
+        "Now with Planets!".to_string(),
+        "Zoom into the planets!".to_string(),
+        "Explore the solar system!".to_string(),
+        "fbm(continents) * 1.10 + (ridge(fbm(mountains)) - 0.72) * 0.48".to_string(),
+        "Pluto is too small!".to_string(),
+        "Pluto is too far away!".to_string(),
+        "Pluto is VERY far away!".to_string(),
+        "Charon is smaller!".to_string(),
+        "{expr:format(sqrt(abs({WEIRDNESS})*0.01), 2)} x 2π radially!".to_string(),
+        "{expr:format(choose(clamp(-18000/{WEIRDNESS}, 0, 1), -180.0, 180.0), 2)} Degrees of §cGREEN§Quantum Spin§r".to_string(),
+        "{expr:format(abs(log(1800/abs({WEIRDNESS}), 3.06)), 2)} Degrees of §cGREEN§Quantum Spin§rc§!".to_string(),
+        "{expr:format(abs(log(1800/abs({WEIRDNESS}), 3.06)), 2)} Degrees of §cGREEN§Quantum Spin§rc§!".to_string(),
+        "Incroyable!".to_string(),
+        "Le petit starre interstellare est plus §cRED§rouge§rc§ comme les imbeciles dans l'internet avec ils fédoras et les subscriptionnes de discorde nitro.".to_string(),
+        "dennis p*n*s".to_string(),
+        "Nelson Mandela is proud!".to_string(),
+        "Listen to Space Rock!".to_string(), // Comacozer BinBeal
     ]
 }
 
@@ -263,6 +290,8 @@ fn get_christmas_messages() -> Vec<String> {
         "56 Presents.".to_string(), // "I just thought, I need one last christmas message and then looked at my numpad and thought "56""
         "I just thought, I need one last christmas message and then looked at my numpad and thought '56'".to_string(),
         "Christmas!".to_string(),
+        "IT'S CHRISTMAS!!".to_string(),
+        "Your present might be a cubic meter of TNT 🥰".to_string(),
     ];
 
     let week_msg = match away_from_christmas() / 7.0 {
@@ -361,7 +390,7 @@ fn get_birthday_messages() -> Vec<String> {
         "Thanks for coming!".to_string(),
         "Interesting.".to_string(),
         "This message is a birthday message for this game you are playing right now!".to_string(),
-        format!("Today is my {}th birthday!", GAME_AGE.to_string()),
+        format!("Today is my {}th birthday!", game_age().to_string()),
         "Today is my birthday!".to_string(),
         "Today!".to_string(),
     ]
@@ -451,8 +480,8 @@ pub fn print_exit_message() {
 
 // TODO: Testificate
 #[rustfmt::skip]
-fn get_game_weirdness() -> f64 {
-    let z = game_age().to_bits();
+pub fn get_game_weirdness() -> f64 {
+    let z = u64_to_u32(game_age().to_bits());
     let v = zstd::zstd_safe::VERSION_NUMBER;
     let a = z.count_ones().checked_ilog10().unwrap_or(z) as f64 + 18.6;
     let h = generate_8(a, v);
@@ -468,7 +497,17 @@ fn get_game_weirdness() -> f64 {
     let result = safe_sub(safe_mul(f, a), correction);
     if result.is_finite() { result } else { eprintln!("[weirdness] Non-finite final result: {result:?}; returning 1.0"); 1.0 }
 }
+fn u64_to_u32(value: u64) -> u32 {
+    let mut x = (value as u32) ^ (value >> 32) as u32;
 
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7FEB352D);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846CA68B);
+    x ^= x >> 16;
+
+    x
+}
 pub fn generate_8(value: f64, mask: u32) -> [f32; 8] {
     let mut seed = if value.is_finite() {
         value
@@ -557,11 +596,6 @@ pub fn sqrt8(values: [f32; 8]) -> [f32; 8] {
 
         result
     })
-}
-
-#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-pub fn sqrt8(_values: [f32; 8]) -> [f32; 8] {
-    [1.0; 8]
 }
 
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
@@ -700,4 +734,60 @@ fn safe_div(a: f64, b: f64) -> f64 {
     }
 
     traced_result("/", a, b, a / b)
+}
+
+
+#[test]
+fn test_game_weirdness_performance() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    const ITERATIONS: u32 = 250_000;
+    const ROUNDS: u32 = 5;
+
+    let function = black_box(get_game_weirdness as fn() -> f64);
+
+    for _ in 0..10_000 {
+        black_box(function());
+    }
+
+    let mut measurements = Vec::with_capacity(ROUNDS as usize);
+
+    for _ in 0..ROUNDS {
+        let start = Instant::now();
+
+        for _ in 0..ITERATIONS {
+            black_box(function());
+        }
+
+        measurements.push(start.elapsed().as_nanos() as f64 / ITERATIONS as f64);
+    }
+
+    measurements.sort_by(f64::total_cmp);
+
+    let median_ns = measurements[measurements.len() / 2];
+    let average_ns = measurements.iter().sum::<f64>() / ROUNDS as f64;
+
+    println!("\n=== GAME WEIRDNESS PERFORMANCE ===");
+    println!("Iterations per round: {ITERATIONS}");
+    println!("Rounds: {ROUNDS}");
+    println!("Average: {average_ns:.2} ns/call");
+    println!("Median:  {median_ns:.2} ns/call");
+    println!("\n=== FRAME BUDGET ANALYSIS ===");
+
+    for fps in [60, 100, 120, 140, 240, 360, 480] {
+        let frame_budget_ns = 1_000_000_000.0 / fps as f64;
+        let percentage = average_ns / frame_budget_ns * 100.0;
+        let remaining_ns = frame_budget_ns - average_ns;
+
+        println!(
+            "{fps:>3} FPS | Budget: {:>9.2} µs | Function: {:>9.2} µs | Usage: {:>7.4}% | Remaining: {:>9.2} µs",
+            frame_budget_ns / 1_000.0,
+            average_ns / 1_000.0,
+            percentage,
+            remaining_ns / 1_000.0
+        );
+    }
+
+    black_box(function());
 }

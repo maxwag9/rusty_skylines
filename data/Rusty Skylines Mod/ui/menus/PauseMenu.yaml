@@ -70,7 +70,7 @@ layers:
         ap_vars:
           - "str:{lang.pause_menu.return}"
           - "40"
-          - "str:on:r, call(back_to_the_game)"
+          - "str:on:r call(back_to_the_game)"
         x: 960
         y: 330
         scale: 1.0

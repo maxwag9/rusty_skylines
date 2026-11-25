@@ -1,15 +1,15 @@
 use crate::helpers::modpack::ModManager;
-use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
-use crate::renderer::props::{PropInstance, PropInstanceId, Props};
-use crate::renderer::textures::material_keys::terrain_material_keys;
+use crate::renderer::textures::material_keys::{terrain_material_keys, OPAQUE_TEXTURE_COMPRESSION_MODE, ALPHA_TEXTURE_COMPRESSION_MODE};
 use crate::world::buildings::buildings::{BuildingId, Buildings, MiscBuildingParams, RoofType};
 use crate::world::buildings::zoning::{Lot, LotEntrance, LotId, Tile, TilePos, TileType, Zoning};
 use crate::world::cars::parking::ParkingStorage;
+use crate::world::props::props::{PropInstance, PropInstanceId, Props};
 use crate::world::terrain::terrain_editing::TerrainEditSource;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::{Vec2, Vec3};
 use revision::revisioned;
+use rusty_skylines_utils::positions::{ChunkCoord, LocalPos, WorldPos};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -131,6 +131,7 @@ impl BuildingMeshManager {
                 .with_roughness(0.4),
             512,
             MipmapMode::Generate,
+            OPAQUE_TEXTURE_COMPRESSION_MODE
         );
         let roof_key = level.roof_material.texture_key(mod_manager);
         let window_key = level
@@ -677,6 +678,7 @@ impl TexturedMaterial for WallMaterial {
                         .with_secondary_color([0.0, 0.0, 0.0, 1.0]),
                     512,
                     MipmapMode::Generate,
+                    OPAQUE_TEXTURE_COMPRESSION_MODE
                 )
             }
             WallMaterial::Stucco(color) => {
@@ -692,6 +694,7 @@ impl TexturedMaterial for WallMaterial {
                         .with_scale(2.0),
                     512,
                     MipmapMode::Generate,
+                    OPAQUE_TEXTURE_COMPRESSION_MODE
                 )
             }
             WallMaterial::WoodSiding(color) => {
@@ -707,6 +710,7 @@ impl TexturedMaterial for WallMaterial {
                         .with_scale(1.5),
                     512,
                     MipmapMode::Generate,
+                    OPAQUE_TEXTURE_COMPRESSION_MODE
                 )
             }
             WallMaterial::Glass(color) => {
@@ -721,6 +725,7 @@ impl TexturedMaterial for WallMaterial {
                         .with_roughness(0.05),
                     512,
                     MipmapMode::Generate,
+                    ALPHA_TEXTURE_COMPRESSION_MODE
                 )
             }
             WallMaterial::Custom(key) => key.clone(),
@@ -741,6 +746,7 @@ impl TexturedMaterial for RoofMaterial {
                     TextureParams::default().with_primary_color([0.4, 0.15, 0.05, 1.0]),
                     512,
                     MipmapMode::Generate,
+                    OPAQUE_TEXTURE_COMPRESSION_MODE
                 )
             }
             RoofMaterial::Metal => {
@@ -753,6 +759,7 @@ impl TexturedMaterial for RoofMaterial {
                     TextureParams::default().with_primary_color([0.2, 0.2, 0.2, 1.0]),
                     512,
                     MipmapMode::Generate,
+                    OPAQUE_TEXTURE_COMPRESSION_MODE
                 )
             }
             RoofMaterial::Tile => {
@@ -767,6 +774,7 @@ impl TexturedMaterial for RoofMaterial {
                         .with_scale(1.2),
                     512,
                     MipmapMode::Generate,
+                    OPAQUE_TEXTURE_COMPRESSION_MODE
                 )
             }
             RoofMaterial::Slate => {
@@ -781,6 +789,7 @@ impl TexturedMaterial for RoofMaterial {
                         .with_roughness(0.3),
                     512,
                     MipmapMode::Generate,
+                    OPAQUE_TEXTURE_COMPRESSION_MODE
                 )
             }
             RoofMaterial::Custom(key) => key.clone(),
@@ -805,6 +814,7 @@ impl TexturedMaterial for DrivewayMaterial {
                         .with_scale(5.0),
                     512,
                     MipmapMode::Generate,
+                    OPAQUE_TEXTURE_COMPRESSION_MODE
                 )
             }
             DrivewayMaterial::Concrete => {
@@ -820,6 +830,7 @@ impl TexturedMaterial for DrivewayMaterial {
                         .with_scale(3.0),
                     512,
                     MipmapMode::Generate,
+                    OPAQUE_TEXTURE_COMPRESSION_MODE
                 )
             }
             DrivewayMaterial::Gravel => {
@@ -835,6 +846,7 @@ impl TexturedMaterial for DrivewayMaterial {
                         .with_scale(8.0),
                     512,
                     MipmapMode::Generate,
+                    OPAQUE_TEXTURE_COMPRESSION_MODE
                 )
             }
             DrivewayMaterial::Custom(key) => key.clone(),

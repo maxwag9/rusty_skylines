@@ -1,0 +1,19 @@
+name: "continental"
+
+noises:
+  continents:
+    seed: 1741
+    frequency: 0.00050
+    octaves: 2
+    lacunarity: 2.0
+    gain: 0.50
+
+  mountains:
+    seed: 8197
+    frequency: 0.00180
+    octaves: 3
+    lacunarity: 2.05
+    gain: 0.48
+
+outputs:
+  height: "fbm(continents) * 1.10 + (ridge(fbm(mountains)) - 0.72) * 0.48"

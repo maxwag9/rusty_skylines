@@ -1,0 +1,66 @@
+name: bci_item
+elements:
+  - !Rect
+    id: Item Background
+    actions:
+      - 'as:[{ap.5}, "Branch background"], set(str:self.size, expr:[{as.size.y}*0.9, {as.size.y}*0.9]);'
+
+      - 'as:["GUI_Category_AP_0", "Category Text Background"],
+          set(str:self.topleft.y, expr:{as.topleft.y??0}+{as.size.y??0}+20%);'
+
+      - 'as:[{ap.5}, "Branch background"], set(str:sy, expr:({as.topleft.y}+{as.size.y}-{self.topleft.y})*0.9); set(str:self.size, [expr:{sy}*1.5, sy]); ifvareq({ap.3}, 0, set(str:self.topleft.x, expr:{as.topleft.x}+{as.size.x}*0.05));'
+
+      - 'as:["GUI_Category_AP_0", "Category Text Background"],
+          set(str:self.topleft.y, expr:{as.topleft.y??0}+{as.size.y??0}+20%);'
+
+      - 'asdyn:[expr:"GUI_Item_AP_"+(max({ap.3}-1, 0)), "Item Background"],
+          if(as.exists, ifvareq({ap.3}, 0, noop,
+            set(str:self.topleft.x, expr:{as.topleft.x}+{as.rect.x}*1.05);
+          );)'
+      - 'on:p,set(str:bci_vis.2, {ap.3}); set(str:bci_sel, [{ap.0}, {ap.1.{ap.2}.0}, {ap.1.{ap.2}.1.{ap.3}.0}]);' # print(["selected", bci_sel])' # call("{ap.7}"); print("Item: {ap.7}");
+      - 'if(expr:{bci_sel.2} == "{ap.1.{ap.2}.1.{ap.3}.0}" && {bci_sel.1} == "{ap.1.{ap.2}.0}", set(str:self.color.fill, [0.035, 0.055, 0.07, 0.96]); set(str:self.color.border, [0.4, 0.08, 0.55, 0.95]), set(str:self.color.fill, [0.075, 0.105, 0.15, 0.96]); set(str:self.color.border, [0.22, 0.32, 0.42, 0.9]); call(show_interaction, [[0.075, 0.105, 0.15, 0.96], false]);); call({ap.7});'
+    #      - 'asdyn:[expr:"GUI_Item_AP_"+(max({ap.3}-1, 0)), "Item Background"],
+    #          ifvareq({ap.3}, 0, noop,
+    #            set(str:self.topleft, [expr:{as.topleft.x}+{as.rect.x}*1.05, as.topleft.y]);
+    #        );'
+    #      - 'as:[{ap.5}, "Branch background"], set(str:self.size, expr:[{as.size.y}*0.9, {as.size.y}*0.9])' # bci_vis.2, {ap.3}
+    x: 0
+    y: 0
+    w: 200
+    h: 200
+    roundness: 0.12
+    border_thickness: 1.25
+  - !Rect
+    id: Item Preview Render
+    actions:
+      - 'as:["Item Background"], set(str:self.center, as.center); set(str:self.size, expr:{as.size}*0.8)'
+      # - ''
+    x: 0
+    y: 0
+    w: 150
+    h: 150
+    color: [ 0.0, 0.0, 0.0, 0.1 ]
+    roundness: 0.12
+    border_thickness: 1.25
+    misc:
+      touchable: false
+  - !Text
+    id: Item Name
+    actions:
+      - 'as:["Item Background"] set(str:self.center, [as.center.x, expr:{as.topleft.y}+{self.pt}*0.6])'
+    x: 0
+    y: 0
+    pt: 16.0
+    color:
+      - 0.93
+      - 0.96
+      - 0.99
+      - 1.0
+    text: "{lang.bci.{ap.0}.{ap.1.{ap.2}.0}.{ap.1.{ap.2}.1.{ap.3}.0}}"
+    anchor: Center
+    decorations:
+      - color: [ 0.0, 0.0, 0.0, 0.75 ]
+        spread: 1.25
+        offset: [ 1, 2 ]
+    misc:
+      touchable: false

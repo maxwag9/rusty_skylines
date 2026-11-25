@@ -26,7 +26,13 @@ pub const BODY_IAPETUS: usize = 16;
 pub const BODY_ENCELADUS: usize = 17;
 pub const BODY_TRITON: usize = 18;
 pub const BODY_CHARON: usize = 19;
+pub const CELESTIAL_BODY_VISUAL_SCALE: f64 = 300.0;
+pub const CELESTIAL_ORBIT_VISUAL_SCALE: f64 = 30.0;
 
+pub const CELESTIAL_MOON_ORBIT_VISUAL_SCALE: f64 =
+    CELESTIAL_BODY_VISUAL_SCALE * CELESTIAL_ORBIT_VISUAL_SCALE;
+pub const PLUTO_VISUAL_SIZE_SCALE: f64 = 40.0;
+pub const CHARON_VISUAL_SIZE_SCALE: f64 = 40.0;
 const AU_KM: f64 = 149_597_870.7;
 const J2000_JD: f64 = 2451545.0;
 const OBLIQUITY_J2000_RAD: f64 = 0.40909280422232897;
@@ -576,25 +582,65 @@ pub fn compute_celestial_bodies(
     lst: f64,
     proj: Mat4,
 ) -> [CelestialBody; CELESTIAL_BODY_COUNT] {
-    let earth_heliocentric_km = planet_heliocentric_position_au(jd, EARTH_ELEMENTS) * AU_KM;
+    let earth_heliocentric_km =
+        planet_heliocentric_position_au(jd, EARTH_ELEMENTS) * AU_KM;
+
+    let visual_earth_heliocentric_km =
+        earth_heliocentric_km * CELESTIAL_ORBIT_VISUAL_SCALE;
 
     let planet_heliocentric_km: [DVec3; PLANET_COUNT] =
-        std::array::from_fn(|i| planet_heliocentric_position_au(jd, PLANET_ELEMENTS[i]) * AU_KM);
+        std::array::from_fn(|i| {
+            planet_heliocentric_position_au(jd, PLANET_ELEMENTS[i]) * AU_KM
+        });
 
     let mut bodies = [CelestialBody::default(); CELESTIAL_BODY_COUNT];
 
     for index in 0..PLANET_COUNT {
         let body_heliocentric_km = planet_heliocentric_km[index];
-        let observer_to_body_km = body_heliocentric_km - earth_heliocentric_km;
 
-        let distance_km = observer_to_body_km.length();
-        let angular_radius_rad = (PLANET_RADII_KM[index] / distance_km).atan();
+        let observer_to_body_km =
+            body_heliocentric_km - earth_heliocentric_km;
+
+        let physical_distance_km =
+            observer_to_body_km.length();
+
+        let visual_body_heliocentric_km =
+            body_heliocentric_km * CELESTIAL_ORBIT_VISUAL_SCALE;
+
+        let visual_observer_to_body_km =
+            visual_body_heliocentric_km - visual_earth_heliocentric_km;
+
+        let visual_distance_km =
+            visual_observer_to_body_km.length();
+
+        let body_size_multiplier = if index == BODY_PLUTO {
+            PLUTO_VISUAL_SIZE_SCALE
+        } else {
+            1.0
+        };
+
+        let visual_radius_km =
+            PLANET_RADII_KM[index]
+                * CELESTIAL_BODY_VISUAL_SCALE
+                * body_size_multiplier;
+
+        let angular_radius_rad =
+            (visual_radius_km / physical_distance_km).atan();
 
         bodies[index] = CelestialBody {
-            direction: ecliptic_to_local_direction(observer_to_body_km, lst),
-            angular_radius_ndc: angular_radius_rad_to_ndc_radius(proj, angular_radius_rad),
-            distance_km,
-            illumination: illuminated_fraction(body_heliocentric_km, observer_to_body_km),
+            direction: ecliptic_to_local_direction(
+                visual_observer_to_body_km,
+                lst,
+            ),
+            angular_radius_ndc: angular_radius_rad_to_ndc_radius(
+                proj,
+                angular_radius_rad,
+            ),
+            distance_km: visual_distance_km,
+            illumination: illuminated_fraction(
+                body_heliocentric_km,
+                observer_to_body_km,
+            ),
             radius_km: PLANET_RADII_KM[index],
             parent_index: -1,
             parent_relative_position_ecliptic_km: Vec3::ZERO,
@@ -605,30 +651,84 @@ pub fn compute_celestial_bodies(
     for (moon_offset, orbit) in SATELLITE_ORBITS.iter().enumerate() {
         let index = PLANET_COUNT + moon_offset;
 
-        let parent_heliocentric_km = planet_heliocentric_km[orbit.parent_index];
+        let parent_heliocentric_km =
+            planet_heliocentric_km[orbit.parent_index];
 
-        let parent_relative_position_ecliptic_km = satellite_position_ecliptic_km(jd, *orbit);
+        let parent_relative_position_ecliptic_km =
+            satellite_position_ecliptic_km(jd, *orbit);
 
-        let body_heliocentric_km = parent_heliocentric_km + parent_relative_position_ecliptic_km;
+        let body_heliocentric_km =
+            parent_heliocentric_km + parent_relative_position_ecliptic_km;
 
-        let observer_to_body_km = body_heliocentric_km - earth_heliocentric_km;
+        let observer_to_body_km =
+            body_heliocentric_km - earth_heliocentric_km;
 
-        let distance_km = observer_to_body_km.length();
-        let angular_radius_rad = (orbit.radius_km / distance_km).atan();
+        let physical_distance_km =
+            observer_to_body_km.length();
+
+        let visual_parent_heliocentric_km =
+            parent_heliocentric_km * CELESTIAL_ORBIT_VISUAL_SCALE;
+
+        // Charon's orbit receives the same additional scaling as Pluto's
+        // visual enlargement, keeping their relative proportions intact.
+        let moon_orbit_multiplier = if index == BODY_CHARON {
+            PLUTO_VISUAL_SIZE_SCALE
+        } else {
+            1.0
+        };
+
+        let visual_parent_relative_position_ecliptic_km =
+            parent_relative_position_ecliptic_km
+                * CELESTIAL_MOON_ORBIT_VISUAL_SCALE
+                * moon_orbit_multiplier;
+
+        let visual_body_heliocentric_km =
+            visual_parent_heliocentric_km
+                + visual_parent_relative_position_ecliptic_km;
+
+        let visual_observer_to_body_km =
+            visual_body_heliocentric_km - visual_earth_heliocentric_km;
+
+        let visual_distance_km =
+            visual_observer_to_body_km.length();
+
+        let body_size_multiplier = if index == BODY_CHARON {
+            CHARON_VISUAL_SIZE_SCALE
+        } else {
+            1.0
+        };
+
+        let visual_radius_km =
+            orbit.radius_km
+                * CELESTIAL_BODY_VISUAL_SCALE
+                * body_size_multiplier;
+
+        let angular_radius_rad =
+            (visual_radius_km / physical_distance_km).atan();
 
         bodies[index] = CelestialBody {
-            direction: ecliptic_to_local_direction(observer_to_body_km, lst),
-            angular_radius_ndc: angular_radius_rad_to_ndc_radius(proj, angular_radius_rad),
-            distance_km,
-            illumination: illuminated_fraction(body_heliocentric_km, observer_to_body_km),
+            direction: ecliptic_to_local_direction(
+                visual_observer_to_body_km,
+                lst,
+            ),
+            angular_radius_ndc: angular_radius_rad_to_ndc_radius(
+                proj,
+                angular_radius_rad,
+            ),
+            distance_km: visual_distance_km,
+            illumination: illuminated_fraction(
+                body_heliocentric_km,
+                observer_to_body_km,
+            ),
             radius_km: orbit.radius_km,
             parent_index: orbit.parent_index as i32,
             parent_relative_position_ecliptic_km: Vec3::new(
-                parent_relative_position_ecliptic_km.x as f32,
-                parent_relative_position_ecliptic_km.y as f32,
-                parent_relative_position_ecliptic_km.z as f32,
+                visual_parent_relative_position_ecliptic_km.x as f32,
+                visual_parent_relative_position_ecliptic_km.y as f32,
+                visual_parent_relative_position_ecliptic_km.z as f32,
             ),
-            parent_distance_km: parent_relative_position_ecliptic_km.length(),
+            parent_distance_km:
+            visual_parent_relative_position_ecliptic_km.length(),
         };
     }
 

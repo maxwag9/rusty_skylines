@@ -22,6 +22,7 @@ saves_menu:
 
 create_save:
   world_name: "World Name"
+  terrain_preset: "Terrain Preset Name"
   create_finally: "postvar:repvar:Create Save: '{new_save_name}'"
   slider:
     difficulty:
@@ -109,7 +110,34 @@ settings:
         Performance: "Performance"
         High: "High"
         Ultra: "Ultra"
-
+    camera_tracking_target:
+      name: "Track Celestial Body"
+      options:
+        None: "Disabled"
+        Sol: "Sol"
+        Luna: "Luna"
+        Earth: "Earth (Nadir)"
+        Mercury: "Mercury"
+        Venus: "Venus"
+        Mars: "Mars"
+        Jupiter: "Jupiter"
+        Saturn: "Saturn"
+        Uranus: "Uranus"
+        Neptune: "Neptune"
+        Pluto: "Pluto"
+        PlutoCharonBarycenter: "Pluto/Charon Barycenter"
+        Io: "Io"
+        Europa: "Europa"
+        Ganymede: "Ganymede"
+        Callisto: "Callisto"
+        Titan: "Titan"
+        Rhea: "Rhea"
+        Tethys: "Tethys"
+        Dione: "Dione"
+        Iapetus: "Iapetus"
+        Enceladus: "Enceladus"
+        Triton: "Triton"
+        Charon: "Charon"
   slider:
     render_distance: "Render Distance"
     generation_distance: "Generation Distance"
@@ -123,7 +151,7 @@ settings:
     vignette_strength: "Vignette Strength"
     vignette_radius: "Vignette Radius"
     vignette_softness: "Vignette Softness"
-
+    edge_scrolling_size: "Edge Scrolling Area"
     shadow_quality_options:
       potato: "Potato"
       low: "Low"
@@ -136,3 +164,21 @@ languages:
   language: "Language"
 
 audio_jungle: "Audio Jungle"
+
+bci:
+  Roads:
+    _name: "Roads" #  in LOCALE!!
+    Expensive:
+      _name: "Expensive"
+      suburban_road: "Suburban Road"
+      urban_road: "Urban Road"
+      urban_avenue: "Urban Avenue"
+      major_avenue: "Major Avenue"
+    Cheap:
+      _name: "Cheap"
+      boulevard: "Boulevard"
+      rural_road: "Rural Road"
+      country_lane: "Country Lane"
+      highway: "Highway"
+      motorway: "Motorway"
+      pedestrian_street: "Pedestrian Street"

@@ -1,7 +1,7 @@
 use crate::commands::Command;
 use crate::data::Settings;
 use crate::helpers::mouse_ray::WorldRay;
-use crate::renderer::render_core::Renderer;
+use crate::renderer::renderer::Renderer;
 use crate::ui::input::Input;
 use crate::ui::ui_editor::Ui;
 use crate::world::buildings::zoning::Zoning;

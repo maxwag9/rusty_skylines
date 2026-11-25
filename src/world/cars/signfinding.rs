@@ -91,7 +91,7 @@
 //
 
 use crate::data::Settings;
-use crate::helpers::positions::{LocalPos, WorldPos};
+use rusty_skylines_utils::positions::{LocalPos, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::resources::Time;
 use crate::ui::variables::Variables;
@@ -100,7 +100,7 @@ use crate::world::buildings::zoning::{
     DistrictId, Lot, LotEntrance, LotId, LotLayout, ParkingSpot, ParkingSpotLotInfo, TilePos,
     ZoningStorage,
 };
-use crate::world::cars::car_player::sanitize_quat;
+use crate::world::cars::car_player::{sanitize_quat, PlayerControls, simulate_player_trajectory};
 use crate::world::cars::car_render::CarChange;
 use crate::world::cars::car_simulation::{CarTrajectory, CarTrajectoryPoint};
 use crate::world::cars::car_structs::{Car, CarId, CarMode, CarStorage, SimTime};
@@ -182,6 +182,7 @@ pub fn make_new_trajectory(
     zoning: &ZoningStorage,
     parking_storage: &ParkingStorage,
     sf_options: &SignFindingOptions,
+    player_controls: PlayerControls,
 ) -> Result<
     (
         Option<CarSignfindingTrajectory>,
@@ -193,6 +194,28 @@ pub fn make_new_trajectory(
     let origin = WorldPos::new(car.pos.chunk, LocalPos::zero());
     let now = time.sim_time();
 
+    let mut callback = TrajectoryCallback {
+        is_last_turn: false,
+        car_changes: vec![],
+    };
+
+    if matches!(&car.mode, CarMode::Player) {
+        let duration =
+            sf_options.physical_traj_duration.min(0.08).max(1.0 / 120.0);
+
+        let trajectory = simulate_player_trajectory(
+            car,
+            player_controls,
+            origin,
+            now,
+            duration,
+        );
+
+        return Ok((None, Some(trajectory), callback));
+    }
+    if matches!(car.mode, CarMode::None) {
+        return Ok((None, None, callback));
+    }
     let Some(building) = buildings.storage.get(
         car.mode
             .destination()
@@ -200,14 +223,10 @@ pub fn make_new_trajectory(
     ) else {
         return Err(MakeNewTrajectoryError::CarModeIsParked);
     };
+
     let Some(lot) = zoning.get_lot(building.lot_id) else {
         return Err(MakeNewTrajectoryError::LotDoesntExist);
     };
-    let mut callback = TrajectoryCallback {
-        is_last_turn: false,
-        car_changes: vec![],
-    };
-    let entrance = lot.entrance;
     let mut car_mode = car.mode.clone();
     if let Some(lot_layout) = lot.layout.as_ref() {
         let closest = lot_layout
@@ -363,7 +382,7 @@ pub fn make_new_trajectory(
         //
         // let traj = simulate_point_path_follow(car, parking_points, origin, now, sf_options);
         CarMode::Parked(..) => Err(MakeNewTrajectoryError::CarModeIsParked),
-        CarMode::None => Ok((None, None, callback)),
+        CarMode::None | CarMode::Player => Ok((None, None, callback)),
     }
 }
 

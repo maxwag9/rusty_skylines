@@ -1,7 +1,7 @@
 // intersections.rs - Fixed Clipper2 API usage
 
 use crate::data::Settings;
-use crate::helpers::positions::{ChunkCoord, WorldPos, chunk_size};
+use rusty_skylines_utils::positions::{ChunkCoord, WorldPos, chunk_size};
 use crate::renderer::gizmo::gizmo::{DEBUG_DRAW_DURATION, Gizmo, ROAD_GIZMO_THICKNESS};
 use crate::world::roads::road_editor::{polyline_cumulative_lengths, sample_polyline_at};
 use crate::world::roads::road_helpers::*;
@@ -359,9 +359,9 @@ fn create_corridor_end_clips(
             let dir = Vec2::new(arm.direction().x, arm.direction().z).normalize_or_zero();
             let perp = Vec2::new(-dir.y, dir.x);
 
-            let half_width = arm.half_width() + road_type.sidewalk_width + 2.0;
+            let half_width = arm.half_width() + road_type.sidewalk_width() + 2.0;
             let clip_start = corridor_len - 0.05;
-            let clip_end = corridor_len + road_type.sidewalk_width + 10.0;
+            let clip_end = corridor_len + road_type.sidewalk_width() + 10.0;
 
             LocalPolygon::new(vec![
                 dir * clip_start - perp * half_width,
@@ -559,7 +559,7 @@ impl IntersectionBuildParams {
     pub fn from_params(params: &RoadStyleParams, road_types: &RoadTypes) -> Self {
         if let Some(road_type) = params.road_type(road_types) {
             IntersectionBuildParams {
-                turn_tightness: road_type.turn_tightness,
+                turn_tightness: road_type.turn_tightness(),
                 ..Default::default()
             }
         } else {
@@ -1096,11 +1096,11 @@ fn build_polygon_curbs_filtered(
         let owner_b = closest_arm_index(b, &arms);
         let road_type_b = arm_road_types[owner_b];
 
-        let top_a = road_type_a.sidewalk_height;
-        let bottom_a = road_type_a.lane_height;
+        let top_a = road_type_a.sidewalk_height();
+        let bottom_a = road_type_a.lane_height();
 
-        let top_b = road_type_b.sidewalk_height;
-        let bottom_b = road_type_b.lane_height;
+        let top_b = road_type_b.sidewalk_height();
+        let bottom_b = road_type_b.lane_height();
 
         let height_diff_a = top_a - bottom_a;
         let height_diff_b = top_b - bottom_b;
@@ -1157,28 +1157,28 @@ fn build_polygon_curbs_filtered(
         vertices.push(road_vertex(
             p0,
             normal.to_array(),
-            road_type_a.sidewalk_material_id,
+            road_type_a.sidewalk_material_id(),
             u0,
             v0,
         ));
         vertices.push(road_vertex(
             p1,
             normal.to_array(),
-            road_type_b.sidewalk_material_id,
+            road_type_b.sidewalk_material_id(),
             u1,
             v0,
         ));
         vertices.push(road_vertex(
             p2,
             normal.to_array(),
-            road_type_b.sidewalk_material_id,
+            road_type_b.sidewalk_material_id(),
             u1,
             v1,
         ));
         vertices.push(road_vertex(
             p3,
             normal.to_array(),
-            road_type_a.sidewalk_material_id,
+            road_type_a.sidewalk_material_id(),
             u0,
             v1,
         ));
@@ -1227,7 +1227,7 @@ pub fn mesh_intersection(
     let asphalt_hw: Vec<f32> = arms
         .iter()
         .zip(arm_road_types.iter())
-        .map(|(arm, road_type)| (arm.half_width() - road_type.sidewalk_width).max(0.5))
+        .map(|(arm, road_type)| (arm.half_width() - road_type.sidewalk_width()).max(0.5))
         .collect();
 
     // // Corridor LENGTHS, JUST THE LENGTHS use the ENTIRE half_width just like in compute_intersection_geometry()!! Prevents insanely annoying mismatch bugs. // Doesn't matter I do it somewhere else now anyway.
@@ -1239,7 +1239,7 @@ pub fn mesh_intersection(
         .map(|((arm, road_type), &len)| {
             let dir_2d = arm.direction().xz();
 
-            let asphalt_half_width = (arm.half_width() - road_type.sidewalk_width).max(0.5);
+            let asphalt_half_width = (arm.half_width() - road_type.sidewalk_width()).max(0.5);
 
             LocalPolygon::corridor(dir_2d, asphalt_half_width, len)
         })
@@ -1304,14 +1304,14 @@ pub fn mesh_intersection(
 
         set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos, true);
 
-        pos.local.y += road_type.lane_height;
+        pos.local.y += road_type.lane_height();
         let local = *p2d - asphalt_centroid;
         let u = (local.x * config.uv_scale_u) + 0.5;
         let v = (local.y * config.uv_scale_v) + 0.5;
         vertices.push(road_vertex(
             pos,
             [0.0, 1.0, 0.0],
-            road_type.lane_material_id,
+            road_type.lane_material_id(),
             u,
             v,
         ));
@@ -1319,7 +1319,7 @@ pub fn mesh_intersection(
 
     triangulate_polygon(&asphalt_simplified.points, asphalt_base, indices);
 
-    let full_simplified = if arm_road_types.iter().any(|rt| rt.sidewalk_width > 0.01) {
+    let full_simplified = if arm_road_types.iter().any(|rt| rt.sidewalk_width() > 0.01) {
         let mut full_corridors: Vec<LocalPolygon> = arms
             .iter()
             .zip(corridor_lengths.iter())
@@ -1362,7 +1362,7 @@ pub fn mesh_intersection(
             .zip(corridor_lengths.iter())
             .map(|((arm, &road_type), &len)| {
                 let dir_2d = arm.direction().xz();
-                let asphalt_half_width = (arm.half_width() - road_type.sidewalk_width).max(0.5);
+                let asphalt_half_width = (arm.half_width() - road_type.sidewalk_width()).max(0.5);
                 LocalPolygon::corridor(dir_2d, asphalt_half_width, len)
             })
             .collect();
@@ -1576,13 +1576,13 @@ fn compute_intersection_geometry(
     let sidewalk_polygon = if arms
         .iter()
         .flat_map(|a| a.road_type(storage, road_types))
-        .any(|road_type| road_type.sidewalk_width > 0.01)
+        .any(|road_type| road_type.sidewalk_width() > 0.01)
     {
         let asphalt_hw: Vec<f32> = arms
             .iter()
             .map(|arm| {
                 let road_type = arm.road_type(storage, road_types).unwrap();
-                (arm.half_width() - road_type.sidewalk_width).max(0.5)
+                (arm.half_width() - road_type.sidewalk_width()).max(0.5)
             })
             .collect();
 
@@ -1594,7 +1594,7 @@ fn compute_intersection_geometry(
 
                 let dir_2d = Vec2::new(arm.direction().x, arm.direction().z);
 
-                let asphalt_half_width = (arm.half_width() - road_type.sidewalk_width).max(0.5);
+                let asphalt_half_width = (arm.half_width() - road_type.sidewalk_width()).max(0.5);
 
                 LocalPolygon::corridor(dir_2d, asphalt_half_width, len)
             })
@@ -1720,7 +1720,7 @@ fn build_intersection_sidewalk_mesh(
         let road_type = arm_road_types[owner];
         let mut pos = center.add_vec3(Vec3::new(p2d.x, 0.0, p2d.y));
         set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos, true);
-        pos.local.y += road_type.sidewalk_height;
+        pos.local.y += road_type.sidewalk_height();
 
         let local = *p2d - centroid;
         let u = (local.x * config.uv_scale_u) + 0.5;
@@ -1728,7 +1728,7 @@ fn build_intersection_sidewalk_mesh(
         vertices.push(road_vertex(
             pos,
             [0.0, 1.0, 0.0],
-            road_type.sidewalk_material_id,
+            road_type.sidewalk_material_id(),
             u,
             v,
         ));
@@ -1759,8 +1759,8 @@ pub fn gather_arms(
             let Some(road_type) = road_types.get_road_type(segment.road_type_id) else {
                 return None;
             };
-            let lane_width = road_type.lane_width;
-            let sidewalk_width = road_type.sidewalk_width;
+            let lane_width = road_type.lane_width();
+            let sidewalk_width = road_type.sidewalk_width();
 
             let lane_ids: Vec<LaneId> = segment
                 .lanes()

@@ -1,5 +1,5 @@
 use crate::helpers::modpack::ModManager;
-use crate::helpers::positions::WorldPos;
+use rusty_skylines_utils::positions::WorldPos;
 use crate::world::buildings::buildings::BuildingId;
 use crate::world::buildings::utilities::utilities::{
     Utility, UtilityId, UtilityRail, UtilityUsage,
@@ -258,9 +258,8 @@ pub struct UtilityNetwork {
 }
 
 impl UtilityNetwork {
-    pub fn new(mod_manager: &ModManager) -> UtilityNetwork {
+    pub fn new() -> UtilityNetwork {
         let mut net = UtilityNetwork::default();
-        net.load(mod_manager);
         net.network_dirty = true;
         net
     }

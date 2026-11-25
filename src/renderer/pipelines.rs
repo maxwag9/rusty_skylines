@@ -1,5 +1,5 @@
 use crate::data::{Settings, ShadowType};
-use crate::helpers::positions::chunk_size;
+use rusty_skylines_utils::positions::chunk_size;
 use crate::renderer::pipelines_outsource::*;
 use crate::renderer::shadows::{CSM_CASCADES, CascadedShadowMap, create_csm_shadow_texture};
 use crate::renderer::taa::taa_jitter_pair;
@@ -12,17 +12,6 @@ use strum_macros::{Display, EnumString};
 use wgpu::TextureFormat::{R32Float, Rgba8Unorm, Rgba16Float};
 use wgpu::*;
 use wgpu_render_manager::renderer::RenderManager;
-
-#[macro_export]
-macro_rules! time_call {
-    ($label:expr, $expr:expr) => {{
-        let start = Instant::now();
-        let result = $expr;
-        let elapsed = start.elapsed();
-        println!("{:<40} {:>8.3} ms", $label, elapsed.as_secs_f64() * 1000.0);
-        result
-    }};
-}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1067,7 +1056,7 @@ pub fn make_new_camera_uniforms(
         cascade_splits,
 
         sun_direction: sun.to_array(),
-        time: time_system.total_time as f32,
+        time: time_system.total_time.rem_euclid(4096.0) as f32,
         moon_direction: moon.to_array(),
         orbit_radius: camera.orbit_radius,
 
@@ -1092,6 +1081,7 @@ pub fn make_new_camera_uniforms(
         },
         near_far_depth: [camera.near, camera.far],
         solar_eclipse_coverage,
-        _pad_eclipse: [0.0; 3],
+        game_time: time_system.total_game_time.rem_euclid(4096.0) as f32,
+        _pad_eclipse: [0.0; 2],
     }
 }

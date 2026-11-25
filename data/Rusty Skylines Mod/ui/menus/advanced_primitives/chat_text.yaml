@@ -3,7 +3,11 @@ elements:
   - !Text
     id: button_text
     actions:
-      - set(str:self.text, var:{ap.2}); set(str:self.template, var:{ap.2}); set(str:self.center.y, expr:lerp({chat_bottom}-{text_line_height_chat}, {chat_top}, {ap.1}/({texts_amount_chat}-1)));  # print({ap.1})              #print(var:{ap.2});
+      - on:activated, set(expr:"{ap.2}"+".changed_time", 0.0);     # print(expr:"{ap.2}"+".changed_time")
+      - ifvareq(self.text, {ap.2}.0, , set(expr:"{ap.2}"+".changed_time", total_time)); #printnc([self.text, str:{ap.2}])
+      - set(str:self.tt, var:{ap.2}.0); set(str:self.center.y, expr:lerp({chat_bottom}-{text_line_height_chat}, {chat_top}, {ap.1}/({texts_amount_chat}-1)));  # print({ap.1})              #print(var:{ap.2});
+      #- if(expr:{CHAT_OPEN}||({total_time}<{TIME_SINCE_CHAT_CLOSED??({total_time}-3.0)}+3.0), set(str:self.color.fill.a, 1.0); set(str:self.color.deco.0.a, 1.0), set(str:self.color.fill.a, expr:{self.color.fill.a}*0.96); set(str:self.color.deco.0.a, expr:{self.color.deco.0.a}*0.96); )
+      - if(expr:!{CHAT_OPEN}, if(expr:{total_time}>({{ap.2}.2}+7.0), set(str:self.color.fill.a, 0.0); set(str:self.color.deco.0.a, 0.0), set(str:c, expr:1-clamp(({total_time}-({{ap.2}.2}+5.0))/2.0, 0.0, 1.0)); set(str:self.color.fill.a, c); set(str:self.color.deco.0.a, c);), set(str:self.color.fill.a, 1.0); set(str:self.color.deco.0.a, 1.0))
     x: 0
     y: 0
     pt: 15.0

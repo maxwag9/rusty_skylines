@@ -1,10 +1,11 @@
+use std::f32::consts::{PI, TAU};
 use crate::data::Settings;
 use crate::helpers::hsv::lerp;
 use crate::helpers::mouse_ray::{cursor_ray, make_zoom_anchor, solve_cursor_angles};
-use crate::helpers::positions::*;
+use rusty_skylines_utils::positions::*;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::{Mat4, Vec2, Vec3};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CameraMode {
@@ -228,6 +229,11 @@ pub struct CameraController {
     mode_transition: Option<ModeTransition>,
     zoom_anchor: Option<ZoomAnchor>,
     zoom_from_fov: f32,
+    tracking_previous_mode: Option<CameraMode>,
+    zoom_locked: bool,
+    zoom_unlock_on_release: bool,
+    zoom_button_was_down: bool,
+    last_zoom_press: Option<Instant>,
 }
 
 impl CameraController {
@@ -252,7 +258,55 @@ impl CameraController {
             mode_transition: None,
             zoom_anchor: None,
             zoom_from_fov: 14.0,
+            tracking_previous_mode: None,
+            zoom_locked: false,
+            zoom_unlock_on_release: false,
+            zoom_button_was_down: false,
+            last_zoom_press: None,
         }
+    }
+
+    pub fn update_celestial_tracking(
+        &mut self,
+        camera: &mut Camera,
+        direction: Option<Vec3>,
+    ) {
+        let Some(direction) = direction else {
+            if let Some(previous_mode) = self.tracking_previous_mode.take() {
+                camera.set_mode(previous_mode);
+
+                self.target_yaw = camera.yaw;
+                self.target_pitch = camera.pitch;
+            }
+
+            return;
+        };
+
+        let direction = direction.normalize_or_zero();
+
+        if direction.length_squared() < 1e-8 {
+            return;
+        }
+
+        if self.tracking_previous_mode.is_none() {
+            self.tracking_previous_mode = Some(camera.mode);
+        }
+
+        if camera.mode != CameraMode::FirstPerson {
+            camera.set_mode(CameraMode::FirstPerson);
+        }
+
+        let desired_yaw = (-direction.z).atan2(-direction.x);
+
+        let yaw_delta = (desired_yaw - camera.yaw + PI).rem_euclid(TAU) - PI;
+
+        self.target_yaw = camera.yaw + yaw_delta;
+
+        self.target_pitch = (-direction.y.clamp(-1.0, 1.0)).asin().clamp(-89.99_f32.to_radians(), 89.99_f32.to_radians());
+    }
+
+    pub fn is_celestial_tracking(&self) -> bool {
+        self.tracking_previous_mode.is_some()
     }
 
     /// Entry point for input code: switches `camera.mode` and starts a short
@@ -266,6 +320,9 @@ impl CameraController {
         self.zoom_time_start = None;
         self.zoom_time_end = None;
         self.zoom_anchor = None;
+        self.zoom_locked = false;
+        self.zoom_unlock_on_release = false;
+        self.last_zoom_press = None;
         let from_fov = camera.fov;
         let from_near = camera.near;
 
@@ -418,7 +475,70 @@ impl CameraController {
 
         self.preserve_cursor_ray(camera, anchor, world_direction);
     }
+    pub fn update_zoom_input(
+        &mut self,
+        camera: &mut Camera,
+        zooming: bool,
+        zoom_speed: f32,
+        unzoom_speed: f32,
+        cursor_position: Vec2,
+        viewport_size: Vec2,
+    ) {
+        let now = Instant::now();
 
+        let just_pressed = zooming && !self.zoom_button_was_down;
+        let just_released = !zooming && self.zoom_button_was_down;
+
+        self.zoom_button_was_down = zooming;
+
+        if just_pressed {
+            if self.zoom_locked {
+                self.zoom_unlock_on_release = true;
+            } else {
+                let double_clicked = self.last_zoom_press.is_some_and(|last| {
+                    now.duration_since(last) <= Duration::from_millis(350)
+                });
+
+                if double_clicked {
+                    self.zoom_locked = true;
+                    self.zoom_unlock_on_release = false;
+                    self.last_zoom_press = None;
+                    self.zoom_time_end = None;
+                } else {
+                    self.last_zoom_press = Some(now);
+                }
+            }
+        }
+
+        if zooming || self.zoom_locked {
+            self.zoom_at_cursor(
+                camera,
+                zoom_speed,
+                cursor_position,
+                viewport_size,
+            );
+        }
+
+        if just_released {
+            if self.zoom_locked {
+                if self.zoom_unlock_on_release {
+                    self.zoom_locked = false;
+                    self.zoom_unlock_on_release = false;
+                    self.zoom_deactivate(camera);
+                }
+            } else if self.zoom_time_start.is_some() {
+                self.zoom_deactivate(camera);
+            }
+        }
+
+        if !self.zoom_locked {
+            self.zoom_end(camera, unzoom_speed);
+        }
+    }
+
+    pub fn is_zoom_locked(&self) -> bool {
+        self.zoom_locked
+    }
     fn preserve_cursor_ray(
         &mut self,
         camera: &mut Camera,

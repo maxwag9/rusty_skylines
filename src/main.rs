@@ -10,6 +10,7 @@ mod simulation;
 mod systems;
 mod ui;
 pub mod world;
+pub mod mini_renderer;
 
 use crate::app::GAME_VERSION;
 use crate::helpers::{get_start_message, print_exit_message};

@@ -1,8 +1,6 @@
 use crate::commands::CommandBuffer;
 use crate::data::Settings;
 use crate::helpers::modpack::ModManager;
-use crate::helpers::positions::chunk_size;
-use crate::renderer::props::Props;
 use crate::resources::Time;
 use crate::ui::input::Input;
 use crate::world::buildings::buildings::Buildings;
@@ -10,6 +8,7 @@ use crate::world::buildings::zoning::Zoning;
 use crate::world::camera::camera::CameraMode;
 use crate::world::cars::car_subsystem::Cars;
 use crate::world::game_state::GameState;
+use crate::world::props::props::Props;
 use crate::world::roads::road_subsystem::Roads;
 use crate::world::sound::sound::Sounds;
 use crate::world::statisticals::CityState;
@@ -18,6 +17,7 @@ use crate::world::world_state::WorldState;
 use glam::Vec3;
 use rand::RngExt;
 use rand::rngs::ThreadRng;
+use rusty_skylines_utils::positions::chunk_size;
 use wgpu::{Device, Queue};
 
 pub struct World {
@@ -28,6 +28,7 @@ pub struct World {
     pub terrain: Terrain,
     pub roads: Roads,
     pub cars: Cars,
+    pub props: Props,
     pub buildings: Buildings,
     pub zoning: Zoning,
     pub city_state: CityState, // ... other sim-only subsystems (economy, citizens, etc.)
@@ -39,12 +40,11 @@ impl World {
     pub fn new(
         device: &Device,
         queue: &Queue,
-        settings: &Settings,
-        props: &Props,
-        mod_manager: &ModManager,
+        settings: &Settings
     ) -> Self {
         let world_state = WorldState::new();
-        let terrain = Terrain::new(device, queue, settings, props);
+        let props = Props::new();
+        let terrain = Terrain::new(device, queue, settings, &props);
         Self {
             world_state,
             time: Time::new(),
@@ -52,29 +52,34 @@ impl World {
             terrain,
             roads: Roads::new(),
             cars: Cars::new(),
-            buildings: Buildings::new(mod_manager),
+            props,
+            buildings: Buildings::new(),
             zoning: Zoning::new(),
             events: CommandBuffer::new(),
             city_state: CityState::new(),
-            sounds: Sounds::new(mod_manager),
+            sounds: Sounds::new_silent(),
             panorama: false,
         }
     }
-    pub fn recreate(&mut self, settings: &Settings, props: &Props, mod_manager: &ModManager) {
+    pub fn recreate(&mut self, settings: &Settings, mod_manager: &ModManager) {
         *self = World::new(
             &self.terrain.device.clone(),
             &self.terrain.queue.clone(),
-            settings,
-            props,
-            mod_manager,
-        )
+            settings
+        );
+        self.reload(settings, mod_manager);
     }
-
-    pub fn reload(&mut self, settings: &Settings, props: &Props, mod_manager: &ModManager) {
+    pub fn recreate_light(&mut self) {
+        self.terrain.clear();
+        self.roads.clear();
+    }
+    pub fn reload(&mut self, settings: &Settings, mod_manager: &ModManager) {
         self.buildings.utilities.load(mod_manager);
         self.buildings.catalog.load(mod_manager);
-        self.terrain.recreate_generator(props, mod_manager);
-        self.sounds = Sounds::new(mod_manager);
+        self.terrain.recreate_generator(&self.props, mod_manager);
+        self.sounds = Sounds::new(Some(mod_manager));
+        self.roads.road_manager.road_types.load(mod_manager);
+        self.props.load_prop_definitions(mod_manager);
     }
 
     pub fn start_panorama(&mut self, game_state: &GameState) {

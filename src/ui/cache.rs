@@ -1,4 +1,4 @@
-use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
+use crate::renderer::ui::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::ui::actions::style_to_u32;
 use crate::ui::helper::triangulate_polygon;
 use crate::ui::text_formatting::{
@@ -104,7 +104,8 @@ pub fn rebuild_text_cache(
             }
             //println!("{}", text_width);
             let cache = t.cache.get_or_insert_with(TextParams::default);
-
+            t.width = text_width;
+            t.height = text_height;
             *cache = TextParams {
                 pos: [t.x, t.y],
                 pt: t.pt,

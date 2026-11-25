@@ -1,19 +1,19 @@
 use crate::data::Settings;
 use crate::helpers::modpack::ModManager;
 use crate::helpers::paths::saves_dir;
-use crate::helpers::positions::{ChunkSize, WorldPos, chunk_size, set_chunk_size};
-use crate::renderer::props::{Props, SavedProps};
 use crate::resources::Time;
 use crate::ui::parser::Value;
 use crate::ui::variables::Variables;
 use crate::world::buildings::buildings::BuildingStorage;
 use crate::world::buildings::zoning::ZoningStorage;
 use crate::world::cars::partitions::PartitionManager;
-use crate::world::roads::roads::{RoadStorage, RoadTypes};
+use crate::world::props::props::{Props, SavedProps};
+use crate::world::roads::roads::{RoadStorage, RoadTypes, RoadTypesData};
 use crate::world::statisticals::CityState;
 use crate::world::terrain::terrain_editing::TerrainEdit;
 use crate::world::world::World;
 use revision::revisioned;
+use rusty_skylines_utils::positions::{ChunkSize, WorldPos, set_chunk_size};
 use sanitize_filename::sanitize;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -21,6 +21,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs, mem};
+use std::collections::BTreeMap;
 use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter, EnumString};
 
@@ -149,28 +150,6 @@ pub enum SaveResult {
 //         }
 //     }
 // }
-
-const SAVE_MAGIC: &str = "RSS1";
-
-#[derive(Debug, Clone)]
-pub struct SaveHeader {
-    pub name: String,
-    pub version: SaveVersion,
-    pub timestamp_unix: u128,
-    pub chunk_size: ChunkSize,
-    pub difficulty: String,
-}
-impl Default for SaveHeader {
-    fn default() -> Self {
-        SaveHeader {
-            name: String::new(),
-            version: SaveVersion::current(),
-            timestamp_unix: 0,
-            chunk_size: default_chunk_size(),
-            difficulty: "Easy".to_string(),
-        }
-    }
-}
 macro_rules! parse_save_header {
     ($bytes:expr, $($field:ident : $ty:ty),* $(,)?) => {{
         let text = String::from_utf8_lossy($bytes);
@@ -185,9 +164,8 @@ macro_rules! parse_save_header {
             match key {
                 $(
                     stringify!($field) => {
-                        if let Ok(parsed) = value.trim().parse::<$ty>() {
-                            header.$field = parsed;
-                        }
+                        let parsed: $ty = value.trim().parse().unwrap_or_default();
+                        header.$field = parsed;
                     }
                 )*
                 _ => {}
@@ -197,6 +175,41 @@ macro_rules! parse_save_header {
         header
     }};
 }
+const SAVE_MAGIC: &str = "RSS1";
+
+#[derive(Debug, Clone)]
+pub struct SaveHeader {
+    pub name: String,
+    pub version: SaveVersion,
+    pub timestamp_unix: u128,
+    pub chunk_size: ChunkSize,
+    pub difficulty: String,
+    pub terrain_preset_name: String
+}
+impl Default for SaveHeader {
+    fn default() -> Self {
+        SaveHeader {
+            name: String::new(),
+            version: SaveVersion::current(),
+            timestamp_unix: 0,
+            chunk_size: default_chunk_size(),
+            difficulty: "Easy".to_string(),
+            terrain_preset_name: "Default".to_string(),
+        }
+    }
+}
+fn parse_the_save_header(data: &[u8]) -> SaveHeader {
+    parse_save_header!(
+        data,
+        name: String,
+        version: SaveVersion,
+        timestamp_unix: u128,
+        chunk_size: ChunkSize,
+        difficulty: String,
+        terrain_preset_name: String,
+    )
+}
+
 
 fn sanitize_header_value(s: &str) -> String {
     s.chars()
@@ -208,6 +221,15 @@ fn sanitize_header_value(s: &str) -> String {
 }
 
 fn build_save_header(save: &SaveInfo) -> String {
+    let chunk_size = if save.chunk_size == 0 {
+        default_chunk_size()
+    } else {
+        save.chunk_size
+    };
+    let timestamp_unix = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
     format!(
         "{magic}\n\
 name={name}\n\
@@ -215,16 +237,18 @@ version={version}\n\
 timestamp_unix={timestamp}\n\
 chunk_size={chunk_size:?}\n\
 difficulty={difficulty}\n\
+terrain_preset_name={terrain_preset_name}\n\
 compression=zstd\n\
 payload=compressed_binary\n\
 all_of_this_crap_is_for_your_enjoyment\n\
 \n",
         magic = SAVE_MAGIC,
         name = sanitize_header_value(&save.name),
-        version = sanitize_header_value(&save.load_result.to_string()),
-        timestamp = save.timestamp_unix,
-        chunk_size = save.chunk_size,
-        difficulty = sanitize_header_value(&save.difficulty)
+        version = sanitize_header_value(SaveVersion::current().to_string().as_str()),
+        timestamp = timestamp_unix,
+        chunk_size = chunk_size,
+        difficulty = sanitize_header_value(&save.difficulty),
+        terrain_preset_name = sanitize_header_value(&save.terrain_preset_name)
     )
 }
 
@@ -240,6 +264,7 @@ fn find_header_end(data: &[u8]) -> Option<usize> {
 pub struct NewSavePackage {
     pub name: String,
     pub difficulty: String,
+    pub preset_name: String,
 }
 #[derive(Default)]
 pub struct GameState {
@@ -254,13 +279,16 @@ impl GameState {
             mod_manager: ModManager::new(),
         }
     }
-
+    pub fn new_off() -> Self {
+        Self {
+            current_save_info: None,
+            mod_manager: ModManager::new_off(),
+        }
+    }
     pub fn create_save(
         &mut self,
         world: &mut World,
-        props: &Props,
         settings: &Settings,
-        variables: &mut Variables,
         new_save_package: NewSavePackage,
     ) -> SaveResult {
         let save_name = make_safe_save_name(new_save_package.name.as_str());
@@ -286,18 +314,19 @@ impl GameState {
         self.current_save_info = Some(SaveInfo {
             name: save_name.clone(),
             difficulty: new_save_package.difficulty,
+            terrain_preset_name: new_save_package.preset_name,
             ..SaveInfo::default()
         });
 
-        let result = self.save(world, props, settings, variables, false);
+        let result = self.save(world, settings, false);
 
         match result {
             SaveResult::Success => {
-                println!("Created World '{}'", save_name);
+                println!("[Saves] Created World '{}'", save_name);
             }
 
             ref e => {
-                eprintln!("Failed to create World '{}': {:?}", save_name, e);
+                eprintln!("[Saves] Failed to create World '{}': {:?}", save_name, e);
 
                 self.current_save_info = None;
             }
@@ -310,16 +339,14 @@ impl GameState {
         &mut self,
         save_name: &str,
         world: &mut World,
-        props: &mut Props,
-        settings: &Settings,
-        variables: &mut Variables,
+        settings: &Settings
     ) -> LoadResult {
         let save_name = make_safe_save_name(save_name);
         if save_name.is_empty() {
             return LoadResult::EmptyName;
         }
         let path = saves_dir().join(format!("{}.rss", save_name));
-        let detected_version: SaveVersion;
+        let mut header: SaveHeader;
         let mut load_save: SaveState;
         match path.try_exists() {
             Ok(true) => {
@@ -342,8 +369,7 @@ impl GameState {
                     (b"" as &[u8], &data[..])
                 };
 
-                let header = parse_the_save_header(header_bytes);
-                detected_version = header.version.clone();
+                header = parse_the_save_header(header_bytes);
 
                 let decompressed = match zstd::decode_all(payload) {
                     Ok(d) => d,
@@ -355,7 +381,6 @@ impl GameState {
                 };
 
                 load_save = save_state;
-                load_save.name = save_name.to_string();
             }
             Ok(false) => {
                 self.current_save_info = Some(SaveInfo::default());
@@ -363,10 +388,10 @@ impl GameState {
                     .as_mut()
                     .map(|s| s.name = save_name.to_string());
 
-                match self.save(world, props, settings, variables, false) {
+                match self.save(world, settings, false) {
                     SaveResult::Success => {
                         // Load the save I just created.
-                        return self.load(save_name.as_str(), world, props, settings, variables);
+                        return self.load(save_name.as_str(), world, settings);
                     }
                     e => {
                         self.current_save_info = None;
@@ -376,20 +401,24 @@ impl GameState {
             }
             Err(e) => return LoadResult::PathError(e.to_string()),
         }
+        if header.chunk_size == 0 {
+            header.chunk_size = default_chunk_size();
+        }
+        set_chunk_size(header.chunk_size);
+        load_save.load(world, &self.mod_manager, &header);
 
-        load_save.load(world, props, &self.mod_manager);
-
-        let success = LoadResult::Success(detected_version);
+        let success = LoadResult::Success(header.version);
         self.current_save_info = Some(SaveInfo {
-            name: load_save.name.clone(),
+            name: header.name.clone(),
             load_result: success.clone(),
-            timestamp_unix: load_save.timestamp_unix,
-            chunk_size: load_save.chunk_size,
-            difficulty: if load_save.difficulty.is_empty() {
+            timestamp_unix: header.timestamp_unix,
+            chunk_size: header.chunk_size,
+            difficulty: if header.difficulty.is_empty() {
                 "Easy".to_string()
             } else {
-                load_save.difficulty
+                header.difficulty
             },
+            terrain_preset_name: header.terrain_preset_name,
         });
         success
     }
@@ -397,9 +426,7 @@ impl GameState {
     pub fn save(
         &mut self,
         world: &mut World,
-        props: &Props,
         settings: &Settings,
-        variables: &mut Variables,
         and_exit: bool,
     ) -> SaveResult {
         let Some(current_save_info) = self.current_save_info.as_ref() else {
@@ -448,8 +475,7 @@ impl GameState {
             );
         }
         let mut save_save = SaveState::default();
-        save_save.difficulty = current_save_info.difficulty.clone();
-        save_save.save(world, props);
+        save_save.save(world);
 
         let serialized = match revision::to_vec(&save_save) {
             Ok(d) => d,
@@ -472,7 +498,7 @@ impl GameState {
             Err(e) => return SaveResult::CantWriteFile(e.to_string()),
         };
 
-        let header = build_save_header(self.current_save_info.as_ref().unwrap());
+        let header = build_save_header(current_save_info);
         if let Err(e) = file.write_all(header.as_bytes()) {
             return SaveResult::CantWriteFile(e.to_string());
         }
@@ -481,7 +507,7 @@ impl GameState {
         }
         if and_exit {
             self.current_save_info = None;
-            world.recreate(settings, props, &self.mod_manager);
+            world.recreate(settings, &self.mod_manager);
         }
         // If exiting the save after saving, set to false, if not exiting after saving, then set to true, because The player is inside the save of course!
         SaveResult::Success
@@ -529,23 +555,29 @@ impl SaveVersion {
         SaveVersion::iter().min().unwrap()
     }
 }
-#[revisioned(revision = 3)]
+
+#[revisioned(revision = 5)]
 #[derive(Default, Clone)]
 pub struct SaveState {
+    #[revision(end = 4, convert_fn = "dud")]
     pub name: String,
+    #[revision(end = 4, convert_fn = "dud")]
     pub chunk_size: ChunkSize,
+    #[revision(end = 4, convert_fn = "dud")]
     pub version: SaveVersion,
+    #[revision(end = 4, convert_fn = "dud")]
     pub timestamp_unix: u128,
     pub player_pos: WorldPos,
     pub player_yaw: f32,
     pub player_pitch: f32,
     #[revision(start = 2)]
     pub total_game_time: f64,
-    #[revision(start = 3)]
+    #[revision(start = 3, end = 4, convert_fn = "dud")]
     pub difficulty: String,
     pub terrain_edits: Vec<TerrainEdit>,
     pub roads: RoadStorage,
-    pub road_types: RoadTypes,
+    #[revision(start = 5)]
+    pub road_types: RoadTypesData,
     pub partitions: PartitionManager,
     pub props: SavedProps,
     pub zones: ZoningStorage,
@@ -553,17 +585,20 @@ pub struct SaveState {
     pub city_state: CityState,
 }
 impl SaveState {
+    fn dud<T>(
+        &mut self,
+        _revision: u16,
+        _value: T,
+    ) -> Result<(), revision::Error> {
+        Ok(())
+    }
     pub fn new(time: &Time) -> Self {
         Self {
-            chunk_size: chunk_size(),
             total_game_time: time.get_spring(),
             ..Default::default()
         }
     }
-    pub fn load(&mut self, world: &mut World, props: &mut Props, mod_manager: &ModManager) {
-        if self.chunk_size == 0 {
-            self.chunk_size = default_chunk_size();
-        }
+    pub fn load(&mut self, world: &mut World, mod_manager: &ModManager, header: &SaveHeader) {
         let camera = &mut world.world_state.camera;
         let camera_controller = &mut world.world_state.cam_controller;
         let terrain = &mut world.terrain;
@@ -571,7 +606,7 @@ impl SaveState {
         let zoning = &mut world.zoning;
         let buildings = &mut world.buildings;
         world.time.total_game_time = self.total_game_time;
-        set_chunk_size(self.chunk_size);
+
         camera.target = self.player_pos;
         camera.yaw = self.player_yaw;
         camera.pitch = self.player_pitch;
@@ -579,32 +614,22 @@ impl SaveState {
         camera_controller.target_yaw = self.player_yaw;
         camera_controller.target_pitch = self.player_pitch;
 
-        terrain
-            .terrain_editor
-            .load_edits_from_vec(mem::take(&mut self.terrain_edits));
-
+        terrain.terrain_editor.load_edits_from_vec(mem::take(&mut self.terrain_edits));
+        //let preset_path = mod_manager.resource_path(format!("simulation/terrain/presets/{}.yaml", header.terrain_preset).as_str());
+        terrain.current_preset_name = header.terrain_preset_name.clone(); //preset_path.and_then(|p| Terrain::compile_preset_handled(p)).unwrap_or_default();
+        terrain.recreate_generator(&world.props, mod_manager);
         roads.road_manager.roads = mem::take(&mut self.roads);
 
-        props.load_props(mem::take(&mut self.props), mod_manager);
+        world.props.load_props(mem::take(&mut self.props), mod_manager);
 
         zoning.zoning_storage = mem::take(&mut self.zones);
         buildings.storage = mem::take(&mut self.buildings);
         buildings.partitions = mem::take(&mut self.partitions);
-        roads.road_manager.road_types = mem::take(&mut self.road_types);
+        roads.road_manager.road_types.save_data = mem::take(&mut self.road_types);
         world.city_state = mem::take(&mut self.city_state);
         //variables.set_i64("lanes_left", terrain.cursor.road_type.unwrap().lanes_each_direction().0 as i64);
     }
-    pub fn save(&mut self, world: &World, props: &Props) {
-        self.chunk_size = if chunk_size() == 0 {
-            default_chunk_size()
-        } else {
-            chunk_size()
-        };
-        self.version = SaveVersion::current();
-        self.timestamp_unix = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
+    pub fn save(&mut self, world: &World) {
         self.total_game_time = world.time.total_game_time;
         let camera = &world.world_state.camera;
         let camera_controller = &world.world_state.cam_controller;
@@ -618,11 +643,11 @@ impl SaveState {
 
         self.terrain_edits = terrain.terrain_editor.get_edits_for_save().to_vec();
         self.roads = roads.road_manager.roads.clone();
-        self.props = props.get_props();
+        self.props = world.props.get_props();
         self.zones = zoning.zoning_storage.clone();
         self.buildings = buildings.storage.clone();
         self.partitions = buildings.partitions.clone();
-        self.road_types = roads.road_manager.road_types.clone();
+        self.road_types = roads.road_manager.road_types.data.clone();
         self.city_state = world.city_state.clone();
     }
 }
@@ -638,6 +663,7 @@ pub struct SaveInfo {
     pub timestamp_unix: u128,
     pub chunk_size: ChunkSize,
     pub difficulty: String,
+    pub terrain_preset_name: String,
 }
 impl SaveInfo {
     pub fn to_values(self) -> Vec<Value> {
@@ -661,6 +687,7 @@ impl Default for SaveInfo {
                 .unwrap_or(0),
             chunk_size: default_chunk_size(),
             difficulty: "Easy".to_string(),
+            terrain_preset_name: "Default".to_string(),
         }
     }
 }
@@ -732,6 +759,7 @@ pub fn get_available_saves() -> Vec<SaveInfo> {
             timestamp_unix: timestamp,
             chunk_size: header.chunk_size,
             difficulty: header.difficulty,
+            terrain_preset_name: header.terrain_preset_name,
         });
     }
 
@@ -741,11 +769,4 @@ pub fn get_available_saves() -> Vec<SaveInfo> {
     saves
 }
 
-fn parse_the_save_header(data: &[u8]) -> SaveHeader {
-    parse_save_header!(
-        data,
-        timestamp_unix: u128,
-        version: SaveVersion,
-        chunk_size: ChunkSize
-    )
-}
+

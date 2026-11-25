@@ -4,12 +4,12 @@ elements:
   - !Rect
     id: Button_Background
     actions:
-      - "in:any, as:[str:button_text], set(str:as.pt, {ap.1}); set(str:self.size, expr:{as.size}+15.0); set(str:self.center, [expr:{as.center.x}+{as.size.x}*0.5, as.center.y]) call(str:{ap.2});"
+      - "in:any, as:[str:button_text], set(str:as.pt, {ap.1}); set(str:self.size, expr:{as.size}+15.0); set(str:self.center, as.center) call(str:{ap.2});"
       - "on:hover_enter, call(rust:play_sound, str:ButtonHover)"
-      - "on:hovering, ifvareq({ap}, bool:false, set_var(str:self.color.border, [0.3, 0.0, 0.0, 1.0]), set_var(str:self.color.border, [0.0, 0.3, 0.0, 1.0]));"
-      - "on:hover_exit on:activated, ifvareq({ap.0}, bool:false, set_var(str:self.color.border, [1.0, 0.0, 0.0, 1.0]), set_var(str:self.color.border, [0.0, 1.0, 0.0, 1.0]))"
-      - "on:down, set(str:previous_fill, self.color.fill); set(str:self.color.fill, [0.8, 0.8, 0.8, 0.2])"
-      - "on:release, toggle(str:{ap}); set(str:self.color.fill, [0.8, 0.8, 0.8, 0.05]); call(rust:play_sound, str:ButtonPress)"
+      - "on:hovering, ifvareq({ap}, bool:false, set_var(str:self.color.border, [0.3, 0.1, 0.1, 1.0]), set_var(str:self.color.border, [0.1, 0.3, 0.1, 1.0]));"
+      - "on:hover_exit on:activated, ifvareq({ap.0}, bool:false, set_var(str:self.color.border, [1.0, 0.2, 0.2, 1.0]), set_var(str:self.color.border, [0.2, 1.0, 0.2, 1.0]))"
+      - "on:down, set(str:previous_fill, self.color.fill); set(str:self.color.fill, [0.4, 0.8, 0.8, 0.2])"
+      - "on:release, toggle(str:{ap}); set(str:self.color.fill, [0.4, 0.8, 0.8, 0.05]); call(rust:play_sound, str:ButtonPress)"
       #      - "show_interaction(self.color.fill)"
       #- "in:any, set(str:x, expr:{self.center.x}/{screen.x}); set(str:y, expr:{self.center.y}/{screen.y}); set(str:corner, expr:exp(-8.0*({x}*{x} + {y}*{y}))); set(str:self.color.border, [corner, expr:1-{corner}, expr:1-{corner}, 1])"
     x: 0
@@ -17,17 +17,17 @@ elements:
     w: 150
     h: 40
     color:
-      - 0.8
-      - 0.8
-      - 0.8
-      - 0.05
+      - 0.0
+      - 0.761
+      - 0.820
+      - 0.7
     border_color:
       - 0.1
       - 0.1
       - 0.1
       - 1.0
     roundness: 0.20
-    border_thickness: 4
+    border_thickness: 3
   - !Text
     id: button_text
     x: 0

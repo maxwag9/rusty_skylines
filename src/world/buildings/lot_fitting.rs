@@ -1,4 +1,4 @@
-use crate::helpers::positions::WorldPos;
+use rusty_skylines_utils::positions::WorldPos;
 use crate::world::buildings::zoning::{Lot, LotId, ZoningStorage};
 use crate::world::roads::road_mesh_manager::{Edges, RoadMeshManager};
 use crate::world::roads::road_structs::{LaneId, SegmentId};

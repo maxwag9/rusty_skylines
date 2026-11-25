@@ -1,4 +1,4 @@
-use crate::renderer::ui::UiRenderer;
+use crate::renderer::ui::ui::UiRenderer;
 use crate::resources::Time;
 use crate::ui::ui_text_editing::{
     get_caret_position_local, line_start_grapheme_index, rotate_text_point, text_top_left,
@@ -21,19 +21,41 @@ pub enum Anchor {
     BottomCenter,
     BottomRight,
 }
+impl Anchor {
+    /// Returned position should be used as top-left.
+    pub fn anchor_to(&self, pos: [f32; 2], w: f32, h: f32) -> [f32; 2] {
+        match self {
+            Anchor::TopLeft => pos,
+            Anchor::TopCenter => [pos[0] - w * 0.5, pos[1]],
+            Anchor::TopRight => [pos[0] - w, pos[1]],
+            Anchor::CenterLeft => [pos[0], pos[1] - h * 0.5],
+            Anchor::Center => [pos[0] - w * 0.5, pos[1] - h * 0.5],
+            Anchor::CenterRight => [pos[0] - w, pos[1] - h * 0.5],
+            Anchor::BottomLeft => [pos[0], pos[1] - h],
+            Anchor::BottomCenter => [pos[0] - w * 0.5, pos[1] - h],
+            Anchor::BottomRight => [pos[0] - w, pos[1] - h],
+        }
+    }
+    pub fn anchor_position_from_center(
+        &self,
+        center: [f32; 2],
+        w: f32,
+        h: f32,
+    ) -> [f32; 2] {
+        let hw = w * 0.5;
+        let hh = h * 0.5;
 
-/// Returned position should be used as top-left.
-pub fn anchor_to(anchor: Anchor, pos: [f32; 2], w: f32, h: f32) -> [f32; 2] {
-    match anchor {
-        Anchor::TopLeft => pos,
-        Anchor::TopCenter => [pos[0] - w * 0.5, pos[1]],
-        Anchor::TopRight => [pos[0] - w, pos[1]],
-        Anchor::CenterLeft => [pos[0], pos[1] - h * 0.5],
-        Anchor::Center => [pos[0] - w * 0.5, pos[1] - h * 0.5],
-        Anchor::CenterRight => [pos[0] - w, pos[1] - h * 0.5],
-        Anchor::BottomLeft => [pos[0], pos[1] - h],
-        Anchor::BottomCenter => [pos[0] - w * 0.5, pos[1] - h],
-        Anchor::BottomRight => [pos[0] - w, pos[1] - h],
+        match self {
+            Anchor::TopLeft => [center[0] - hw, center[1] - hh],
+            Anchor::TopCenter => [center[0], center[1] - hh],
+            Anchor::TopRight => [center[0] + hw, center[1] - hh],
+            Anchor::CenterLeft => [center[0] - hw, center[1]],
+            Anchor::Center => center,
+            Anchor::CenterRight => [center[0] + hw, center[1]],
+            Anchor::BottomLeft => [center[0] - hw, center[1] + hh],
+            Anchor::BottomCenter => [center[0], center[1] + hh],
+            Anchor::BottomRight => [center[0] + hw, center[1] + hh],
+        }
     }
 }
 

@@ -7,6 +7,7 @@ use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use crate::helpers::{rgba_from_stupid_color, stupid_color_from_rgba};
 
 pub fn set_element_position(
     menus: &mut HashMap<String, Menu>,
@@ -307,9 +308,11 @@ pub fn set_element_color(
     let Some(menu) = menus.get_mut(&element_ref.menu) else {
         return None;
     };
+
     let Some(layer) = menu.layers.iter_mut().find(|l| l.name == element_ref.layer) else {
         return None;
     };
+
     let mut previous_color: Option<[f32; 4]> = None;
 
     match element_ref.kind {
@@ -339,6 +342,7 @@ pub fn set_element_color(
                     }
                     _ => {}
                 }
+
                 layer.dirty.mark_circles();
             }
         }
@@ -350,9 +354,29 @@ pub fn set_element_color(
                 .filter_map(UiElement::as_text_mut)
                 .find(|t| t.id == element_ref.id)
             {
-                if matches!(property, ColorComponent::Fill) {
-                    previous_color = Some(t.color);
-                    t.color = color;
+                let changed = match property {
+                    ColorComponent::Fill => {
+                        previous_color = Some(t.color);
+                        t.color = color;
+                        true
+                    }
+
+                    ColorComponent::DecorationIndex(index) => {
+                        if let Some(decoration) = t.decorations.get_mut(*index as usize) {
+                            previous_color =
+                                Some(rgba_from_stupid_color(decoration.color));
+
+                            decoration.color = stupid_color_from_rgba(color);
+                            true
+                        } else {
+                            false
+                        }
+                    }
+
+                    _ => false,
+                };
+
+                if changed {
                     layer.dirty.mark_texts();
                 }
             }
@@ -390,7 +414,6 @@ pub fn set_element_color(
             {
                 match property {
                     ColorComponent::Fill => {
-                        // Take color from first vertex as "previous"
                         if let Some(first) = p.unscaled_vertices.first() {
                             previous_color = Some(first.color);
                         }
@@ -423,7 +446,6 @@ pub fn set_element_color(
 
     previous_color
 }
-
 pub fn get_element_color(
     menus: &HashMap<String, Menu>,
     element_ref: &ElementRef,
@@ -458,6 +480,13 @@ pub fn get_element_color(
 
             match property {
                 ColorComponent::Fill => Some(t.color),
+
+                ColorComponent::DecorationIndex(index) => {
+                    t.decorations
+                        .get(*index as usize)
+                        .map(|decoration| rgba_from_stupid_color(decoration.color))
+                }
+
                 _ => None,
             }
         }
@@ -471,6 +500,7 @@ pub fn get_element_color(
 
             match property {
                 ColorComponent::Fill => Some(r.color),
+                ColorComponent::Border => Some(r.border_color),
                 _ => None,
             }
         }

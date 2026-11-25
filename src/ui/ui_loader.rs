@@ -1,5 +1,5 @@
 use crate::data::BendMode;
-use crate::renderer::ui_text_rendering::Anchor;
+use crate::renderer::ui::ui_text_rendering::Anchor;
 use crate::ui::ui_editor::GlobalActionsYaml;
 use crate::ui::vertex::*;
 use std::error::Error;

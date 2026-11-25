@@ -1,9 +1,9 @@
 use crate::app::GAME_VERSION;
 use crate::data::Settings;
 use crate::helpers::paths::{data_dir, mods_config_path, mods_root, user_mod_cache_dir};
-use crate::renderer::props::Props;
 use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::ui::ui_editor::Ui;
+use crate::world::props::props::Props;
 use crate::world::world::World;
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
@@ -203,7 +203,9 @@ impl ModManager {
         manager.reload(None);
         manager
     }
-
+    pub fn new_off() -> Self {
+        Self::default()
+    }
     pub fn reload(&mut self, shader_watcher: Option<&mut ShaderWatcher>) {
         let config = load_config();
         let mut discovered = Vec::new();
@@ -324,13 +326,12 @@ impl ModManager {
         device: &Device,
         world: &mut World,
         ui: &mut Ui,
-        props: &Props,
         render_manager: &mut RenderManager,
     ) {
         self.reload(Some(shader_watcher));
 
         ui.reload_ui(settings, window_size, device, queue, self);
-        world.reload(settings, props, self);
+        world.reload(settings, self);
         render_manager.clear_all();
     }
 
@@ -484,6 +485,13 @@ impl ModManager {
 
     pub fn utility_paths(&self) -> Vec<PathBuf> {
         self.effective_paths("simulation/utilities", Some(&["yaml"]), |_| true)
+    }
+    pub fn road_type_paths(&self) -> Vec<PathBuf> {
+        self.effective_paths("simulation/road_types", Some(&["yaml"]), |_| true)
+    }
+
+    pub fn terrain_preset_paths(&self) -> Vec<PathBuf> {
+        self.effective_paths("simulation/terrain/presets", Some(&["yaml"]), |_| true)
     }
 
     pub fn sound_paths(&self) -> Vec<PathBuf> {

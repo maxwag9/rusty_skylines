@@ -1,12 +1,11 @@
-use crate::helpers::positions::WorldPos;
 use crate::renderer::gizmo::gizmo::Gizmo;
-use crate::renderer::props::Props;
 use crate::resources::Resources;
 use crate::ui::input::Input;
 use crate::ui::variables::Variables;
 use crate::world::buildings::buildings::{BuildingStorage, Buildings};
 use crate::world::buildings::zoning::{LotId, Zoning, draw_area, point_in_polygon_xz};
 use crate::world::cars::car_render::interpolate_cars;
+use crate::world::props::props::Props;
 use crate::world::roads::road_mesh_manager::RoadMeshManager;
 use crate::world::roads::road_structs::{NodeId, RoadEditorCommand, SegmentId};
 use crate::world::roads::road_subsystem::Roads;
@@ -14,6 +13,7 @@ use crate::world::statisticals::CityState;
 use crate::world::statisticals::money::calculate_road_cost;
 use crate::world::terrain::terrain_subsystem::{CursorMode, Terrain};
 use glam::Vec3;
+use rusty_skylines_utils::positions::WorldPos;
 use winit::event_loop::ActiveEventLoop;
 
 pub fn run_ticked(resources: &mut Resources) {
@@ -21,7 +21,7 @@ pub fn run_ticked(resources: &mut Resources) {
     let renderer = &mut resources.render_core;
     let camera = &world.world_state.camera;
     let variables = &mut resources.ui.variables;
-    let (time, terrain, roads, zoning, buildings, cars, input, city_state, sounds) = (
+    let (time, terrain, roads, zoning, buildings, cars, input, city_state, sounds, props) = (
         &mut world.time,
         &mut world.terrain,
         &mut world.roads,
@@ -31,12 +31,12 @@ pub fn run_ticked(resources: &mut Resources) {
         &mut world.input,
         &mut world.city_state,
         &mut world.sounds,
+        &mut world.props
     );
-    let (settings, gizmo, road_mesh_manager, props) = (
+    let (settings, gizmo, road_mesh_manager) = (
         &mut resources.settings,
         &mut renderer.gizmo,
-        &renderer.road_renderer.mesh_manager,
-        &mut renderer.props,
+        &renderer.road_renderer.mesh_manager
     );
     let aspect = renderer.config.width as f32 / renderer.config.height as f32;
 
@@ -74,7 +74,7 @@ pub fn run_ticked(resources: &mut Resources) {
         props,
     );
     roads.update(
-        terrain, cars, city_state, input, time, settings, gizmo, sounds, buildings,
+        terrain, cars, city_state, input, settings, gizmo, sounds, buildings, variables, &resources.game_state.mod_manager
     );
 }
 
@@ -327,6 +327,7 @@ pub fn run_ui(resources: &mut Resources, event_loop: &dyn ActiveEventLoop) {
         event_loop,
         &mut resources.game_state,
         &mut resources.simulation,
+        &mut resources.mini_renderer
     );
 }
 
@@ -368,6 +369,7 @@ pub fn run_render(resources: &mut Resources) {
         &mut resources.ui,
         &resources.settings,
         &resources.game_state.mod_manager,
+        Some(&mut resources.mini_renderer)
     );
 
     resources.world.world_state.camera.end_frame();

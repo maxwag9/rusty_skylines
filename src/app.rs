@@ -1,17 +1,17 @@
 use crate::data::Cycle;
 use crate::data::FullScreenMode;
 use crate::data::SettingKey;
-use crate::helpers::get_start_message;
-use crate::helpers::implementations::register_svg_decoding_hook;
+use crate::helpers::{get_game_weirdness, get_start_message};
+use crate::helpers::implementations::{nvml_instance, parse_pci_bus_id, register_svg_decoding_hook, GpuVendor, update_gpu_variables};
 use crate::helpers::modpack::ModManager;
 use crate::helpers::paths::data_dir;
 use crate::renderer::shadows::create_csm_shadow_texture;
-use crate::resources::{FrameTimeCheckpointType, Resources};
+use crate::resources::{format_memory, FrameTimeCheckpointType, Resources, GPU_TELEMETRY};
 use crate::simulation::update_picked_pos;
 use crate::systems::input::run_inputs;
 use crate::systems::small_systems::run_commands;
 use crate::systems::systems::{run_interpolation, run_render, run_sim, run_ticked, run_ui};
-use crate::ui::actions::UiCommand;
+use crate::ui::actions::{exit_game, UiCommand};
 use crate::ui::parser::Value;
 use crate::ui::ui_edit_manager::CreateElementCommand;
 use crate::ui::vertex::UiButtonCircle;
@@ -24,6 +24,7 @@ use rand_distr::num_traits::Zero;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+use sysinfo::{MemoryRefreshKind, Pid, ProcessRefreshKind, ProcessesToUpdate};
 use tracing::error;
 use winit::application::ApplicationHandler;
 use winit::cursor::{Cursor, CustomCursorSource};
@@ -88,17 +89,19 @@ impl ApplicationHandler for App {
     }
 
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
-        print!("[app] can_create_surfaces: start ");
+        print!("[App] can_create_surfaces: Start ");
         let window = Arc::new(
             event_loop
                 .create_window(
                     WindowAttributes::default()
-                        .with_title("Rusty Skylines")
+                        .with_title(format!("Rusty Skylines Alpha v{GAME_VERSION}"))
                         .with_surface_size(winit::dpi::PhysicalSize::new(2560, 1400)),
                 )
                 .expect("Failed to create window"),
         );
-        print!(" [app] window created");
+        print!(" [App] window created");
+        let font_system = FontSystem::new();
+        init_global_font_system(font_system);
         register_image_decoding_hook(); // JPEG-XL
         register_svg_decoding_hook(); // SVG
         let mut resources = Resources::new(window.clone(), event_loop);
@@ -106,14 +109,8 @@ impl ApplicationHandler for App {
         let time = &mut world.time;
         time.set_tps(resources.settings.target_tps.max(1.0));
         time.set_fps(resources.settings.target_fps.max(1.0));
-        resources
-            .ui
-            .variables
-            .set_string("cursor_mode", format!("{:#?}", world.terrain.cursor.mode));
-        resources
-            .ui
-            .variables
-            .set_array("CHAT", vec![Value::String(get_start_message())]);
+        resources.ui.variables.set_string("cursor_mode", format!("{:#?}", world.terrain.cursor.mode));
+        resources.ui.variables.set_string("START_MESSAGE", get_start_message());
         resources.ui.variables.set_string(
             "USERNAME",
             whoami::username().unwrap_or("Entity 303".to_string()),
@@ -152,7 +149,17 @@ impl ApplicationHandler for App {
             error!("[App] Missing texture '{pointer_rel_path}'");
             return;
         };
-
+        let renderer = &mut resources.render_core;
+        resources.game_state.mod_manager.reload_full(
+            &mut renderer.shader_watcher,
+            renderer.window_size,
+            &resources.settings,
+            &renderer.queue,
+            &renderer.device,
+            world,
+            &mut resources.ui,
+            &mut renderer.render_manager,
+        );
         self.window = Some(window.clone());
         self.resources = Some(resources);
 
@@ -168,7 +175,13 @@ impl ApplicationHandler for App {
         event: WindowEvent,
     ) {
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                println!("[App] Exit requested in a bad way, saving game.");
+                if let Some(resources) = self.resources.as_mut() {
+                    exit_game(&mut resources.game_state, &mut resources.settings, &mut resources.ui.variables, &mut resources.world, event_loop);
+                }
+                event_loop.exit()
+            },
             WindowEvent::KeyboardInput { event, .. } => {
                 let Some(resources) = self.resources.as_mut() else {
                     return;
@@ -213,7 +226,7 @@ impl ApplicationHandler for App {
 
                 // MSAA cycle
                 if input.action_repeat("Cycle MSAA") {
-                    resources.render_core.cycle_msaa(settings);
+                    resources.render_core.cycle_msaa(settings, &resources.adapter);
                 }
                 if input.action_repeat("Reload") {
                     let renderer = &mut resources.render_core;
@@ -225,7 +238,6 @@ impl ApplicationHandler for App {
                         &renderer.device,
                         world,
                         ui,
-                        &renderer.props,
                         &mut renderer.render_manager,
                     );
                 }
@@ -440,9 +452,7 @@ impl ApplicationHandler for App {
             WindowEvent::SurfaceResized(size) => {
                 println!("[event] surface resized: {}x{}", size.width, size.height);
                 if let Some(resources) = self.resources.as_mut() {
-                    resources
-                        .render_core
-                        .resize(&resources.surface, size, &mut resources.ui);
+                    resources.render_core.resize(&resources.surface, size, &mut resources.ui);
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
@@ -462,17 +472,15 @@ impl ApplicationHandler for App {
                     event_loop.exit();
                     return;
                 };
-                resources
-                    .world
-                    .time
-                    .frame_checkpoint(FrameTimeCheckpointType::FrameStart);
+                resources.world.time.frame_checkpoint(FrameTimeCheckpointType::FrameStart);
                 if resources.settings.render_debug_print {
                     println!("[event] redraw requested");
                 }
                 let frame_start = Instant::now();
 
+                resources.world.time.timer.checkpoint("Update Stuff", false);
                 update_stuff(resources);
-
+                resources.world.time.timer.checkpoint("Update Stuff", true);
                 resources.world.time.timer.checkpoint("Movement", false);
                 run_inputs(resources);
                 resources.world.time.timer.checkpoint("Movement", true);
@@ -531,7 +539,7 @@ impl ApplicationHandler for App {
                     let camera = &resources.world.world_state.camera;
                     let proj = camera.proj();
                     resources.world.world_state.update(
-                        &mut resources.ui,
+                        Some(&mut resources.ui),
                         &mut resources.world.time, // Updates astronomy and UI Variables
                         &resources.settings,
                         proj,
@@ -585,6 +593,7 @@ impl ApplicationHandler for App {
                     "cpu_frametime",
                     resources.world.time.cpu_frame_duration.as_secs_f64() * 1000.0,
                 );
+
                 resources
                     .world
                     .time
@@ -607,13 +616,14 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::Occluded(occluded) => {
-                println!("[event] occluded = {}", occluded);
                 // When the window is no longer occluded, request a redraw to resume rendering
                 if !occluded {
-                    print!("  [event] occluded cleared, requesting redraw");
+                    println!("[event] Window has been un-occluded, requesting redraw");
                     if let Some(window) = &self.window {
                         window.request_redraw();
                     }
+                } else {
+                    println!("[event] Window has been occluded");
                 }
             }
 
@@ -621,20 +631,34 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(focused) => {
                 if let Some(resources) = self.resources.as_mut() {
                     let input = &mut resources.world.input;
+                    input.window_focused = focused;
                     let time = &mut resources.world.time;
                     input.reset_all(time.total_time);
                 }
 
                 // Also request a redraw on focus, just to be safe
-                println!("[event] focused set to: {}", focused);
+
                 if focused {
-                    print!("  [event] focused true, requesting redraw");
+                    println!("[event] focused set to true, requesting redraw");
                     if let Some(window) = &self.window {
                         window.request_redraw();
                     }
+                } else {
+                    println!("[event] focused set to false");
                 }
             }
-
+            WindowEvent::PointerLeft { .. } => {
+                if let Some(resources) = self.resources.as_mut() {
+                    let input = &mut resources.world.input;
+                    input.mouse.cursor_inside = false;
+                }
+            }
+            WindowEvent::PointerEntered { .. } => {
+                if let Some(resources) = self.resources.as_mut() {
+                    let input = &mut resources.world.input;
+                    input.mouse.cursor_inside = true;
+                }
+            }
             _ => {}
         }
     }
@@ -648,6 +672,7 @@ fn update_stuff(resources: &mut Resources) {
         render_core,
         simulation,
         game_state,
+        mini_renderer,
         ..
     } = resources;
 
@@ -662,9 +687,8 @@ fn update_stuff(resources: &mut Resources) {
         ui,
     );
     world.update_panorama(game_state);
-    world
-        .input
-        .set_keybinds_blocked(ui.touch_manager.editor.editing_text.is_some());
+    world.input.set_keybinds_blocked(ui.touch_manager.editor.editing_text.is_some());
+    mini_renderer.render(settings, &game_state.mod_manager, world);
     let World {
         world_state,
         time,
@@ -702,9 +726,24 @@ fn update_stuff(resources: &mut Resources) {
         sim_speed = 0.0;
     }
 
-    resources.ui.variables.set_f64("sim_speed", sim_speed);
+    ui.variables.set_f64("sim_speed", sim_speed);
 
     time.begin_frame(sim_speed);
+
+
+    if let Some((branch, category, item)) = ui.variables.get_array("bci_sel").and_then(|bci| bci.get(0..=2).and_then(|s| Some((s[0].to_string(), s[1].to_string(), s[2].to_string())))) {
+        match branch.as_str() {
+            "Roads" => {
+                let namespace = format!("{}:{}:{}", branch, category, item);
+                if let Some(r_id) = world.roads.road_manager.road_types.data.categories.get(category.as_str()).and_then(|c| c.iter().find(|r| r.id == item)).map(|r| r.stable_id) {
+                    //println!("{} {}", namespace, r_id);
+                    world.roads.road_editor.selected_road_type = (namespace, r_id);
+                }
+            }
+            _ => {}
+        }
+    }
+
 
     {
         let ui = &mut resources.ui;
@@ -810,6 +849,7 @@ fn update_stuff(resources: &mut Resources) {
                     .highly_educated_population(district.zoning_demand.demography.population),
             );
         }
+        ui.variables.set_f64("WEIRDNESS", get_game_weirdness());
         let active_menus = ui
             .menus
             .iter()
@@ -827,31 +867,83 @@ fn update_stuff(resources: &mut Resources) {
                 .map(|save_info| Value::Array(save_info.to_values()))
                 .unwrap_or(Value::None),
         );
-
+        let props = &world.props;
         ui.variables
-            .set_i64("prop_count", render_core.props.prop_count() as i64);
+            .set_i64("prop_count", props.prop_count() as i64);
         ui.variables.set_i64(
             "generated_prop_count",
-            render_core.props.generated_prop_count() as i64,
+            props.generated_prop_count() as i64,
         );
         ui.variables.set_i64(
             "manual_prop_count",
-            render_core.props.manual_prop_count() as i64,
+            props.manual_prop_count() as i64,
         );
         ui.variables.set_i64(
             "visible_prop_count",
-            render_core.props.visible_prop_count() as i64,
+            props.visible_prop_count() as i64,
         );
         ui.variables.set_i64(
             "visible_generated_prop_count",
-            render_core.props.visible_generated_prop_count() as i64,
+            props.visible_generated_prop_count() as i64,
         );
         ui.variables.set_i64(
             "visible_manual_prop_count",
-            render_core.props.visible_manual_prop_count() as i64,
+            props.visible_manual_prop_count() as i64,
         );
+        let sysinfo_refresh_due = (time.total_time / 0.5) as u64 != ((time.total_time - time.render_dt as f64) / 0.5) as u64;
+        if sysinfo_refresh_due {
+            if let Some(sys) = resources.sys.as_mut() {
+                sys.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram());
+                sys.refresh_cpu_usage();
+                sys.refresh_cpu_frequency();
+
+                let process_id = std::process::id();
+                let pid = Pid::from_u32(process_id);
+
+                sys.refresh_processes_specifics(
+                    ProcessesToUpdate::Some(&[pid]),
+                    false,
+                    ProcessRefreshKind::nothing()
+                        .with_memory()
+                        .with_cpu()
+                        .without_tasks(),
+                );
+
+                ui.variables.set_i64("TOTAL_RAM", sys.total_memory() as i64);
+                ui.variables.set_i64("USED_RAM", sys.used_memory() as i64);
+                ui.variables.set_i64("PROCESS_ID", process_id as i64);
+
+                if let Some(process) = sys.process(pid) {
+                    ui.variables.set_i64("GAME_USED_RAM", process.memory() as i64);
+                    ui.variables.set_f64(
+                        "CPU_USAGE",
+                        process.cpu_usage() / sys.cpus().len().max(1) as f32,
+                    );
+                }
+
+                let cpus_info = sys.cpus().iter()
+                    .map(|cpu| {
+                        Value::Array(vec![
+                            Value::F64(cpu.usage() as f64),
+                            Value::I64(cpu.frequency() as i64),
+                        ])
+                    })
+                    .collect::<Vec<Value>>();
+
+                ui.variables.set_array("CPUS", cpus_info);
+            }
+        }
+        update_gpu_variables(resources);
     }
 }
+
+use nvml_wrapper::Nvml;
+use nvml_wrapper::enum_wrappers::device::Sampling;
+use nvml_wrapper::enums::device::SampleValue;
+use sluggrs_skylines::FontSystem;
+use crate::renderer::ui::ui::init_global_font_system;
+use crate::world::roads::roads::RoadTypes;
+
 fn apply_settings(resources: &mut Resources) {
     let changed = if resources.world.time.frame_count.is_zero() {
         resources.settings.get_all_keys()

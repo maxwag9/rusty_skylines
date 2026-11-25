@@ -1,12 +1,13 @@
 use crate::data::Settings;
-use crate::helpers::positions::chunk_size;
+use rusty_skylines_utils::positions::{chunk_size, WorldPos};
 use crate::ui::input::Input;
 use crate::world::camera::camera::{Camera, CameraController};
-use crate::world::cars::car_structs::Car;
+use crate::world::cars::car_structs::{Car, CarBodyType, CarMode, Powertrain, SimTime};
 use crate::world::cars::car_subsystem::Cars;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::{Quat, Vec3};
 use rayon::iter::ParallelIterator;
+use crate::world::cars::car_simulation::{CarTrajectory, CarTrajectoryPoint};
 
 #[derive(Clone, Copy, Debug)]
 pub struct GroundFit {
@@ -166,7 +167,7 @@ pub fn conform_car_to_terrain(car: &mut Car, terrain: &Terrain, dt: f32) -> Grou
 }
 
 pub fn drive_car(
-    car_subsystem: &mut Cars,
+    cars: &mut Cars,
     terrain: &Terrain,
     settings: &Settings,
     input: &mut Input,
@@ -230,7 +231,7 @@ pub fn drive_car(
         (if steer_left { 1.0 } else { 0.0 }) - (if steer_right { 1.0 } else { 0.0 });
 
     let (car_id, previous_chunk, new_chunk) = {
-        let Some(car) = car_subsystem.get_player_car() else {
+        let Some(car) = cars.get_player_car() else {
             return;
         };
 
@@ -401,13 +402,13 @@ pub fn drive_car(
     };
 
     if previous_chunk != new_chunk {
-        car_subsystem
+        cars
             .car_storage_mut()
             .move_car_between_chunks(previous_chunk, new_chunk, car_id);
     }
 }
 
-pub fn drive_ai_cars(car_subsystem: &mut Cars, terrain: &Terrain, dt: f32) {
+pub fn drive_ai_cars(cars: &mut Cars, terrain: &Terrain, dt: f32) {
     if dt <= 0.0 {
         return;
     }
@@ -431,15 +432,15 @@ pub fn drive_ai_cars(car_subsystem: &mut Cars, terrain: &Terrain, dt: f32) {
     const MAX_SPEED: f32 = 50.0;
     const MAX_YAW_RATE: f32 = 3.5;
 
-    let player_car_id = car_subsystem.player_car_id();
+    //let player_car = cars.player_car();
 
-    let car_storage = car_subsystem.car_storage_mut();
+    let car_storage = cars.car_storage_mut();
     let cs = chunk_size() as f64;
     let moves: Vec<_> = car_storage
         .par_iter_mut_cars()
         .filter_map(|car| {
             let car = car.as_mut()?;
-            if car.id == player_car_id {
+            if car.mode.is_player() {
                 return None;
             }
 
@@ -552,3 +553,425 @@ pub fn drive_ai_cars(car_subsystem: &mut Cars, terrain: &Terrain, dt: f32) {
         car_storage.move_car_between_chunks(prev, new, id);
     }
 }
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PlayerControls {
+    pub throttle: f32,
+    pub brake: f32,
+    pub steer: f32,
+    pub handbrake: bool,
+}
+
+impl PlayerControls {
+    pub fn read(input: &mut Input) -> Self {
+        let left = input.action_down("Fly Camera Left");
+        let right = input.action_down("Fly Camera Right");
+
+        Self {
+            throttle: if input.action_down("Fly Camera Forward") { 1.0 } else { 0.0 },
+            brake: if input.action_down("Fly Camera Backward") { 1.0 } else { 0.0 },
+            steer: (if left { 1.0 } else { 0.0 }) - (if right { 1.0 } else { 0.0 }),
+            handbrake: input.action_down("Handbrake"),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+struct VehicleDynamics {
+    mass: f32,
+    iz: f32,
+    wheelbase: f32,
+    a: f32,
+    b: f32,
+    cg_height: f32,
+    wheel_power: f32,
+    max_accel: f32,
+    max_brake: f32,
+    mu_peak: f32,
+    mu_slide: f32,
+    c_alpha_f: f32,
+    c_alpha_r: f32,
+    aero_drag: f32,
+    aero_lift: f32,
+    rolling_resistance: f32,
+    handbrake_grip: f32,
+    handbrake_decel: f32,
+    steer_rate: f32,
+    steer_spring: f32,
+    steer_damping: f32,
+    steer_low: f32,
+    steer_high: f32,
+    steer_fade: f32,
+    max_speed: f32,
+    max_yaw_rate: f32,
+}
+
+impl VehicleDynamics {
+    fn from_car(car: &Car) -> Self {
+        let (
+            base_mass,
+            ref_length,
+            ref_width,
+            wheelbase_ratio,
+            cg_height,
+            front_bias,
+            engine_power,
+            max_accel,
+            max_brake,
+            mu_peak,
+            mu_slide,
+            body_height,
+            cd,
+            cl,
+            steer_low,
+            steer_high,
+            steer_fade,
+            max_speed,
+            rolling_resistance,
+            heavy,
+        ) = match &car.vehicle_type.body_type {
+            CarBodyType::Sedan => (
+                1620.0, 4.5, 1.85, 0.63, 0.54, 0.52,
+                275_000.0, 5.5, 10.5, 1.08, 0.95,
+                1.45, 0.28, 0.12, 0.60, 0.09, 35.0, 65.0, 0.010, false,
+            ),
+            CarBodyType::SportsCar => (
+                1450.0, 4.3, 1.9, 0.60, 0.48, 0.48,
+                320_000.0, 6.5, 11.5, 1.12, 1.0,
+                1.25, 0.31, 0.05, 0.62, 0.10, 38.0, 85.0, 0.010, false,
+            ),
+            CarBodyType::HyperCar => (
+                1650.0, 4.6, 2.0, 0.60, 0.45, 0.46,
+                650_000.0, 8.5, 12.5, 1.20, 1.05,
+                1.22, 0.30, -0.12, 0.62, 0.10, 40.0, 100.0, 0.010, false,
+            ),
+            CarBodyType::Bus => (
+                12_000.0, 12.0, 2.5, 0.54, 1.0, 0.55,
+                230_000.0, 2.3, 7.0, 0.85, 0.78,
+                3.0, 0.65, 0.0, 0.45, 0.06, 20.0, 35.0, 0.012, true,
+            ),
+            CarBodyType::LKW => (
+                16_000.0, 9.0, 2.5, 0.55, 1.15, 0.48,
+                330_000.0, 2.5, 7.5, 0.88, 0.80,
+                3.2, 0.70, 0.0, 0.46, 0.06, 22.0, 38.0, 0.012, true,
+            ),
+            CarBodyType::Buggy => (
+                900.0, 3.5, 1.6, 0.62, 0.50, 0.45,
+                110_000.0, 6.0, 9.5, 1.12, 1.0,
+                1.35, 0.35, 0.05, 0.62, 0.11, 30.0, 55.0, 0.012, false,
+            ),
+            CarBodyType::Pickup => (
+                2400.0, 5.5, 2.0, 0.60, 0.78, 0.55,
+                260_000.0, 4.2, 9.5, 0.98, 0.88,
+                1.9, 0.42, 0.08, 0.56, 0.08, 30.0, 60.0, 0.012, false,
+            ),
+            CarBodyType::Limousine => (
+                2200.0, 5.5, 1.9, 0.62, 0.60, 0.54,
+                220_000.0, 4.2, 9.5, 1.0, 0.90,
+                1.55, 0.30, 0.08, 0.58, 0.08, 34.0, 62.0, 0.010, false,
+            ),
+            CarBodyType::LimousineForReal => (
+                3400.0, 8.0, 1.9, 0.62, 0.68, 0.53,
+                300_000.0, 3.5, 8.5, 0.95, 0.85,
+                1.65, 0.31, 0.08, 0.52, 0.07, 30.0, 55.0, 0.011, false,
+            ),
+            CarBodyType::Jeep => (
+                2300.0, 4.7, 2.0, 0.60, 0.82, 0.53,
+                190_000.0, 3.8, 9.5, 0.98, 0.90,
+                1.9, 0.42, 0.08, 0.56, 0.08, 28.0, 55.0, 0.012, false,
+            ),
+        };
+
+        let (power_mult, efficiency) = match &car.vehicle_type.power_train {
+            Powertrain::Combustion => (1.0, 0.85),
+            Powertrain::Electric => (1.08, 0.93),
+            Powertrain::Hydrogen => (0.95, 0.88),
+            Powertrain::Hybrid => (1.05, 0.88),
+        };
+
+        let length = car.length.max(0.1);
+        let width = car.width.max(0.1);
+
+        let dimension_scale =
+            ((length * width) / (ref_length * ref_width)).clamp(0.55, 2.5);
+
+        let mass = base_mass * dimension_scale;
+        let wheelbase = (length * wheelbase_ratio).clamp(1.5, 8.0);
+        let a = wheelbase * (1.0 - front_bias);
+        let b = wheelbase * front_bias;
+
+        let iz = (mass * (length * length + width * width) / 12.0).max(100.0);
+
+        let stiffness_scale = (mass / 1620.0).powf(0.9);
+
+        Self {
+            mass,
+            iz,
+            wheelbase,
+            a,
+            b,
+            cg_height,
+            wheel_power: engine_power * power_mult * efficiency,
+            max_accel,
+            max_brake,
+            mu_peak,
+            mu_slide,
+            c_alpha_f: 115_000.0 * stiffness_scale,
+            c_alpha_r: 128_000.0 * stiffness_scale,
+            aero_drag: 0.5 * 1.225 * cd * width * body_height,
+            aero_lift: 0.5 * 1.225 * cl * width * body_height,
+            rolling_resistance,
+            handbrake_grip: if heavy { 0.55 } else { 0.30 },
+            handbrake_decel: if heavy { 3.0 } else { 5.5 },
+            steer_rate: if heavy { 3.5 } else { 6.5 },
+            steer_spring: if heavy { 55.0 } else { 75.0 },
+            steer_damping: if heavy { 16.0 } else { 18.0 },
+            steer_low,
+            steer_high,
+            steer_fade,
+            max_speed,
+            max_yaw_rate: if heavy { 1.7 } else { 4.0 },
+        }
+    }
+}
+pub fn simulate_player_trajectory(
+    car: &Car,
+    controls: PlayerControls,
+    origin: WorldPos,
+    start_time: SimTime,
+    duration: f32,
+) -> CarTrajectory {
+    const G: f32 = 9.81;
+    const SUBSTEP_DT: f32 = 1.0 / 120.0;
+    const SAMPLE_INTERVAL: u32 = 2;
+
+    let d = VehicleDynamics::from_car(car);
+
+    let mut pos = car.pos;
+    let mut quat = sanitize_quat(car.quat);
+
+    let local_velocity = quat.conjugate() * car.current_velocity;
+
+    let mut u = local_velocity.z;
+    let mut v = -local_velocity.x;
+    let mut r = car.yaw_rate;
+
+    let mut steering_angle = car.steering_angle;
+    let mut steering_vel = car.steering_vel;
+
+    let throttle = controls.throttle.clamp(0.0, 1.0);
+    let brake = controls.brake.clamp(0.0, 1.0);
+    let steer = controls.steer.clamp(-1.0, 1.0);
+
+    let fz_static_f = d.mass * G * (d.b / d.wheelbase);
+    let fz_static_r = d.mass * G * (d.a / d.wheelbase);
+
+    let mut pts = Vec::with_capacity(
+        (duration / SUBSTEP_DT / SAMPLE_INTERVAL as f32) as usize + 2,
+    );
+
+    let mut t = start_time;
+
+    pts.push(CarTrajectoryPoint {
+        time: t,
+        pos: origin.delta_to(pos),
+        quat,
+        velocity: car.current_velocity,
+        lane_ref: car.current_lane,
+    });
+
+    let mut time_remaining = duration;
+    let mut step = 0u32;
+
+    while time_remaining > 0.000001 {
+        let h = time_remaining.min(SUBSTEP_DT);
+        time_remaining -= h;
+        step += 1;
+
+        t += h as f64;
+
+        let forward_speed = u.max(0.0);
+        let absolute_speed = u.abs();
+
+        let speed_ratio = (absolute_speed / d.steer_fade).clamp(0.0, 1.0);
+        let lock_blend = 1.0 - speed_ratio.powf(1.5);
+
+        let max_steer_angle =
+            d.steer_high + (d.steer_low - d.steer_high) * lock_blend;
+
+        let delta_command = steer * max_steer_angle;
+
+        let delta_accel =
+            d.steer_spring * (delta_command - steering_angle)
+                - d.steer_damping * steering_vel;
+
+        steering_vel =
+            (steering_vel + delta_accel * h).clamp(-d.steer_rate, d.steer_rate);
+
+        steering_angle =
+            (steering_angle + steering_vel * h)
+                .clamp(-max_steer_angle, max_steer_angle);
+
+        let power_limited = if forward_speed > 2.0 {
+            d.wheel_power / (d.mass * forward_speed)
+        } else {
+            d.max_accel
+        };
+
+        let travel_sign = if u.abs() > 0.1 { u.signum() } else { 1.0 };
+
+        let mut ax_command =
+            throttle * d.max_accel.min(power_limited);
+
+        ax_command -= brake * d.max_brake * travel_sign;
+
+        if controls.handbrake && u.abs() > 0.5 {
+            ax_command -= d.handbrake_decel * travel_sign;
+        }
+
+        let weight_transfer =
+            (d.cg_height / d.wheelbase) * d.mass * ax_command;
+
+        let aero_speed = u * u;
+        let aero_lift = d.aero_lift * aero_speed;
+
+        let minimum_load = d.mass * G * 0.05;
+
+        let fz_front =
+            (fz_static_f - weight_transfer - aero_lift * 0.5)
+                .max(minimum_load);
+
+        let fz_rear =
+            (fz_static_r + weight_transfer - aero_lift * 0.5)
+                .max(minimum_load);
+
+        let u_safe = if u.abs() < 0.4 {
+            if u < 0.0 { -0.4 } else { 0.4 }
+        } else {
+            u
+        };
+
+        let alpha_front =
+            (v + d.a * r).atan2(u_safe) - steering_angle;
+
+        let alpha_rear =
+            (v - d.b * r).atan2(u_safe);
+
+        let mu_rear = if controls.handbrake {
+            d.mu_slide * d.handbrake_grip
+        } else {
+            d.mu_peak
+        };
+
+        let fy_front =
+            tire_lateral_force(alpha_front, d.c_alpha_f, fz_front, d.mu_peak);
+
+        let fy_rear =
+            tire_lateral_force(alpha_rear, d.c_alpha_r, fz_rear, mu_rear);
+
+        let f_rolling =
+            -d.rolling_resistance * (fz_front + fz_rear) * u.signum();
+
+        let f_aero = -d.aero_drag * u * u.abs();
+
+        let ax_resist = (f_rolling + f_aero) / d.mass;
+
+        let cos_delta = steering_angle.cos();
+        let sin_delta = steering_angle.sin();
+
+        let u_dot =
+            ax_command + ax_resist
+                - (fy_front * sin_delta) / d.mass
+                + r * v;
+
+        let v_dot =
+            (fy_front * cos_delta + fy_rear) / d.mass
+                - r * u;
+
+        let r_dot =
+            (d.a * fy_front * cos_delta - d.b * fy_rear) / d.iz;
+
+        u += u_dot * h;
+        v += v_dot * h;
+        r += r_dot * h;
+
+        if u.abs() < 0.8
+            && throttle < 0.01
+            && brake < 0.01
+            && !controls.handbrake
+        {
+            let decay = 0.92_f32.powf(h * 60.0);
+            u *= decay;
+            v *= decay;
+            r *= decay;
+
+            if u.abs() < 0.05 {
+                u = 0.0;
+            }
+
+            if v.abs() < 0.02 {
+                v = 0.0;
+            }
+
+            if r.abs() < 0.01 {
+                r = 0.0;
+            }
+        }
+
+        u = u.clamp(-d.max_speed, d.max_speed);
+        v = v.clamp(-d.max_speed * 0.5, d.max_speed * 0.5);
+        r = r.clamp(-d.max_yaw_rate, d.max_yaw_rate);
+
+        let yaw_delta = -r * h;
+
+        if yaw_delta.abs() > 1e-9 {
+            quat = sanitize_quat(
+                Quat::from_axis_angle(Vec3::Y, yaw_delta) * quat,
+            );
+        }
+
+        let velocity = quat * Vec3::new(-v, 0.0, u);
+
+        pos = pos.add_vec3(velocity * h);
+
+        if step % SAMPLE_INTERVAL == 0 || time_remaining <= 0.000001 {
+            pts.push(CarTrajectoryPoint {
+                time: t,
+                pos: origin.delta_to(pos),
+                quat,
+                velocity,
+                lane_ref: car.current_lane,
+            });
+        }
+    }
+
+    CarTrajectory {
+        car_id: car.id,
+        origin,
+        points: pts,
+        end_quat: quat,
+        end_yaw_rate: r,
+        end_steering_angle: steering_angle,
+        end_steering_vel: steering_vel,
+        is_last_turn_of_sf_traj: false,
+    }
+}
+
+fn tire_lateral_force(
+    alpha: f32,
+    c_alpha: f32,
+    fz: f32,
+    mu: f32,
+) -> f32 {
+    let f_max = (mu * fz).max(1.0);
+    let f_linear = -c_alpha * alpha;
+    let slip_ratio = f_linear.abs() / f_max;
+
+    let saturation = if slip_ratio > 0.01 {
+        slip_ratio.tanh() / slip_ratio
+    } else {
+        1.0
+    };
+
+    f_linear * saturation
+}
+

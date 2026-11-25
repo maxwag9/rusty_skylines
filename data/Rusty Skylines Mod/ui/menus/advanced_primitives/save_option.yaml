@@ -4,7 +4,7 @@ elements:
     id: World Background
     actions:
       - as:["SavesScreen", "Backgrounds", "Left_Buttons_Background"], set(str:self.size.x, expr:{as.size.x}*0.6); set(str:self.size.y, expr:{as.size.x}*0.06);
-      - as:["world_name_text"], set(str:self.center.x, expr:{as.center.x}+{self.size.x}*0.48);
+      - as:["world_name_text"], set(str:self.center.x, expr:{as.topleft.x}+{self.size.x}*0.48);
       - on:press, set(str:selected_save, {ap.all})
       - if(expr:{selected_save.0}=="{ap.0}",
         set(str:self.color.border, [0.0, 1.0, 0.0, 1.0]); set(str:self.color.fill, [0.0, 0.0, 0.05, 1.0]),

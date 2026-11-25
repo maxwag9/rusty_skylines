@@ -15,13 +15,26 @@ const MAX_PROFILE_ENTRIES: u32 = MAX_PROFILE_PAIRS * 2;
 #[macro_export]
 macro_rules! gpu_timestamp {
     ($pass:expr, $profiler:expr, $label:expr, $body:block) => {{
-        let __label: &str = $label;
-        let (__start, __end) = $profiler.get_range(__label);
-        $profiler.mark_written(__start);
-        $pass.write_timestamp(&$profiler.query_set, __start);
-        let __r = { $body };
-        $pass.write_timestamp(&$profiler.query_set, __end);
-        __r
+        if $profiler.is_enabled() {
+            let (__start, __end) = $profiler.get_range($label);
+            $profiler.mark_written(__start);
+
+            $pass.write_timestamp(
+                $profiler.query_set.as_ref().unwrap(),
+                __start,
+            );
+
+            let __result = { $body };
+
+            $pass.write_timestamp(
+                $profiler.query_set.as_ref().unwrap(),
+                __end,
+            );
+
+            __result
+        } else {
+            $body
+        }
     }};
 }
 
@@ -34,7 +47,7 @@ struct Slot {
 }
 
 pub struct GpuProfiler {
-    pub query_set: QuerySet,
+    pub query_set: Option<QuerySet>,
     slots: Vec<Slot>,
 
     frame: u64,
@@ -53,15 +66,17 @@ pub struct GpuProfiler {
 }
 
 impl GpuProfiler {
-    pub fn new(device: &Device, frames_in_flight: usize) -> Self {
+    pub fn new(device: &Device, frames_in_flight: usize, enabled: bool) -> Self {
         assert!(frames_in_flight >= 3);
 
         let buffer_size = MAX_PROFILE_ENTRIES as u64 * size_of::<u64>() as u64;
 
-        let query_set = device.create_query_set(&QuerySetDescriptor {
-            label: Some("Timestamp Query Set"),
-            count: MAX_PROFILE_ENTRIES,
-            ty: QueryType::Timestamp,
+        let query_set = enabled.then(|| {
+            device.create_query_set(&QuerySetDescriptor {
+                label: Some("Timestamp Query Set"),
+                count: MAX_PROFILE_ENTRIES,
+                ty: QueryType::Timestamp,
+            })
         });
 
         let mut slots = Vec::with_capacity(frames_in_flight);
@@ -101,7 +116,9 @@ impl GpuProfiler {
             used_pairs: 0,
         }
     }
-
+    pub fn is_enabled(&self) -> bool {
+        self.query_set.is_some()
+    }
     /// Call at the start of each frame before any gpu_timestamp! calls.
     pub fn begin_frame(&mut self) {
         for w in self.written_this_frame.iter_mut() {
@@ -149,6 +166,10 @@ impl GpuProfiler {
 
     /// Call while encoding, before submit.
     pub fn resolve(&mut self, encoder: &mut CommandEncoder) {
+        let Some(query_set) = self.query_set.as_ref() else {
+            self.slot_just_written = None;
+            return;
+        };
         if self.used_pairs == 0 {
             self.slot_just_written = None;
             return;
@@ -182,7 +203,7 @@ impl GpuProfiler {
             let offset = entry_start as u64 * size_of::<u64>() as u64;
 
             encoder.resolve_query_set(
-                &self.query_set,
+                query_set,
                 entry_start..entry_end,
                 &self.slots[write_slot].resolve,
                 offset,

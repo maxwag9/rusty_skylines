@@ -592,45 +592,30 @@ impl UIEditCommand for DeleteAPCommand {
         //let _ = delete_element(menus, &self.affected_element);
     }
 
+
     fn redo(
         &mut self,
         _touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut Variables,
-        mouse: &Mouse,
+        _mouse: &Mouse,
     ) {
-        println!("Removing AP {}", self.reference_id);
         let Some(menu) = menus.get_mut(self.menu.as_str()) else {
             return;
         };
 
-        // Remove AP *LAYER*
-        if let Some(layer_idx) = menu
-            .layers
-            .iter()
-            .position(|l| l.name == self.reference_id.as_str())
-        {
-            // Remove the layer
-            menu.layers.remove(layer_idx);
-            menu.sort_layers();
-        }
+        let mut visited = std::collections::HashSet::new();
+        // Recursive!!
+        delete_ap(
+            menu,
+            &self.layer,
+            &self.reference_id,
+            &mut visited,
+        );
 
-        // Remove AP *REFERENCE* if it exists
-        // Get layer where reference lives
-        if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == self.layer) {
-            // Get the idx where the reference is in the layer.elements vec
-            if let Some(ap_idx) = layer
-                .elements
-                .iter()
-                .position(|el| el.id() == self.reference_id.as_str())
-            {
-                //let ap_name = layer.elements.get(ap_idx).and_then(|el|el.as_ap().and_then(|ap| Some(ap.ap_name.clone())));
-                layer.dirty.mark_advanced_primitives();
-                // Remove the reference
-                layer.elements.remove(ap_idx);
-            };
-        };
+        menu.sort_layers();
     }
+
 
     fn description(&self) -> String {
         format!("Delete {} AP!", self.reference_id)
@@ -646,7 +631,124 @@ impl UIEditCommand for DeleteAPCommand {
         Box::new(self.clone())
     }
 }
+fn delete_ap(
+    menu: &mut Menu,
+    parent_layer_name: &str,
+    reference_id: &str,
+    visited: &mut std::collections::HashSet<String>,
+) {
+    //println!("Removing AP {}", self.reference_id);
+    if visited.insert(reference_id.to_owned()) {
+        let child_references = menu
+            .layers
+            .iter()
+            .find(|l| l.name == reference_id)
+            .map(|layer| {
+                layer
+                    .elements
+                    .iter()
+                    .filter_map(|el| {
+                        el.as_ap().map(|ap| ap.id.to_owned())
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
 
+        for child_reference in child_references {
+            delete_ap(
+                menu,
+                reference_id,
+                &child_reference,
+                visited,
+            );
+        }
+        // Remove AP *LAYER*
+        // Get the idx where the reference is in the layer.elements vec
+        if let Some(layer_idx) = menu
+            .layers
+            .iter()
+            .position(|l| l.name == reference_id)
+        {
+            // Remove the layer
+            menu.layers.remove(layer_idx);
+        }
+    }
+    // Remove AP *REFERENCE* if it exists
+    // Get layer where reference lives
+    if let Some(parent_layer) = menu
+        .layers
+        .iter_mut()
+        .find(|l| l.name == parent_layer_name)
+    {
+        if let Some(ap_idx) = parent_layer
+            .elements
+            .iter()
+            .position(|el| el.id() == reference_id)
+        {
+            parent_layer.dirty.mark_advanced_primitives();
+            parent_layer.elements.remove(ap_idx);
+        }
+    }
+}
+pub fn delete_aps_in_layer(menu: &mut Menu, layer_name: &str) {
+    fn delete_ap(
+        menu: &mut Menu,
+        parent_layer_name: &str,
+        reference_id: &str,
+        visited: &mut std::collections::HashSet<String>,
+    ) {
+        if visited.insert(reference_id.to_owned()) {
+            let children = menu
+                .layers
+                .iter()
+                .find(|l| l.name == reference_id)
+                .map(|layer| {
+                    layer
+                        .elements
+                        .iter()
+                        .filter_map(|el| el.as_ap().map(|ap| ap.id.to_owned()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            for child in children {
+                delete_ap(menu, reference_id, &child, visited);
+            }
+
+            if let Some(idx) = menu.layers.iter().position(|l| l.name == reference_id) {
+                menu.layers.remove(idx);
+            }
+        }
+
+        if let Some(parent) = menu.layers.iter_mut().find(|l| l.name == parent_layer_name) {
+            if let Some(idx) = parent.elements.iter().position(|el| el.id() == reference_id) {
+                parent.dirty.mark_advanced_primitives();
+                parent.elements.remove(idx);
+            }
+        }
+    }
+
+    let references = menu
+        .layers
+        .iter()
+        .find(|l| l.name == layer_name)
+        .map(|layer| {
+            layer
+                .elements
+                .iter()
+                .filter_map(|el| el.as_ap().map(|ap| ap.id.to_owned()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let mut visited = std::collections::HashSet::new();
+
+    for reference in references {
+        delete_ap(menu, layer_name, &reference, &mut visited);
+    }
+
+    menu.sort_layers();
+}
 /// Command for changing z-index
 #[derive(Clone, Debug)]
 pub struct ChangeZIndexCommand {
@@ -908,7 +1010,9 @@ pub enum ColorComponent {
     DashColor,
     SubDashColor,
     VertexIndex(u32),
+    DecorationIndex(u32),
 }
+
 impl ColorComponent {
     pub fn from_str(s: &str) -> ColorComponent {
         match s {
@@ -918,21 +1022,28 @@ impl ColorComponent {
             "glow" => ColorComponent::Glow,
             "dash_color" => ColorComponent::DashColor,
             "sub_dash_color" => ColorComponent::SubDashColor,
+
             _ if s.starts_with("vertex_index.") => {
-                let Some((_, suffix)) = s.split_once('.') else {
-                    return ColorComponent::VertexIndex(0);
-                };
-
-                let Some(idx) = suffix.parse::<u32>().ok() else {
-                    return ColorComponent::VertexIndex(0);
-                };
-
-                ColorComponent::VertexIndex(idx)
+                ColorComponent::VertexIndex(
+                    s.strip_prefix("vertex_index.")
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .unwrap_or(0),
+                )
             }
+
+            _ if s.starts_with("deco.") => {
+                ColorComponent::DecorationIndex(
+                    s.strip_prefix("deco.")
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .unwrap_or(0),
+                )
+            }
+
             _ => ColorComponent::Fill,
         }
     }
 }
+
 impl Display for ColorComponent {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -943,10 +1054,10 @@ impl Display for ColorComponent {
             Self::DashColor => write!(f, "dash"),
             Self::SubDashColor => write!(f, "sub_dash"),
             Self::VertexIndex(i) => write!(f, "vertex_index: {}", i),
+            Self::DecorationIndex(i) => write!(f, "deco.{}", i),
         }
     }
 }
-
 /// Command for changing a color property
 #[derive(Clone, Debug)]
 pub struct ChangeColorCommand {

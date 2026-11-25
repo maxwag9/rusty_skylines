@@ -1,4 +1,4 @@
-use crate::renderer::ui::ScreenUniform;
+use crate::renderer::ui::ui::ScreenUniform;
 use crate::ui::helper::{make_storage_layout, make_uniform_layout};
 use crate::ui::vertex::UiVertexPoly;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};

@@ -1,4 +1,4 @@
-use crate::helpers::positions::ChunkCoord;
+use rusty_skylines_utils::positions::ChunkCoord;
 use crate::world::buildings::zoning::{ParkingSpot, ZoningStorage};
 use serde::{Deserialize, Serialize};
 use std::slice::{Iter, IterMut};

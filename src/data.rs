@@ -116,7 +116,64 @@ pub enum LodCenterType {
     #[default]
     Target,
 }
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, EnumString, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CameraTrackingTarget {
+    #[default]
+    None,
+    Sol,
+    Luna,
+    Earth,
+    Mercury,
+    Venus,
+    Mars,
+    Jupiter,
+    Saturn,
+    Uranus,
+    Neptune,
+    Pluto,
+    PlutoCharonBarycenter,
+    Io,
+    Europa,
+    Ganymede,
+    Callisto,
+    Titan,
+    Rhea,
+    Tethys,
+    Dione,
+    Iapetus,
+    Enceladus,
+    Triton,
+    Charon,
+}
+impl_cycle!(
+    CameraTrackingTarget:
+    CameraTrackingTarget::None,
+    CameraTrackingTarget::Sol,
+    CameraTrackingTarget::Luna,
+    CameraTrackingTarget::Earth,
+    CameraTrackingTarget::Mercury,
+    CameraTrackingTarget::Venus,
+    CameraTrackingTarget::Mars,
+    CameraTrackingTarget::Jupiter,
+    CameraTrackingTarget::Saturn,
+    CameraTrackingTarget::Uranus,
+    CameraTrackingTarget::Neptune,
+    CameraTrackingTarget::Pluto,
+    CameraTrackingTarget::PlutoCharonBarycenter,
+    CameraTrackingTarget::Io,
+    CameraTrackingTarget::Europa,
+    CameraTrackingTarget::Ganymede,
+    CameraTrackingTarget::Callisto,
+    CameraTrackingTarget::Titan,
+    CameraTrackingTarget::Rhea,
+    CameraTrackingTarget::Tethys,
+    CameraTrackingTarget::Dione,
+    CameraTrackingTarget::Iapetus,
+    CameraTrackingTarget::Enceladus,
+    CameraTrackingTarget::Triton,
+    CameraTrackingTarget::Charon,
+);
 #[derive(
     Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Display, EnumString, Default,
 )]
@@ -538,7 +595,9 @@ impl_setting_convert_enum!(
     ToneMappingState,
     ColorGradeState,
     FullScreenMode,
-    CloudQuality
+    CloudQuality,
+    TerrainGenMode,
+    CameraTrackingTarget,
 );
 
 // ============ Settings Macros ============
@@ -763,7 +822,13 @@ macro_rules! define_settings {
         }
     };
 }
-
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, EnumString, Display)]
+pub enum TerrainGenMode {
+    #[default]
+    GPU,
+    CPU,
+}
+impl_cycle!(TerrainGenMode: TerrainGenMode::GPU, TerrainGenMode::CPU);
 define_settings! {
     TargetFps => target_fps: f32 = 60.0; Val,
     TargetTps => target_tps: f32 = 60.0; Val,
@@ -771,6 +836,7 @@ define_settings! {
     PresentMode => present_mode: PresentModeSetting = PresentModeSetting::Mailbox; Cycle,
     RenderDistance => render_distance: u32 = 30; Val,
     GenerationDistance => generation_distance: u32 = 30; Val,
+    TerrainGenMode => terrain_gen_mode: TerrainGenMode = TerrainGenMode::CPU; Cycle,
     RenderClouds => render_clouds: bool = true; Bool,
     RenderExposure => render_exposure: bool = false; Bool,
     CloudQuality => cloud_quality: CloudQuality = CloudQuality::High; Cycle,
@@ -819,8 +885,11 @@ define_settings! {
     VignetteSoftness => vignette_softness: f64 = 0.70; Val,
     ForestClusterStrength => forest_cluster_strength: f32 = 0.8; Val,
     DenseForests => dense_forests: bool = false; Bool,
+    EdgeScrolling => edge_scrolling: bool = true; Bool,
+    EdgeScrollingSize => edge_scrolling_size: f64 = 0.6; Val,
 
     Locale => locale: String = "en_US".to_string(); Val,
+    CameraTrackingTarget => camera_tracking_target: CameraTrackingTarget = CameraTrackingTarget::None; Cycle,
 }
 
 impl Settings {

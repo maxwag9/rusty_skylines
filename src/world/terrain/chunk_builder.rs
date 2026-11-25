@@ -1,17 +1,16 @@
-use crate::helpers::positions::{ChunkCoord, LocalPos, LodStep, WorldPos, chunk_size};
 use crate::renderer::gizmo::gizmo::{Gizmo, push_gizmo_renders};
-use crate::renderer::props::{ArchetypeId, PropInstance, Props};
 use crate::ui::vertex::Vertex;
+use crate::world::props::props::{ArchetypeId, PropInstance, Props};
 use crate::world::terrain::terrain_editing::{apply_edits_with_stitching, recompute_patch_minmax};
 use crate::world::terrain::terrain_gen::TerrainGenerator;
 use crate::world::terrain::terrain_subsystem::append_edge_skirts;
 use crate::world::terrain::terrain_threads::{
     ChunkWorkerPool, LoadedChunksSnapshot, TerrainEditsSnapshot,
 };
-use fastnoise_lite::{FastNoiseLite, NoiseType};
-use glam::Vec3;
+use glam::{DVec2, Vec3};
 use rand::rngs::SmallRng;
 use rand::{Rng, RngExt, SeedableRng};
+use rusty_skylines_utils::positions::{ChunkCoord, LocalPos, LodStep, WorldPos, chunk_size};
 use std::collections::HashSet;
 use std::mem::take;
 use std::sync::Arc;
@@ -90,7 +89,7 @@ impl ChunkState {
 
 pub struct ChunkMeshLod {
     pub state: ChunkState,
-    pub handle: GpuChunkHandle,
+    pub handle: Option<GpuChunkHandle>,
     pub cpu_vertices: Vec<Vertex>,
     pub cpu_indices: Vec<u32>,
     pub height_grid: Arc<ChunkHeightGrid>,
@@ -165,8 +164,8 @@ pub fn regenerate_vertices_from_height_grid(
                     .and_then(|edge| edge.get(gz).copied())
                     .unwrap_or_else(|| {
                         let pos = WorldPos::new(chunk, LocalPos::new(local_x - cell, 0.0, local_z))
-                            .normalize();
-                        terrain_gen.height(&pos)
+                            .normalize().to_dvec2();
+                        terrain_gen.height(pos)
                     })
             };
 
@@ -178,8 +177,8 @@ pub fn regenerate_vertices_from_height_grid(
                     .and_then(|edge| edge.get(gz).copied())
                     .unwrap_or_else(|| {
                         let pos = WorldPos::new(chunk, LocalPos::new(local_x + cell, 0.0, local_z))
-                            .normalize();
-                        terrain_gen.height(&pos)
+                            .normalize().to_dvec2();
+                        terrain_gen.height(pos)
                     })
             };
 
@@ -192,8 +191,8 @@ pub fn regenerate_vertices_from_height_grid(
                     .and_then(|edge| edge.get(gx).copied())
                     .unwrap_or_else(|| {
                         let pos = WorldPos::new(chunk, LocalPos::new(local_x, 0.0, local_z - cell))
-                            .normalize();
-                        terrain_gen.height(&pos)
+                            .normalize().to_dvec2();
+                        terrain_gen.height(pos)
                     })
             };
 
@@ -205,8 +204,8 @@ pub fn regenerate_vertices_from_height_grid(
                     .and_then(|edge| edge.get(gx).copied())
                     .unwrap_or_else(|| {
                         let pos = WorldPos::new(chunk, LocalPos::new(local_x, 0.0, local_z + cell))
-                            .normalize();
-                        terrain_gen.height(&pos)
+                            .normalize().to_dvec2();
+                        terrain_gen.height(pos)
                     })
             };
 
@@ -223,7 +222,7 @@ pub fn regenerate_vertices_from_height_grid(
                 let pos = WorldPos::new(chunk, LocalPos::new(v_pos[0], v_pos[1], v_pos[2]));
                 let h = v_pos[1];
                 let m = terrain_gen.moisture(&pos, h);
-                vertices[idx].color = terrain_gen.color(&pos, h, m);
+                vertices[idx].color = terrain_gen.color(h, m);
             }
         }
     }
@@ -572,27 +571,33 @@ impl ChunkBuilder {
         let verts_x = (cs / step + 1) as usize;
         let verts_z = (cs / step + 1) as usize;
         let total = verts_x * verts_z;
+        let mut points = Vec::with_capacity(total);
 
-        let mut heights = Vec::with_capacity(total);
         let mut moistures = Vec::with_capacity(total);
         let mut colors = Vec::with_capacity(total);
 
         for gx in 0..verts_x {
             let local_x = (gx * step_usize) as f32;
-
             for gz in 0..verts_z {
                 let local_z = (gz * step_usize) as f32;
-                let world_pos = WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z));
-
-                let h = terrain_gen.height(&world_pos);
-                let m = terrain_gen.moisture(&world_pos, h);
-                let c = terrain_gen.color(&world_pos, h, m);
-
-                heights.push(h);
-                moistures.push(m);
-                colors.push(c);
+                let point = WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z)).to_dvec2();
+                points.push(point);
             }
         }
+        //println!("{} vs needed {}", heights.len(), total);
+        let heights = terrain_gen.heights(points.as_slice());
+
+        for &h in heights.as_slice() {
+            //let n = Self::normal_at(terrain_gen, chunk_coord, p.x as f32, p.z, cell_size as f32);
+
+            //gizmo.cross(WorldPos::new(chunk_coord, local_pos), 20.0, [1.0, 0.0, 0.0, 1.0], 0.0, 10.0);
+            //let m = terrain_gen.moisture(&world_pos, h);
+            let c = terrain_gen.color(h, 1.0);
+
+            moistures.push(1.0);
+            colors.push(c);
+        }
+
 
         (heights, moistures, colors)
     }
@@ -662,8 +667,9 @@ impl ChunkBuilder {
         local_x: f32,
         local_z: f32,
     ) -> f32 {
-        let pos = WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z)).normalize();
-        terrain_gen.height(&pos)
+        let cs = chunk_size() as f64;
+        let point = DVec2::new(chunk_coord.x as f64 * cs + local_x as f64, chunk_coord.z as f64 * cs + local_z as f64);
+        terrain_gen.height(point)
     }
 
     fn build_cell_data(
@@ -967,20 +973,18 @@ pub fn generate_height_grid(
     let verts_z = (cs / step + 1) as usize;
     let total = verts_x * verts_z;
 
-    let mut heights = Vec::with_capacity(total);
+    let mut points = Vec::with_capacity(total);
 
     for gx in 0..verts_x {
         let local_x = (gx * step_usize) as f32;
-
         for gz in 0..verts_z {
             let local_z = (gz * step_usize) as f32;
-            let world_pos = WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z));
-
-            let h = terrain_gen.height(&world_pos);
-
-            heights.push(h);
+            let point = WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z)).to_dvec2();
+            points.push(point);
         }
     }
+
+    let heights = terrain_gen.heights(points.as_slice());
 
     build_height_grid_from_heights(chunk_coord, step, heights)
 }
@@ -1055,35 +1059,25 @@ pub struct TreeSpawningParams {
 }
 #[derive(Clone)]
 pub struct TreeSpawner {
-    pub kind_to_archetype_id: Vec<ArchetypeId>,
-
-    /// Broad deterministic forest map.
-    forest_noise: Arc<FastNoiseLite>,
-    /// Smaller deterministic carving noise to break up blobs.
-    forest_carve_noise: Arc<FastNoiseLite>,
+    pub kind_to_archetype_id: Vec<ArchetypeId>
 }
 
 impl TreeSpawner {
     pub fn new(props: &Props) -> TreeSpawner {
         let mut kind_to_archetype_id: Vec<ArchetypeId> = Vec::new();
         for kind in TreeKind::iter() {
-            let Some(archetype_id) = props.get_archetype_id_for_name(kind.to_string().as_str())
-            else {
-                continue;
-            };
+            let name = kind.to_string().to_lowercase();
+
+            let archetype_id = props
+                .get_archetype_id_for_name(&name)
+                .or_else(|| props.get_archetype_id_for_name("oak"))
+                .unwrap_or(0);
+
             kind_to_archetype_id.push(archetype_id);
         }
 
-        let mut forest_noise = FastNoiseLite::new();
-        forest_noise.set_noise_type(Some(NoiseType::OpenSimplex2));
-
-        let mut forest_carve_noise = FastNoiseLite::new();
-        forest_carve_noise.set_noise_type(Some(NoiseType::OpenSimplex2));
-
         TreeSpawner {
-            kind_to_archetype_id,
-            forest_noise: Arc::new(forest_noise),
-            forest_carve_noise: Arc::new(forest_carve_noise),
+            kind_to_archetype_id
         }
     }
 
@@ -1092,54 +1086,39 @@ impl TreeSpawner {
         terrain_gen: &TerrainGenerator,
     ) -> Vec<VegetationSample> {
         //let gizmo = &mut Gizmo::new_empty();
-        let cs = chunk_size() as f32;
-        let cell_size = cs / VEG_GRID_SIZE as f32;
+        let cs = chunk_size() as f64;
+        let cell_size = cs as f32 / VEG_GRID_SIZE as f32;
         let mut samples = Vec::with_capacity(VEG_GRID_SIZE * VEG_GRID_SIZE);
-
+        let mut points = Vec::with_capacity(VEG_GRID_SIZE * VEG_GRID_SIZE);
+        let cx = chunk_coord.x as f64 * cs;
+        let cz = chunk_coord.z as f64 * cs;
         for gx in 0..VEG_GRID_SIZE {
             for gz in 0..VEG_GRID_SIZE {
                 let x = (gx as f32 + 0.5) * cell_size;
                 let z = (gz as f32 + 0.5) * cell_size;
-
-                let wp = WorldPos::new(chunk_coord, LocalPos::new(x, 0.0, z));
-                let h = terrain_gen.height(&wp);
-                let m = terrain_gen.moisture(&wp, h);
-                let n = Self::normal_at(terrain_gen, chunk_coord, x, z, cell_size);
-                let local_pos = LocalPos::new(x, h, z);
-                //gizmo.cross(WorldPos::new(chunk_coord, local_pos), 20.0, [1.0, 0.0, 0.0, 1.0], 0.0, 10.0);
-
-                samples.push(VegetationSample {
-                    position: local_pos,
-                    moisture: m,
-                    normal: n,
-                });
+                let point = WorldPos::new(chunk_coord, LocalPos::new(x, 0.0, z)).to_dvec2();
+                points.push(point);
             }
         }
+        let heights = terrain_gen.heights(points.as_slice());
 
+        for (p, h) in points.iter().zip(heights.as_slice()) {
+            //let n = Self::normal_at(terrain_gen, chunk_coord, p.x as f32, p.z, cell_size as f32);
+            let x = p.x - cx;
+            let z = p.y - cz;
+            let local_pos = LocalPos::new(x as f32, *h, z as f32);
+            //gizmo.cross(WorldPos::new(chunk_coord, local_pos), 20.0, [1.0, 0.0, 0.0, 1.0], 0.0, 10.0);
+
+            samples.push(VegetationSample {
+                position: local_pos,
+                moisture: 1.0,
+                normal: [0.0, 1.0, 0.0],
+            });
+        }
         //println!("gether vegetation samples gizmo pending render length: {}", gizmo.pending_renders.len());
         //push_gizmo_renders(take(&mut gizmo.pending_renders));
 
         samples
-    }
-
-    fn normal_at(
-        terrain_gen: &TerrainGenerator,
-        chunk_coord: ChunkCoord,
-        x: f32,
-        z: f32,
-        cell_size: f32,
-    ) -> [f32; 3] {
-        let eps = (cell_size * 0.25).max(0.1);
-        let h = |x: f32, z: f32| {
-            terrain_gen.height(&WorldPos::new(chunk_coord, LocalPos::new(x, 0.0, z)))
-        };
-
-        let dx = (h(x + eps, z) - h(x - eps, z)) / (2.0 * eps);
-        let dz = (h(x, z + eps) - h(x, z - eps)) / (2.0 * eps);
-
-        let n = [-dx, 1.0, -dz];
-        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-6);
-        [n[0] / len, n[1] / len, n[2] / len]
     }
 
     pub fn spawn_trees_for_chunk(
@@ -1221,10 +1200,10 @@ impl TreeSpawner {
                 let local_x = (sample.position.x + jitter_x).clamp(0.0, cs - 0.01);
                 let local_z = (sample.position.z + jitter_z).clamp(0.0, cs - 0.01);
 
-                let h_exact = terrain_gen.height(&WorldPos::new(
+                let h_exact = terrain_gen.height(WorldPos::new(
                     chunk_coord,
                     LocalPos::new(local_x, 0.0, local_z),
-                ));
+                ).to_dvec2());
 
                 let scale = rng.random_range(0.85..1.2);
                 let rotation_y_rad = rng.random_range(0.0..std::f32::consts::TAU);
@@ -1269,12 +1248,8 @@ impl TreeSpawner {
         let macro_scale = 1.0 / (cs * 0.5);
         let carve_scale = 1.0 / (cs * 4.5);
 
-        let macro_n = self
-            .forest_noise
-            .get_noise_2d(world_x * macro_scale, world_z * macro_scale);
-        let carve_n = self
-            .forest_carve_noise
-            .get_noise_2d(world_x * carve_scale, world_z * carve_scale);
+        let macro_n: f32 = 0.2; // TODO
+        let carve_n: f32 = 0.3; // TODO
 
         let macro01 = ((macro_n + 1.0) * 0.5).clamp(0.0, 1.0);
         let carve01 = ((carve_n + 1.0) * 0.5).clamp(0.0, 1.0);

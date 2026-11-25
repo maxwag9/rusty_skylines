@@ -10,3 +10,4 @@ pub mod statisticals;
 pub mod terrain;
 pub mod world;
 pub mod world_state;
+pub mod props;

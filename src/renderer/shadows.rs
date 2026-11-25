@@ -3,7 +3,7 @@ use crate::helpers::modpack::ModManager;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::render_passes::{draw_visible_buildings, draw_visible_roads};
-use crate::renderer::ui_pipelines::multisample_state;
+use crate::renderer::ui::ui_pipelines::multisample_state;
 use crate::ui::vertex::Vertex;
 use crate::world::buildings::building_mesher::BuildingVertex;
 use crate::world::buildings::building_renderer::BuildingRenderer;

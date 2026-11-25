@@ -1,0 +1,113 @@
+name: bci_branch
+elements:
+  - !Rect
+    id: Branch background
+    actions: # The category APs are being deleted in the recursive del_ap when branch gets deleted anyway.  print("Branch: {ap.3}")
+      - 'on:activated, set(str:bci_sel, ["Default", "Default", "Default"]);
+        forin(ap.1,
+          set(str:ap_name, expr:"GUI_Category_AP_"+{idx}); 
+          set(str:pos, expr:[({self.center.x}-{self.size.x}*0.45+30*{idx}), ({self.center.y}-{self.size.y}*0.40)]); 
+          add_ap(self.menu, ap_name, "bci_category", [{ap.0}, {ap.1}, idx, ap_name, self.layer, {ap.3}], pos, 1.0, false);
+          
+        );
+
+      '
+      - ''
+    x: 0
+    y: 0
+    w: 1420
+    h: 160
+    rotation: 0.0
+    color:
+      - 0.035
+      - 0.055
+      - 0.085
+      - 0.88
+    border_color:
+      - 0.16
+      - 0.25
+      - 0.35
+      - 0.95
+    border_thickness: 1.5
+    roundness: 0.10
+    fade: 0.0
+    blur: 5.2
+    glow_color:
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+    glow_misc: { }
+    misc:
+      active: true
+      touchable: true
+      editable: true # undirty(self.menu, self.layer);
+  #         set(str:best_cat_pos, "dynap:[args.0, ""]");
+  #        forin(ap.1,
+  #          ifvareq(idx, 0,
+  #            set(str:ap_name, expr:"GUI_Category_AP_"+{idx});
+  #            set(str:pos, call(best_cat_pos, []));
+  #            ,
+  #            set(str:prev_ap_name, expr:"GUI_Category_AP_"+({idx}-1));
+  #            set(str:ap_name, expr:"GUI_Category_AP_"+{idx});
+  #            set(str:pos, call(best_cat_pos, []));
+  #          );
+  #        );
+  - !Text
+    id: Branch Header Text
+    actions:
+      - 'on:activated on:screen_resize as:["Branch background"], undirty(self.menu, self.layer); set(str:self.bottomleft, as.topleft);' # Undirty so that the text has been prepared and we know the exact correct width and height of the text
+      - 'on:activated on:screen_resize as:["Branch Text background"], set(str:as.size, expr:{self.rect}*1.25); set(str:self.center.x, expr:{self.center.x}+{as.size.x}*0.5-{self.size.x}*0.5); set(str:as.center, self.center); ' #undirty(self.menu, self.layer);
+    x: 0
+    y: 0
+    pt: 20.0
+    color:
+      - 0.92
+      - 0.96
+      - 1.0
+      - 1.0
+    text: "{lang.bci.{ap.0}._name}"
+    anchor: BottomLeft
+    decorations:
+      - color: [ 0.01, 0.01, 0.01, 1.0 ]
+        spread: 1.5
+      - color: [ 0.0, 0.0, 0.0, 0.7 ]
+        spread: 1.5
+        offset: [ 2, 3 ]
+        mode: Solid
+    misc:
+      active: true
+      touchable: false
+      editable: true
+  - !Rect
+    id: Branch Text background
+    x: 0
+    y: 0
+    w: 1420
+    h: 160
+    rotation: 0.0
+    color:
+      - 0.055
+      - 0.085
+      - 0.125
+      - 0.67
+    border_color:
+      - 0.20
+      - 0.39
+      - 0.48
+      - 1.0
+    border_thickness: 1.5
+    roundness: 0.12
+    fade: 0.0
+    blur: 0
+    glow_color:
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+    glow_misc: { }
+    misc:
+      active: true
+      touchable: true
+      editable: true
+

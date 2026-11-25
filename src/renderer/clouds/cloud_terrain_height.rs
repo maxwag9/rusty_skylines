@@ -1,4 +1,4 @@
-use crate::helpers::positions::{LocalPos, WorldPos, chunk_size};
+use rusty_skylines_utils::positions::{LocalPos, WorldPos, chunk_size};
 use crate::world::terrain::terrain_subsystem::Terrain;
 use wgpu::{
     Device, Extent3d, Origin3d, Queue, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture,

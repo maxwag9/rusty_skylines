@@ -13,11 +13,11 @@
 
 use crate::data::Settings;
 use crate::helpers::implementations::SerializableVec3;
-use crate::helpers::positions::{ChunkCoord, WorldPos};
+use rusty_skylines_utils::positions::{ChunkCoord, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::systems::systems::RoadDestroyType;
 use crate::world::buildings::buildings::Buildings;
-use crate::world::buildings::utilities::utilities::UtilityRail;
+use crate::world::buildings::utilities::utilities::{Utility, UtilityRail};
 use crate::world::buildings::zoning::{DistrictId, LotId, ZoningStorage};
 use crate::world::cars::car_subsystem::Cars;
 use crate::world::cars::parking::ParkingSpotId;
@@ -37,11 +37,15 @@ use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::{Vec3, Vec3Swizzles};
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::f32::consts::{PI, TAU};
 use std::hash::{Hash, Hasher};
 use std::mem::replace;
+use tracing::{error, info};
+use tracing::log::warn;
 use xxhash_rust::xxh3::xxh3_64;
+use crate::helpers::modpack::ModManager;
+use crate::ui::parser::Value;
 
 pub const METERS_PER_LANE_POLYLINE_STEP: f64 = 2.0;
 
@@ -2014,38 +2018,221 @@ impl RoadStorage {
             .as_ref()
             .map(|segment| segment.lot_ids.as_slice())
     }
+
+    pub fn replace_all_road_types(&mut self, rt_id: RoadTypeId) {
+        println!("Replacing all road types...");
+        for segment in self.segments.iter_mut().flatten() {
+            segment.road_type_id = rt_id;
+        }
+        // for Some(node) in self.nodes.iter_mut() {
+        //     node.arms.iter_mut().for_each(|arm| {
+        //         arm.
+        //     })
+        // }
+    }
 }
+
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[revisioned(revision = 1)]
+pub struct RoadTypesData {
+    pub categories: BTreeMap<String, Vec<RoadType>>,
+}
+
+#[derive(Clone, Default)]
 pub struct RoadTypes {
-    road_types: HashMap<RoadTypeId, RoadType>,
+    pub data: RoadTypesData,
+    pub save_data: RoadTypesData,
+    id_lookup: HashMap<RoadTypeId, (String, usize)>,
 }
 impl RoadTypes {
     pub fn new() -> Self {
         Self {
-            road_types: HashMap::new(),
+            data: Default::default(),
+            save_data: Default::default(),
+            id_lookup: Default::default(),
         }
-    }
-    pub fn get_road_type(&self, id: RoadTypeId) -> Option<&RoadType> {
-        self.road_types.get(&id)
-    }
-    pub fn change_road_type(&mut self, road_type: RoadType) -> RoadTypeId {
-        let bytes = postcard::to_stdvec(&road_type).unwrap_or_default();
-        let key = xxh3_64(&bytes) as u32;
-        self.road_types.insert(key, road_type);
-        key
     }
 
-    pub fn add_road_type(&mut self, road_type: &RoadType) -> RoadTypeId {
-        let bytes = postcard::to_stdvec(road_type).unwrap_or_default();
-        let key = xxh3_64(&bytes) as u32;
-        if !self.road_types.contains_key(&key) {
-            self.road_types.insert(key, road_type.clone());
-        }
-        key
+    pub fn make_id(mod_id: &str, category: &str, local_id: &str) -> RoadTypeId {
+        xxh3_64(format!("{mod_id}\0{category}\0{local_id}").as_bytes())
     }
+    pub fn rebuild_lookup(&mut self) {
+        self.id_lookup.clear();
+
+        for (category, road_types) in &self.data.categories {
+            for (index, road_type) in road_types.iter().enumerate() {
+                let id = road_type.stable_id;
+
+                self.id_lookup.insert(id, (category.clone(), index));
+            }
+        }
+    }
+    pub fn load(&mut self, mod_manager: &ModManager) {
+        let mut loaded = BTreeMap::<String, Vec<RoadType>>::new();
+        let mut identities = HashMap::<RoadTypeId, String>::new();
+        let mut paths = mod_manager.road_type_paths();
+        paths.sort();
+        for path in paths {
+            let mod_id = mod_manager
+                .enabled_mods()
+                .filter(|m| path.starts_with(&m.path))
+                .max_by_key(|m| m.path.components().count())
+                .map(|m| m.id().clone());
+
+            let Some(mod_id) = mod_id else {
+                error!(
+                    "[Road Types] Could not determine owning mod for '{}'.",
+                    path.display()
+                );
+                continue;
+            };
+            //println!("{}", mod_id);
+            let contents = match std::fs::read_to_string(&path) {
+                Ok(contents) => contents,
+                Err(err) => {
+                    error!(
+                        "[Road Types] Failed to read '{}': {}",
+                        path.display(),
+                        err
+                    );
+                    continue;
+                }
+            };
+            #[derive(Deserialize)]
+            #[serde(untagged)]
+            enum RoadTypesYaml {
+                Multiple(BTreeMap<String, Vec<RoadType>>),
+                Single(RoadType),
+            }
+            let road_types = match serde_yaml::from_str::<RoadTypesYaml>(&contents) {
+                Ok(RoadTypesYaml::Multiple(categories)) => categories,
+                Ok(RoadTypesYaml::Single(road_type)) => {
+                    BTreeMap::from([("Default".to_string(), vec![road_type])])
+                }
+                Err(err) => {
+                    error!(
+                        "[Road Types] Failed to deserialize '{}': {}",
+                        path.display(),
+                        err
+                    );
+                    continue;
+                }
+            };
+
+            for (category, road_types) in road_types {
+                let target = loaded.entry(category.clone()).or_insert_with(Vec::new);
+
+                for mut road_type in road_types {
+                    if road_type.id.is_empty() {
+                        error!("[Road Types] Empty Road Type ID in '{}'.", path.display());
+                        continue;
+                    }
+
+                    let identity = format!("{mod_id}:{category}:{}", road_type.id);
+                    let id = Self::make_id(mod_id.as_str(), category.as_str(), road_type.id.as_str());
+                    road_type.stable_id = id;
+                    road_type.identity = identity.clone();
+                    if let Some(previous) = identities.get(&id) {
+                        if previous == &identity {
+                            warn!(
+                                "[Road Types] Duplicate identity '{}'. Skipping '{}'.",
+                                identity,
+                                path.display()
+                            );
+                        } else {
+                            error!(
+                                "[Road Types] Hash collision between '{}' and '{}'. Skipping '{}'.",
+                                previous,
+                                identity,
+                                path.display()
+                            );
+                        }
+
+                        continue;
+                    }
+
+                    identities.insert(id, identity);
+                    target.push(road_type);
+                }
+            }
+        }
+
+        println!(
+            "[Road Types] Loaded {} road types across {} categories.",
+            loaded.values().map(Vec::len).sum::<usize>(),
+            loaded.len()
+        );
+
+        for (category, road_types) in &self.save_data.categories {
+            loaded
+                .entry(category.clone())
+                .or_default()
+                .extend(road_types.iter().cloned());
+        }
+
+        self.data.categories = loaded;
+        self.rebuild_lookup();
+    }
+    pub fn to_value(&self) -> Value {
+        Value::Array(
+            self.data.categories
+                .iter()
+                .map(|(category, road_types)| {
+                    Value::Array(vec![
+                        Value::String(category.clone()),
+                        Value::Array(
+                            road_types
+                                .iter()
+                                .map(|road_type| {
+                                    Value::Array(vec![
+                                        Value::String(road_type.id.clone()),
+                                    ])
+                                })
+                                .collect(),
+                        ),
+                    ])
+                })
+                .collect(),
+        )
+    }
+    pub fn get_road_type(&self, id: RoadTypeId) -> Option<&RoadType> {
+        let (category, index) = self.id_lookup.get(&id)?;
+        self.data.categories.get(category)?.get(*index)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item=(RoadTypeId, &RoadType)> {
+        self.data.categories.values().flatten().map(|road_type| (road_type.stable_id, road_type))
+    }
+
+    // pub fn change_road_type(
+    //     &mut self,
+    //     id: RoadTypeId,
+    //     road_type: RoadType,
+    // ) -> bool {
+    //     let Some(existing) = self.road_types.get_mut(&id) else {
+    //         return false;
+    //     };
+    //
+    //     if existing.id != road_type.id {
+    //         error!(
+    //             "[Road Types] Cannot change the stable ID of an existing road type."
+    //         );
+    //         return false;
+    //     }
+    //
+    //     *existing = road_type;
+    //     true
+    // }
+    pub fn first_id(&self) -> Option<RoadTypeId> {
+        self.data.categories.values().flatten()
+            .min_by_key(|road_type| road_type.identity.as_str())
+            .map(|road_type| road_type.stable_id)
+    }
+
+
 }
+
 
 pub struct RoadManager {
     pub roads: RoadStorage,
@@ -3251,7 +3438,7 @@ fn compute_lane_geometries(
 ) -> Vec<LaneDefinition> {
     let mut lanes = Vec::new();
     let (left_count, right_count) = road_type.lanes_each_direction();
-    let lane_width = road_type.lane_width;
+    let lane_width = road_type.lane_width();
 
     // Forward lanes (right side: travel from start to end)
     for i in 0..right_count {
@@ -3261,7 +3448,7 @@ fn compute_lane_geometries(
             centerline,
             lane_index,
             lane_width,
-            road_type.structure,
+            road_type.structure(),
         );
         let geometry = LaneGeometry::from_polyline(polyline);
 
@@ -3280,7 +3467,7 @@ fn compute_lane_geometries(
             centerline,
             lane_index,
             lane_width,
-            road_type.structure,
+            road_type.structure(),
         );
         polyline.reverse();
         let geometry = LaneGeometry::from_polyline(polyline);

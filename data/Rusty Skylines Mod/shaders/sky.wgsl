@@ -815,26 +815,241 @@ fn pl_neptune(nb: vec3<f32>, px: f32) -> PlSurf {
     return s;
 }
 
+
 fn pl_pluto(nb: vec3<f32>, px: f32) -> PlSurf {
     let ll = pl_lonlat(nb);
+
     var ld = degrees(ll.x);
-    if ld < 0.0 { ld = ld + 360.0; }
-    let a = pl_n(nb, 3.2, vec3<f32>(1.0, 5.0, 9.0), px);
-    let b = pl_n(nb, 9.0, vec3<f32>(7.0, 2.0, 3.0), px);
-    var col = mix(vec3<f32>(0.36, 0.25, 0.18), vec3<f32>(0.58, 0.44, 0.32), a);
-    col *= 0.88 + 0.24 * b;
-    let cth = smoothstep(30.0, 60.0, ld) * (1.0 - smoothstep(130.0, 150.0, ld));
-    col = mix(col, vec3<f32>(0.12, 0.05, 0.035), cth * (1.0 - smoothstep(0.1, 0.3, abs(nb.z))) * 0.9);
-    let sp = pl_ellipse(ll.x, ll.y, radians(178.0), radians(18.0), radians(20.0), radians(21.0));
-    let lb = pl_ellipse(ll.x, ll.y, radians(150.0), radians(32.0), radians(13.0), radians(12.0));
-    let heart = max(pl_blob(sp, 0.7), pl_blob(lb, 0.7));
-    col = mix(col, vec3<f32>(0.86, 0.80, 0.70), heart * (0.85 + 0.15 * b));
-    col = mix(col, vec3<f32>(0.25, 0.12, 0.08), smoothstep(0.7, 0.92, nb.z) * 0.6);
+    if ld < 0.0 { ld += 360.0; }
+
+    let lmacro = pl_n(
+        nb,
+        3.0,
+        vec3<f32>(1.0, 5.0, 9.0),
+        px
+    );
+
+    let mid = pl_n(
+        nb,
+        9.0,
+        vec3<f32>(7.0, 2.0, 3.0),
+        px
+    );
+
+    let fine = pl_n(
+        nb,
+        20.0,
+        vec3<f32>(4.0, 8.0, 2.0),
+        px
+    );
+
+    let warp = pl_n(
+        nb,
+        4.0,
+        vec3<f32>(8.0, 1.0, 6.0),
+        px
+    );
+
+    var col = mix(
+        vec3<f32>(0.32, 0.22, 0.17),
+        vec3<f32>(0.59, 0.44, 0.33),
+        lmacro
+    );
+
+    col *= 0.86 + 0.22 * mid + 0.08 * fine;
+
+    // Cthulhu Macula: dark equatorial terrain.
+    let cth_lon =
+        smoothstep(25.0, 48.0, ld)
+        * (1.0 - smoothstep(128.0, 153.0, ld));
+
+    let cth_lat =
+        1.0 - smoothstep(0.08, 0.43, abs(nb.z));
+
+    let cth_detail = pl_n(
+        nb,
+        13.0,
+        vec3<f32>(3.0, 9.0, 5.0),
+        px
+    );
+
+    let cth_color = mix(
+        vec3<f32>(0.095, 0.033, 0.025),
+        vec3<f32>(0.29, 0.105, 0.066),
+        cth_detail
+    );
+
+    col = mix(
+        col,
+        cth_color,
+        cth_lon * cth_lat * 0.92
+    );
+
+    // Sputnik Planitia and the eastern lobe.
+    let sp = pl_ellipse(
+        ll.x,
+        ll.y,
+        radians(178.0),
+        radians(18.0),
+        radians(33.0),
+        radians(23.0)
+    );
+
+    let sp_r = length(sp);
+
+    let sp_a = pl_blob(sp, 0.68);
+
+    let sp_b = pl_blob(
+        pl_ellipse(
+            ll.x,
+            ll.y,
+            radians(222.0),
+            radians(21.0),
+            radians(24.0),
+            radians(19.0)
+        ),
+        0.65
+    );
+
+    let sp_mask = max(sp_a, sp_b * 0.82);
+
+    // Convective nitrogen-ice cells and polygonal troughs.
+    let cells_uv = sp * 28.0 + vec2<f32>(
+        (warp - 0.5) * 1.8,
+        (mid - 0.5) * 1.4
+    );
+
+    let cell_edge = pl_voronoi_edge(cells_uv);
+
+    let cell_trough = 1.0 - smoothstep(
+        0.018,
+        0.105,
+        cell_edge
+    );
+
+    let cell_lod = 1.0 - smoothstep(
+        0.015,
+        0.065,
+        px
+    );
+
+    var sputnik = mix(
+        vec3<f32>(0.69, 0.65, 0.57),
+        vec3<f32>(0.89, 0.85, 0.76),
+        smoothstep(0.32, 0.72, lmacro)
+    );
+
+    sputnik = mix(
+        sputnik,
+        vec3<f32>(0.49, 0.47, 0.43),
+        cell_trough * cell_lod * 0.40
+    );
+
+    sputnik *= 0.93 + 0.12 * fine;
+
+    col = mix(col, sputnik, sp_mask);
+
+    // Raised and roughened basin margins.
+    let basin_rim = exp(
+        -pow((sp_r - 1.035) / 0.105, 2.0)
+    );
+
+    let rim_color = mix(
+        vec3<f32>(0.48, 0.39, 0.31),
+        vec3<f32>(0.73, 0.67, 0.56),
+        mid
+    );
+
+    col = mix(
+        col,
+        rim_color,
+        basin_rim * 0.58 * (1.0 - sp_mask)
+    );
+
+    // Water-ice mountains around the basin.
+    let mountain_zone =
+        smoothstep(0.84, 1.02, sp_r)
+        * (1.0 - smoothstep(1.20, 1.50, sp_r));
+
+    let mountain_noise = pl_n(
+        nb,
+        25.0,
+        vec3<f32>(8.0, 2.0, 6.0),
+        px
+    );
+
+    let ridges = pow(
+        1.0 - abs(2.0 * mountain_noise - 1.0),
+        2.5
+    );
+
+    let mountain_color = mix(
+        vec3<f32>(0.38, 0.43, 0.46),
+        vec3<f32>(0.76, 0.78, 0.76),
+        ridges
+    );
+
+    col = mix(
+        col,
+        mountain_color,
+        mountain_zone * 0.90
+    );
+
+    // Hillary and Norgay mountain massifs.
+    let hillary = pl_blob(
+        pl_ellipse(
+            ll.x,
+            ll.y,
+            radians(150.0),
+            radians(27.0),
+            radians(10.0),
+            radians(8.0)
+        ),
+        0.32
+    );
+
+    let norgay = pl_blob(
+        pl_ellipse(
+            ll.x,
+            ll.y,
+            radians(155.0),
+            radians(-8.0),
+            radians(12.0),
+            radians(9.0)
+        ),
+        0.35
+    );
+
+    col = mix(
+        col,
+        vec3<f32>(0.79, 0.79, 0.75),
+        max(hillary, norgay) * 0.82
+    );
+
+    // Northern and southern highland colour variation.
+    col = mix(
+        col,
+        vec3<f32>(0.69, 0.57, 0.40) * (0.92 + 0.12 * fine),
+        smoothstep(0.47, 0.82, nb.z) * 0.75
+    );
+
+    col = mix(
+        col,
+        vec3<f32>(0.25, 0.16, 0.13),
+        (1.0 - smoothstep(-0.85, -0.42, nb.z)) * 0.26
+    );
+
     var s = pl_surf_base(col);
-    s.wrap = 0.02;
-    s.haze = vec3<f32>(0.3, 0.4, 0.6) * 0.04;
+
+    s.craters = 0.45;
+    s.mare = sp_mask * 0.90;
+    s.wrap = 0.035;
+    s.limb = 0.18;
+    s.haze = vec3<f32>(0.48, 0.68, 1.0) * 0.18;
+
     return s;
 }
+
 
 fn pl_io(nb: vec3<f32>, px: f32) -> PlSurf {
     let a = pl_n(nb, 3.0, vec3<f32>(1.3, 6.1, 2.2), px);
@@ -940,19 +1155,197 @@ fn pl_triton(nb: vec3<f32>, px: f32) -> PlSurf {
     return pl_surf_base(col);
 }
 
+
 fn pl_charon(nb: vec3<f32>, px: f32) -> PlSurf {
-    let n = pl_n(nb, 3.0, vec3<f32>(7.0, 3.0, 2.0), px);
-    var col = vec3<f32>(0.38, 0.37, 0.38) * (0.8 + 0.4 * n);
-    col = mix(col, vec3<f32>(0.34, 0.14, 0.09), smoothstep(0.55, 0.85, nb.z + 0.2 * (n - 0.5)) * 0.85);
+    let ll = pl_lonlat(nb);
+
+    let lmacro = pl_n(
+        nb,
+        2.8,
+        vec3<f32>(7.0, 3.0, 2.0),
+        px
+    );
+
+    let detail = pl_n(
+        nb,
+        8.0,
+        vec3<f32>(2.0, 8.0, 5.0),
+        px
+    );
+
+    let fine = pl_n(
+        nb,
+        19.0,
+        vec3<f32>(5.0, 1.0, 9.0),
+        px
+    );
+
+    var col = mix(
+        vec3<f32>(0.27, 0.27, 0.28),
+        vec3<f32>(0.62, 0.61, 0.58),
+        lmacro
+    );
+
+    col *= 0.84 + 0.20 * detail + 0.10 * fine;
+
+    // Mordor Macula: reddish northern polar terrain.
+    let polar_noise = pl_n(
+        nb,
+        8.0,
+        vec3<f32>(3.0, 7.0, 1.0),
+        px
+    );
+
+    let polar_edge = nb.z + (polar_noise - 0.5) * 0.16;
+
+    let mordor = smoothstep(
+        0.47,
+        0.76,
+        polar_edge
+    );
+
+    let mordor_color = mix(
+        vec3<f32>(0.095, 0.031, 0.025),
+        vec3<f32>(0.33, 0.105, 0.067),
+        detail
+    );
+
+    col = mix(
+        col,
+        mordor_color,
+        mordor * 0.95
+    );
+
+    let polar_transition = exp(
+        -pow((polar_edge - 0.49) / 0.055, 2.0)
+    );
+
+    col = mix(
+        col,
+        vec3<f32>(0.48, 0.26, 0.17),
+        polar_transition * 0.45
+    );
+
+    // Serenity Chasma: long, irregular tectonic fracture.
+    let chasma_center =
+        radians(-12.0)
+        + 0.035 * sin(ll.x * 2.3 + 0.7)
+        + 0.015 * sin(ll.x * 5.0 + 1.9);
+
+    let chasma_dist = abs(ll.y - chasma_center);
+
+    let chasma_core = exp(
+        -pow(chasma_dist / 0.012, 2.0)
+    );
+
+    let chasma_shadow = exp(
+        -pow(chasma_dist / 0.035, 2.0)
+    );
+
+    let chasma_rim = exp(
+        -pow((chasma_dist - 0.046) / 0.018, 2.0)
+    );
+
+    col = mix(
+        col,
+        vec3<f32>(0.105, 0.11, 0.12),
+        chasma_shadow * 0.60
+    );
+
+    col = mix(
+        col,
+        vec3<f32>(0.075, 0.078, 0.085),
+        chasma_core * 0.45
+    );
+
+    col = mix(
+        col,
+        vec3<f32>(0.67, 0.66, 0.62),
+        chasma_rim * 0.26
+    );
+
+    // Secondary tectonic fractures.
+    let fracture_curve =
+        radians(-34.0)
+        + 0.018 * sin(ll.x * 3.5 + 2.0)
+        + 0.012 * sin(ll.x * 7.0);
+
+    let fracture = exp(
+        -pow(
+            (ll.y - fracture_curve) / 0.012,
+            2.0
+        )
+    );
+
+    col = mix(
+        col,
+        vec3<f32>(0.13, 0.13, 0.14),
+        fracture * 0.60
+    );
+
+    // Large impact basins and their raised ejecta.
+    let basin_a = pl_ellipse(
+        ll.x,
+        ll.y,
+        radians(75.0),
+        radians(8.0),
+        radians(19.0),
+        radians(15.0)
+    );
+
+    let basin_b = pl_ellipse(
+        ll.x,
+        ll.y,
+        radians(245.0),
+        radians(-27.0),
+        radians(14.0),
+        radians(12.0)
+    );
+
+    let radius_a = length(basin_a);
+    let radius_b = length(basin_b);
+
+    let ejecta_a = exp(
+        -pow((radius_a - 0.88) / 0.10, 2.0)
+    );
+
+    let ejecta_b = exp(
+        -pow((radius_b - 0.90) / 0.12, 2.0)
+    );
+
+    col = mix(
+        col,
+        vec3<f32>(0.70, 0.69, 0.64),
+        max(ejecta_a, ejecta_b) * 0.32
+    );
+
+    // Smooth icy plains.
+    let plains = smoothstep(
+        0.52,
+        0.76,
+        pl_n(nb, 3.5, vec3<f32>(4.0, 9.0, 2.0), px)
+    );
+
+    col = mix(
+        col,
+        vec3<f32>(0.66, 0.66, 0.64),
+        plains * 0.30
+    );
+
     var s = pl_surf_base(col);
-    s.craters = 0.9;
-    s.mare = smoothstep(0.0, 0.4, -nb.z) * 0.7;
+
+    s.craters = 1.15;
+    s.mare = 0.30;
+    s.wrap = 0.035;
+    s.limb = 0.12;
+
     return s;
 }
 
+
 fn pl_surface(i: u32, nb: vec3<f32>, px: f32) -> PlSurf {
     var s: PlSurf;
-    switch i {
+    switch (i) {
         case 0u: { s = pl_mars(nb, px); }
         case 1u: { s = pl_pluto(nb, px); }
         case 2u: { s = pl_neptune(nb, px); }
@@ -1003,7 +1396,19 @@ fn pl_shade_body(i: u32, q: vec2<f32>, r2: f32, px_rel: f32, rot: mat3x3<f32>) -
         let sr = pl_seed_rotate(sb, i);
         let cf = crater_field(nr, px, surf.mare);
         albedo = albedo * (1.0 + cf.bright * surf.craters - cf.floor_dark * 0.12);
-        let ln = crater_surface_normal(nr, cf.grad);
+        var ln = crater_surface_normal(nr, cf.grad);
+
+        if i == PB_PLUTO {
+            let relief_normal =
+                pl_seed_rotate(
+                    pl_pluto_relief_normal(nb, px),
+                    i
+                );
+
+            ln = normalize(
+                ln + (relief_normal - nr) * 1.35
+            );
+        }
         let sdot = dot(nr, sr);
         var shadow = 1.0;
         if sdot > -0.12 {
@@ -1044,8 +1449,9 @@ fn pl_shade_body(i: u32, q: vec2<f32>, r2: f32, px_rel: f32, rot: mat3x3<f32>) -
 
 fn pl_halo(i: u32, q: vec2<f32>, r2: f32, size_px: f32, cam_right: vec3<f32>, cam_up: vec3<f32>) -> vec3<f32> {
     var hc = vec3<f32>(0.0);
-    switch i {
+    switch (i) {
         case 0u: { hc = vec3<f32>(0.80, 0.60, 0.50) * 0.10; }
+        case 1u: { hc = vec3<f32>(0.38, 0.62, 1.0) * 0.24; }
         case 2u: { hc = vec3<f32>(0.30, 0.50, 1.00) * 0.45; }
         case 3u: { hc = vec3<f32>(0.55, 0.90, 0.95) * 0.35; }
         case 4u: { hc = vec3<f32>(0.75, 0.60, 0.50) * 0.08; }
@@ -1065,12 +1471,23 @@ fn pl_halo(i: u32, q: vec2<f32>, r2: f32, size_px: f32, cam_right: vec3<f32>, ca
     if sl > 1.0e-3 {
         side = smoothstep(-0.35, 0.85, dot(q / rr, sun_scr / sl));
     }
-    let gate = smoothstep(4.0, 14.0, size_px);
-    let fall = exp(-(rr - 1.0) * 16.0);
+    let gate = select(
+        smoothstep(4.0, 14.0, size_px),
+        smoothstep(0.8, 2.5, size_px),
+        i == PB_PLUTO
+    );
+
+    let fall_rate = select(
+        16.0,
+        6.5,
+        i == PB_PLUTO
+    );
+
+    let fall = exp(-(rr - 1.0) * fall_rate);
     return hc * fall * side * (0.3 + 0.7 * saturate(sl * 1.6)) * pl_irradiance(p) * gate * 0.25;
 }
 
-fn pl_render(ndc: vec2<f32>, pix: f32, day_w: f32) -> PlOut {
+fn pl_render(screen_pos: vec2<f32>, pix: f32, day_w: f32) -> PlOut {
     var res: PlOut;
     res.glow = vec3<f32>(0.0);
     res.rgb = vec3<f32>(0.0);
@@ -1089,14 +1506,21 @@ fn pl_render(ndc: vec2<f32>, pix: f32, day_w: f32) -> PlOut {
     var best_local = 0.0;
     var sat_q = vec2<f32>(1000.0);
     var sat_size = 0.0;
-
+    let aspect = u.screen_size.x / max(u.screen_size.y, 1.0);
     for (var i = 0u; i < PL_BODY_COUNT; i = i + 1u) {
         let ds = sky.celestial_bodies[i].direction_size;
-        let rad = ds.w*200.0;
+        let rad = ds.w;//*200.0;
         if rad <= 0.0 { continue; }
         let clip = u.view_proj * vec4<f32>(ds.xyz, 0.0);
         if clip.w <= 0.0 { continue; }
-        let dn = ndc - clip.xy / clip.w;
+        let body_ndc = clip.xy / clip.w;
+
+        let body_screen = vec2<f32>(
+            body_ndc.x * aspect,
+            body_ndc.y
+        );
+
+        let dn = screen_pos - body_screen;
         let size_px = rad / pix;
 
         // star-like point for unresolved bodies (magnitude based)
@@ -1121,7 +1545,11 @@ fn pl_render(ndc: vec2<f32>, pix: f32, day_w: f32) -> PlOut {
             sat_q = q;
             sat_size = size_px;
         }
-        if size_px > 4.0 && r2 > 1.0 && r2 < 2.25 {
+        if (
+            (size_px > 4.0 || (i == PB_PLUTO && size_px > 0.8))
+            && r2 > 1.0
+            && r2 < 2.25
+        ) {
             res.glow += pl_halo(i, q, r2, size_px, cam_right, cam_up);
         }
 
@@ -1201,8 +1629,13 @@ fn fs_main(input: VSOut) -> FragOut {
         * exp(-sun_below_degrees / 6.5);
     let ndc = input.ndc;
 
-    // pixel size in NDC (must be sampled in uniform control flow)
-    let pixel_ndc = max(max(fwidth(ndc.x), fwidth(ndc.y)), 0.000001);
+    let aspect = u.screen_size.x / max(u.screen_size.y, 1.0);
+    let screen_pos = vec2<f32>(ndc.x * aspect, ndc.y);
+
+    let pixel_ndc = max(
+        max(fwidth(screen_pos.x), fwidth(screen_pos.y)),
+        0.000001
+    );
     let day_w = smoothstep(-0.22, 0.06, sun_alt);
 
     var col = vec3<f32>(0.0);
@@ -1233,7 +1666,12 @@ fn fs_main(input: VSOut) -> FragOut {
     var moon_surface_col = vec3<f32>(0.0);
 
     if moon_visible && sky.moon_size > 0.000001 {
-        moon_rel = (ndc - moon_ndc) / sky.moon_size;
+        let moon_screen = vec2<f32>(
+            moon_ndc.x * aspect,
+            moon_ndc.y
+        );
+
+        moon_rel = (screen_pos - moon_screen) / sky.moon_size;
         moon_r2 = dot(moon_rel, moon_rel);
 
         let moon_distance = sqrt(max(moon_r2, 0.0));
@@ -1391,7 +1829,12 @@ fn fs_main(input: VSOut) -> FragOut {
     var sun_corona_col = vec3<f32>(0.0);
     if sun_visible {
         let radius = max(sky.sun_size, 0.000001);
-        let sun_delta = ndc - sun_ndc;
+        let sun_screen = vec2<f32>(
+            sun_ndc.x * aspect,
+            sun_ndc.y
+        );
+
+        let sun_delta = screen_pos - sun_screen;
         let d = length(sun_delta);
         let sun_uv = sun_delta / radius;
 
@@ -1614,7 +2057,7 @@ fn fs_main(input: VSOut) -> FragOut {
 
     // planets, moons and rings: composited over the sun (transits) and
     // under Earth's Moon (occultations), then washed by the sky like the rest
-    let planets = pl_render(ndc, pixel_ndc, day_w);
+    let planets = pl_render(screen_pos, pixel_ndc, day_w);
 
     col += sun_halo_col * eclipse_coverage;
     col += sun_corona_col * eclipse_coverage;
@@ -2367,4 +2810,229 @@ fn lunar_self_shadow(
     }
 
     return visibility;
+}
+
+fn pl_hash21(p: vec2<f32>) -> f32 {
+    return fract(
+        sin(dot(p, vec2<f32>(127.1, 311.7)))
+        * 43758.5453
+    );
+}
+
+// Returns the distance difference between the nearest and
+// second-nearest cell sites. Small values indicate cell boundaries.
+fn pl_voronoi_edge(p: vec2<f32>) -> f32 {
+    let cell = floor(p);
+    let f = fract(p);
+
+    var nearest = 1000.0;
+    var second = 1000.0;
+
+    for (var y = -1; y <= 1; y = y + 1) {
+        for (var x = -1; x <= 1; x = x + 1) {
+            let offset = vec2<f32>(f32(x), f32(y));
+            let id = cell + offset;
+
+            let jitter = vec2<f32>(
+                pl_hash21(id),
+                pl_hash21(id + vec2<f32>(19.19, 73.73))
+            );
+
+            let site = offset + vec2<f32>(0.5)
+                + (jitter - vec2<f32>(0.5)) * 0.62;
+
+            let d = length(site - f);
+
+            if d < nearest {
+                second = nearest;
+                nearest = d;
+            } else if d < second {
+                second = d;
+            }
+        }
+    }
+
+    return max(second - nearest, 0.0);
+}
+
+// Pluto's normalized radial height field.
+// Heights are relative to the unit sphere radius.
+fn pl_pluto_height(nb: vec3<f32>, px: f32) -> f32 {
+    let ll = pl_lonlat(nb);
+
+    let sp = pl_ellipse(
+        ll.x,
+        ll.y,
+        radians(178.0),
+        radians(18.0),
+        radians(33.0),
+        radians(23.0)
+    );
+
+    let sp_r = length(sp);
+
+    // Sputnik Planitia: depressed impact basin.
+    let basin_floor =
+        1.0 - smoothstep(0.66, 1.10, sp_r);
+
+    // Raised basin margins.
+    let basin_rim = exp(
+        -pow((sp_r - 1.035) / 0.105, 2.0)
+    );
+
+    // Large-scale surrounding terrain.
+    let lmacro = pl_n(
+        nb,
+        7.0,
+        vec3<f32>(4.0, 8.0, 2.0),
+        px
+    );
+
+    // Water-ice mountain relief.
+    let mountain_noise = pl_n(
+        nb,
+        25.0,
+        vec3<f32>(8.0, 2.0, 6.0),
+        px
+    );
+
+    let ridges = pow(
+        1.0 - abs(2.0 * mountain_noise - 1.0),
+        2.5
+    );
+
+    let mountain_zone =
+        smoothstep(0.84, 1.02, sp_r)
+        * (1.0 - smoothstep(1.20, 1.50, sp_r));
+
+    // Individual mountain massifs near the basin margins.
+    let hillary = pl_blob(
+        pl_ellipse(
+            ll.x,
+            ll.y,
+            radians(150.0),
+            radians(27.0),
+            radians(10.0),
+            radians(8.0)
+        ),
+        0.32
+    );
+
+    let norgay = pl_blob(
+        pl_ellipse(
+            ll.x,
+            ll.y,
+            radians(155.0),
+            radians(-8.0),
+            radians(12.0),
+            radians(9.0)
+        ),
+        0.35
+    );
+
+    let massifs = max(hillary, norgay);
+
+    // Nitrogen-ice convection cells.
+    let cell_warp = pl_n(
+        nb,
+        4.0,
+        vec3<f32>(3.0, 7.0, 5.0),
+        px
+    );
+
+    let cell_uv = sp * 28.0 + vec2<f32>(
+        (cell_warp - 0.5) * 1.8,
+        (lmacro - 0.5) * 1.4
+    );
+
+    let cell_edge = pl_voronoi_edge(cell_uv);
+
+    let cell_trough = 1.0 - smoothstep(
+        0.018,
+        0.105,
+        cell_edge
+    );
+
+    let cell_lod = 1.0 - smoothstep(
+        0.015,
+        0.065,
+        px
+    );
+
+    let cell_relief =
+        (
+            0.00012 * (1.0 - cell_trough)
+            - 0.00016 * cell_trough
+        )
+        * basin_floor
+        * cell_lod;
+
+    // Fine irregularity on the rocky highlands.
+    let roughness = pl_n(
+        nb,
+        48.0,
+        vec3<f32>(9.0, 3.0, 7.0),
+        px
+    );
+
+    let highland_relief =
+        mountain_zone * (
+            0.00035
+            + 0.0028 * ridges
+        );
+
+    let massif_relief = massifs * 0.0032;
+
+    let basin = -0.0052 * basin_floor;
+    let rim = 0.0018 * basin_rim;
+
+    let broad_terrain = (lmacro - 0.5) * 0.0006;
+    let fine_terrain = (roughness - 0.5) * 0.00016;
+
+    return basin
+        + rim
+        + highland_relief
+        + massif_relief
+        + cell_relief
+        + broad_terrain
+        + fine_terrain;
+}
+
+// Derives a displaced-looking normal from the height field.
+// The original spherical normal remains the underlying geometry.
+fn pl_pluto_relief_normal(
+    nb: vec3<f32>,
+    px: f32
+) -> vec3<f32> {
+    let reference = select(
+        vec3<f32>(0.0, 1.0, 0.0),
+        vec3<f32>(0.0, 0.0, 1.0),
+        abs(nb.z) < 0.88
+    );
+
+    let tx = normalize(cross(reference, nb));
+    let ty = normalize(cross(nb, tx));
+
+    let eps = clamp(
+        px * 0.4,
+        0.0015,
+        0.03
+    );
+
+    let nxp = normalize(nb + tx * eps);
+    let nxm = normalize(nb - tx * eps);
+    let nyp = normalize(nb + ty * eps);
+    let nym = normalize(nb - ty * eps);
+
+    let hxp = pl_pluto_height(nxp, px);
+    let hxm = pl_pluto_height(nxm, px);
+    let hyp = pl_pluto_height(nyp, px);
+    let hym = pl_pluto_height(nym, px);
+
+    let dhx = (hxp - hxm) / (2.0 * eps);
+    let dhy = (hyp - hym) / (2.0 * eps);
+
+    let gradient = tx * dhx + ty * dhy;
+
+    return normalize(nb - gradient * 3.5);
 }

@@ -3,209 +3,17 @@ layers:
   - name: debug_texts
     order: 2
     elements:
+
+      # Left Side
       - !Text
-        id: version_text
-        x: 0.0
-        y: 0.0
-        pt: 20
-        resize_behaviour:
-          width: uniform
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: 'Rusty Skylines Alpha v{var:GAME_VERSION}'
-        anchor: TopLeft
-        decorations:
-          - color: [ 0.0, 0.0, 0.0, 1.0 ]
-            spread: 3.0
-        misc:
-          touchable: false
-      - !Text
-        id: fps_text
-        x: 0.0
-        y: 25
+        id: Version Info
+        x: 5
+        y: 2
         pt: 15
         resize_behaviour:
           width: uniform
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: 'FPS: {expr:{fps}:.1} | Frame: {expr:({render_dt} * 1000):.2}ms | Render CPU: {expr:fix({cpu_frametime??0}:.2, 2, 2)}ms | Sim: {expr:({sim_dt} * 1000):.2}ms | {expr:{fps} > 60 ? "Smooth" : "Laggy"}'
-        anchor: TopLeft
-        decorations:
-          - color: [ 0.0, 0.0, 0.0, 1.0 ]
-            spread: 1.5
-        misc:
-          touchable: false
-      - !Text
-        id: cpu_frametime_text
-        x: 0.0
-        y: 45
-        pt: 15
-        resize_behaviour:
-          width: uniform
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: 'CPU frametimes: {cpu_frametimes}'
-        anchor: TopLeft
-        decorations:
-          - color: [ 0.0, 0.0, 0.0, 1.0 ]
-            spread: 1.5
-        misc:
-          touchable: false
-      - !Text
-        id: frametime_main_pass_text
-        x: 0.0
-        y: 65
-        pt: 15
-        resize_behaviour:
-          width: uniform
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: 'Total everything: {expr:{total_frametime??0}:.2}ms, Sky: {expr:{sky_frametime??0}:.2}ms, Stars: {expr:{stars_frametime??0}:.2}ms, Terrain: {expr:{terrain_frametime??0}:.2}ms, Water: {expr:{water_frametime??0}:.2}ms, Roads: {expr:{roads_frametime??0}:.2}ms, Reversed Depth Z: {reversed_depth_z}, MSAA: {msaa_samples}x, Present Mode: {present_mode}, CSM Shadows: {shadow_map_size}px'
-        anchor: TopLeft
-        decorations:
-          - color: [ 0.0, 0.0, 0.0, 1.0 ]
-            spread: 1.5
-        misc:
-          touchable: false
-      - !Text
-        id: gtao_frametimes_text
-        x: 0.0
-        y: 85
-        pt: 15
-        resize_behaviour:
-          width: uniform
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: 'GTAO: Total: {expr:{gtao_frametime??0}:.2}ms, Prep: {expr:{gtao_prep_frametime??0}:.2}ms, Generate: {expr:{gtao_generate_frametime??0}:.2}ms, Blur: {expr:{gtao_blur_frametime??0}:.2}ms, Upsample/Apply: {expr:{gtao_upsample_apply_frametime??0}:.2}ms'
-        anchor: TopLeft
-        decorations:
-          - color: [ 0.0, 0.0, 0.0, 1.0 ]
-            spread: 1.5
-        misc:
-          touchable: false
-      - !Text
-        id: fog_frametime_text
-        x: 0
-        y: 105
-        pt: 15
-        resize_behaviour:
-          width: uniform
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: 'Fog: {expr:{fog_frametime??0}:.2}ms, UI: {expr:{ui_frametime??0}:.2}ms, Tonemapping: {expr:{tonemap_frametime??0}:.2}ms, Cars: {expr:{cars_frametime??0}:.2}ms, Props: {expr:{props_frametime??0}:.2}ms, Gizmo: {expr:{gizmo_frametime??0}:.2}ms'
-        anchor: TopLeft
-        decorations:
-          - color: [ 0.0, 0.0, 0.0, 1.0 ]
-            spread: 1.5
-        misc:
-          touchable: false
-      - !Text
-        id: clouds_frametime_text
-        x: 0
-        y: 125
-        pt: 15
-        resize_behaviour:
-          width: uniform
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: 'Clouds: {expr:{clouds_frametime??0}:.2}ms, Clouds Upsample: {expr:{cloud_upsample_composite_frametime??0}:.2}ms, '
-        anchor: TopLeft
-        decorations:
-          - color: [ 0.0, 0.0, 0.0, 1.0 ]
-            spread: 1.5
-        misc:
-          touchable: false
-      - !Text
-        id: shadows_frametime_text
-        x: 0
-        y: 145
-        pt: 15
-        resize_behaviour:
-          width: uniform
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: 'CSM Shadows: {expr:{csm_frametime??0}:.2}ms, RT Total: {expr:{rt_frametime??0}:.2}ms, RT Rays: {expr:{rt_tracing_frametime??0}:.2}ms, RT Upsampling: {expr:{rt_upsample_frametime??0}:.2}ms, RT Apply: {expr:{rt_apply_frametime??0}:.2}ms'
-        anchor: TopLeft
-        decorations:
-          - color: [ 0.0, 0.0, 0.0, 1.0 ]
-            spread: 1.5
-        misc:
-          touchable: false
-      - !Text
-        id: sky_info_text
-        x: 0
-        y: 165
-        pt: 15
-        resize_behaviour:
-          width: uniform
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: 'Requested Time Speed: {expr:{sim_speed}:.2}x, Actual Time Speed: {expr:{achieved_time_speed}:.2}x, Total Game Time: {expr:fancy_time({total_game_time}, false, {day_length}, 3, false)}, Day length: {expr:{day_length}:.2}s, Total_days: {expr:{total_days}:.2}d, Sun declination: {expr:{sun_declination}:.2} degrees, Date: {date}'
-        anchor: TopLeft
-        decorations:
-          - color: [ 0.0, 0.0, 0.0, 1.0 ]
-            spread: 1.5
-        misc:
-          touchable: false
-      - !Text
-        id: player_info_text
-        x: 0
-        y: 185
-        pt: 15
-        resize_behaviour:
-          width: uniform
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: 'Player Pos: X: {expr:{target_pos.x}:.2} Y: {expr:{target_pos.y}:.2} Z: {expr:{target_pos.z}:.2} Chunk Pos: ({target_pos_cx}, {target_pos_cz})'
-        anchor: TopLeft
-        decorations:
-          - color: [ 0.0, 0.0, 0.0, 1.0 ]
-            spread: 1.5
-        misc:
-          touchable: false
-      - !Text
-        id: world_info_text
-        x: 0.0
-        y: 205
-        pt: 15
-        resize_behaviour:
-          width: uniform
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: 'Car Count: {car_count}, Prop Count: (Total: {prop_count}, Generated: {generated_prop_count}, Manual: {manual_prop_count}), Visible Prop Count: (Total: {visible_prop_count}, Generated: {visible_generated_prop_count}, Manual: {visible_manual_prop_count}), Cursor Mode: {cursor_mode}, Color: {color_picker_color}s'
+        color: [ 0.55, 0.85, 1.0, 1.0 ]
+        text: 'Rusty Skylines Alpha v{GAME_VERSION}'
         anchor: TopLeft
         decorations:
           - color: [ 0.0, 0.0, 0.0, 1.0 ]
@@ -214,21 +22,611 @@ layers:
           touchable: false
 
       - !Text
-        id: save_info_text
-        x: 0.0
-        y: 225
-        pt: 15
+        id: fps_text
+        x: 5
+        y: 24
+        pt: 12
         resize_behaviour:
           width: uniform
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: 'Current Save: {current_save}'
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'FPS: {expr:{fps}:.1} | Frame: {expr:({render_dt} * 1000):.2}ms | {expr:{fps} > 60 ? "Smooth" : "Laggy"}'
         anchor: TopLeft
         decorations:
           - color: [ 0.0, 0.0, 0.0, 1.0 ]
             spread: 1.5
         misc:
           touchable: false
+
+      - !Text
+        id: frametime_text
+        x: 5
+        y: 43
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'GPU: {expr:{total_frametime??0}:.2}ms | CPU: {expr:fix({cpu_frametime??0}:.2, 2, 2)}ms | Simulation: {expr:({sim_dt} * 1000):.2}ms'
+        anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: cpu_frametimes_text
+        x: 5
+        y: 61
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'CPU Frametime History: {cpu_frametimes}'
+        anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: main_render_timings
+        x: 5
+        y: 81
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'Render Passes | Sky: {expr:{sky_frametime??0}:.2}ms | Stars: {expr:{stars_frametime??0}:.2}ms | Terrain: {expr:{terrain_frametime??0}:.2}ms'
+        anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: world_render_timings
+        x: 5
+        y: 99
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'Water: {expr:{water_frametime??0}:.2}ms | Roads: {expr:{roads_frametime??0}:.2}ms | Fog: {expr:{fog_frametime??0}:.2}ms'
+        anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: gtao_timings
+        x: 5
+        y: 117
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'GTAO: {expr:{gtao_frametime??0}:.2}ms | Prep: {expr:{gtao_prep_frametime??0}:.2}ms | Generate: {expr:{gtao_generate_frametime??0}:.2}ms'
+        anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: gtao_timings_2
+        x: 5
+        y: 135
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'GTAO Blur: {expr:{gtao_blur_frametime??0}:.2}ms | Upsample/Apply: {expr:{gtao_upsample_apply_frametime??0}:.2}ms'
+        anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: effects_timings
+        x: 5
+        y: 153
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'UI: {expr:{ui_frametime??0}:.2}ms | Tonemapping: {expr:{tonemap_frametime??0}:.2}ms | Cars: {expr:{cars_frametime??0}:.2}ms'
+        anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: effects_timings_2
+        x: 5
+        y: 171
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'Props: {expr:{props_frametime??0}:.2}ms | Gizmo: {expr:{gizmo_frametime??0}:.2}ms'
+        anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: clouds_timings
+        x: 5
+        y: 189
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'Clouds: {expr:{clouds_frametime??0}:.2}ms | Upsample: {expr:{cloud_upsample_composite_frametime??0}:.2}ms'
+        anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: shadow_timings
+        x: 5
+        y: 207
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'CSM Shadows: {expr:{csm_frametime??0}:.2}ms | RT Total: {expr:{rt_frametime??0}:.2}ms'
+        anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: raytracing_timings
+        x: 5
+        y: 225
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'RT Rays: {expr:{rt_tracing_frametime??0}:.2}ms | Upsampling: {expr:{rt_upsample_frametime??0}:.2}ms | Apply: {expr:{rt_apply_frametime??0}:.2}ms'
+        anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: render_config
+        x: 5
+        y: 243
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 0.75, 0.85, 1.0, 1.0 ]
+        text: 'MSAA: {msaa_samples}x | Present mode: {present_mode} | Rev. Depth Z: {reversed_depth_z} | Shadow Map: {shadow_map_size}px'
+        anchor: TopLeft
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+
+      # Right side
+
+      - !Text
+        id: memory_header
+        x: 1915
+        y: 8
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 0.55, 0.85, 1.0, 1.0 ]
+        text: 'MEMORY'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: ram_info
+        x: 1915
+        y: 24
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'System RAM: {expr:format_memory({USED_RAM})} / {expr:format_memory({TOTAL_RAM})}'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: game_ram_info
+        x: 1915
+        y: 42
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'Game RAM: {expr:format_memory({GAME_USED_RAM})} | PID: {PROCESS_ID}'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      # GPU
+      - !Text
+        id: gpu_header
+        x: 1915
+        y: 66
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 0.55, 0.85, 1.0, 1.0 ]
+        text: 'GPU'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: vram_info
+        x: 1915
+        y: 82
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'VRAM: {expr:format_memory({USED_VRAM})} / {expr:format_memory({TOTAL_VRAM})} | Textures (compressed/uncompressed): {expr:format_memory({PROC_TEXTURES_TOTAL_BYTES})}/{expr:format_memory({PROC_TEXTURES_TOTAL_BYTES_HYPOTHETICAL_UNCOMPRESSED})}'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: gpu_load_info
+        x: 1915
+        y: 100
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'GPU: Load: {GPU_LOAD} | Temperature: {GPU_TEMP}°C | Power Draw: {expr:{INEXACT_GPU_POWER} ? "§cRED§~" : ""}{expr:format({GPU_POWER??0}, 1)}W§rc§ | Limit: {expr:{GPU_POWER_LIMIT}}W | GPU Fan: {GPU_FAN_SPEED_PCT}% | {expr:{GPU_FAN_RPM}??"N/A"} RPM'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      # System Info
+      - !Text
+        id: system_header
+        x: 1915
+        y: 126
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 0.55, 0.85, 1.0, 1.0 ]
+        text: 'SYSTEM INFORMATION'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: os_info
+        x: 1915
+        y: 142
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'OS: {OS}'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: system_name_info
+        x: 1915
+        y: 160
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'System: {SYSTEM_NAME} {ARCH} | Kernel: {KERNEL}'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: cpu_info
+        x: 1915
+        y: 178
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'CPU: {CPU_BRAND}'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: cpu_cores_info
+        x: 1915
+        y: 196
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'Cores: {PHYSICAL_CORES}/{LOGICAL_CORES}'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: cpu_usage_info
+        x: 1915
+        y: 214
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'Process CPU Usage: {expr:{CPU_USAGE}:.1}%'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+      - !Text
+        id: gpu_info
+        x: 1915
+        y: 232
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'GPU: {GPU_FULL_GOVERNMENT_NAME} | Cores: {GPU_CORE_COUNT} {GPU_CORE_NAME} | PCIE Gen {GPU_PCIE_GEN}x{GPU_PCIE_LANES} | Bus Width: {GPU_MEMORY_BUS_WIDTH} bits'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+      #      - !Text
+      #        id: cpu_per_core_info
+      #        x: 1915
+      #        y: 232
+      #        pt: 9
+      #        resize_behaviour:
+      #          width: uniform
+      #        color: [ 0.8, 0.8, 0.8, 1.0 ]
+      #        text: 'Per-Core [Usage %, MHz]: {CPUS}'
+      #        anchor: TopRight
+      #        decorations:
+      #          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+      #            spread: 1.5
+      #        misc:
+      #          touchable: false
+
+      # Game and World Info
+      - !Text
+        id: game_info_header
+        x: 1915
+        y: 266
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 0.55, 0.85, 1.0, 1.0 ]
+        text: 'GAME / WORLD'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: save_info
+        x: 1915
+        y: 300
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'Current Save: {current_save}'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: time_info
+        x: 1915
+        y: 318
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'Time: {expr:fancy_time({total_game_time}, false, {day_length}, 3, false)} | Requested Speed: {expr:{sim_speed}:.2}x | Actual: {expr:{achieved_time_speed}:.2}x'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: date_info
+        x: 1915
+        y: 336
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'Date: {date} | Days: {expr:{total_days}:.2} | Day Length: {expr:{day_length}:.2}s'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: sun_info
+        x: 1915
+        y: 354
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'Sun Declination: {expr:{sun_declination}:.2}°'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: player_position_info
+        x: 1915
+        y: 372
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'Position: X {expr:{target_pos.x}:.2} | Y {expr:{target_pos.y}:.2} | Z {expr:{target_pos.z}:.2}'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: chunk_position_info
+        x: 1915
+        y: 390
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'Chunk Position: ({target_pos_cx}, {target_pos_cz})'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: world_counts_info
+        x: 1915
+        y: 408
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'Cars: {car_count} | Props: {prop_count} (Generated: {generated_prop_count}, Manual: {manual_prop_count})'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: visible_world_counts_info
+        x: 1915
+        y: 426
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'Visible Props: {visible_prop_count} (Generated: {visible_generated_prop_count}, Manual: {visible_manual_prop_count})'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+      - !Text
+        id: world_misc_info
+        x: 1915
+        y: 444
+        pt: 12
+        resize_behaviour:
+          width: uniform
+        color: [ 1.0, 1.0, 1.0, 1.0 ]
+        text: 'Cursor: {cursor_mode}'
+        anchor: TopRight
+        decorations:
+          - color: [ 0.0, 0.0, 0.0, 1.0 ]
+            spread: 1.5
+        misc:
+          touchable: false
+
+
+      - !Advanced
+        name: cpu_frametimes
+        ap_name: directory_list
+        ap_vars:
+          - "str:cpu_frametimes"
+          - "str:CPU Frametimes"
+          - '34'
+          - '500'
+          - 'str:highesttolowest'
+        x: 1240
+        y: 100
+        scale: 1.0

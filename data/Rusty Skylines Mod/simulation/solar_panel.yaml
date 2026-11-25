@@ -1,0 +1,49 @@
+name: solar_panel
+
+geometry:
+  shader: shaders/props/box_geometry.wgsl
+  entry_point: main
+  workgroups: [ 1, 1, 1 ]
+  bounds_radius: 1.2
+  index_count: 36
+
+  bindings:
+    - binding: 0
+      type: storage
+      access: read_write
+      format: u32
+      capacity: 468
+      usage: [ storage, vertex ]
+
+    - binding: 1
+      type: storage
+      access: read_write
+      format: u32
+      capacity: 36
+      usage: [ storage, index ]
+
+    - binding: 2
+      type: uniform
+      fields:
+        - name: vertex_count
+          type: u32
+          value: 36
+        - name: index_count
+          type: u32
+          value: 36
+        - name: lod
+          type: u32
+          value: 0
+        - name: seed
+          type: u32
+          value: 0
+        - name: data
+          type: array<vec4<f32>, 4>
+          value:
+            - [ 0.9, 0.06, 0.55, 0.0 ]
+            - [ 0.18, 0.22, 0.27, 1.0 ]
+            - [ 0.0, 0.0, 0.0, 0.0 ]
+            - [ 0.0, 0.0, 0.0, 0.0 ]
+
+  lods:
+    - distance: 0

@@ -1,4 +1,4 @@
-use crate::helpers::positions::{ChunkCoord, WorldPos};
+use rusty_skylines_utils::positions::{ChunkCoord, WorldPos};
 use crate::world::buildings::buildings::{BuildingId, Buildings};
 use crate::world::buildings::zoning::{DistrictId, LotEntrance};
 use crate::world::cars::parking::ParkingSpotId;

@@ -6,6 +6,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use tracing::error;
 use winit::dpi::PhysicalSize;
 
 pub struct Variables {
@@ -93,6 +94,7 @@ impl Variables {
     {
         //println!("In variables set(): {:?} to {}", name, value);
         let name = name.as_ref();
+
         let (field_type, base) = match name.split_once(':') {
             Some((field_type, base)) => (field_type, base),
             None => ("None", name),
@@ -111,18 +113,23 @@ impl Variables {
             }
         };
 
-        let idx = Self::component_index(suffix).unwrap();
-
         // Ensure an array exists at base (create if missing or not an array)
         if !matches!(self.vars.get(base), Some(Value::Array(_))) {
             self.vars.insert(base.to_string(), Value::Array(Vec::new()));
         }
 
         if let Some(Value::Array(a)) = self.vars.get_mut(base) {
-            //println!("Array: {:?}", a);
+            let idx = Self::component_index(suffix).unwrap();
+            let shoot = idx.saturating_sub(a.len());
+            if shoot > 128 {
+                error!("[UI Actions] In set var, the idx of the array you are trying to set is very fucking large, but the array beneath ({} long) needs to be filled by more than 128 values ({shoot}) to get there! I'm not gonna allocate that!! Investigate it!! Idx: '{idx}' Name of the variable being set: '{base}'", a.len());
+                return;
+            }
+
             if idx >= a.len() {
                 a.resize(idx + 1, Value::None);
             }
+
             a[idx] = value;
         }
     }
@@ -234,6 +241,7 @@ impl Variables {
     pub fn get_f64(&self, name: &str) -> Option<f64> {
         match self.vars.get(name)? {
             Value::F64(v) => Some(*v),
+            Value::I64(v) => Some(*v as f64),
             _ => None,
         }
     }
@@ -241,6 +249,7 @@ impl Variables {
     pub fn get_i64(&self, name: &str) -> Option<i64> {
         match self.vars.get(name)? {
             Value::I64(v) => Some(*v),
+            Value::F64(v) => Some(*v as i64),
             _ => None,
         }
     }

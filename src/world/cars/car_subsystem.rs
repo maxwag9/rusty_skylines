@@ -1,5 +1,5 @@
 use crate::helpers::hsv::hsv_to_rgb;
-use crate::helpers::positions::WorldPos;
+use rusty_skylines_utils::positions::WorldPos;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_pass::update_rt_instances;
@@ -13,8 +13,8 @@ use crate::world::camera::camera::Camera;
 use crate::world::cars::car_mesh::{create_procedural_car, sample_car_color};
 use crate::world::cars::car_render::CarInstance;
 use crate::world::cars::car_simulation::CarSimSystem;
-use crate::world::cars::car_structs::{Car, CarId, CarStorage};
-use crate::world::cars::partitions::PartitionManager;
+use crate::world::cars::car_structs::{Car, CarId, CarMode, CarStorage};
+use crate::world::cars::partitions::{Destination, PartitionManager};
 use crate::world::roads::road_structs::NodeId;
 use crate::world::roads::roads::RoadManager;
 use crate::world::terrain::terrain_subsystem::{CursorMode, Terrain};
@@ -23,6 +23,7 @@ use rand::rngs::ThreadRng;
 use rand::{RngExt, rng};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
+use clipper2_rust::distance;
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, IndexFormat, Queue, RenderPass};
 
 pub const CAR_BASE_LENGTH: f32 = 4.5;
@@ -211,22 +212,40 @@ impl CarRenderSubsystem {
         pass.draw_indexed(0..self.index_count, 0, 0..self.current_instance_count);
     }
 }
-
+struct PlayerCar {
+    car_id: CarId,
+    prior_player_car_mode: CarMode,
+}
 pub struct Cars {
     car_storage: CarStorage,
     spawning_nodes: Vec<SpawningNode>,
     timing: CarSubsystemTiming,
-    player_car_id: CarId,
-    car_simulation: CarSimSystem,
+    player_car: Option<PlayerCar>,
+    car_simulation: CarSimSystem
 }
 
 impl Cars {
-    pub fn player_car_id(&self) -> CarId {
-        self.player_car_id
+    pub fn player_car(&self) -> Option<&PlayerCar> {
+        self.player_car.as_ref()
     }
     pub fn get_player_car(&mut self) -> Option<&mut Car> {
-        let id = self.player_car_id;
-        self.car_storage_mut().get_mut(id)
+        let Some(player_car) = self.player_car.as_ref() else { return None };
+        self.car_storage.get_mut(player_car.car_id)
+    }
+    pub fn let_player_drive_car(&mut self, car_id: CarId) {
+        let Some(car) = self.car_storage.get_mut(car_id) else { return; };
+        self.player_car = Some(
+            PlayerCar {
+                car_id,
+                prior_player_car_mode: car.mode.clone(),
+            }
+        );
+        car.mode = CarMode::Player;
+    }
+    pub fn stop_player_driving_car(&mut self) {
+        let Some(player_car) = self.player_car.take() else { return; };
+        let Some(car) = self.car_storage.get_mut(player_car.car_id) else { return; };
+        car.mode = player_car.prior_player_car_mode;
     }
 }
 
@@ -236,8 +255,8 @@ impl Cars {
             car_storage: CarStorage::new(),
             spawning_nodes: vec![],
             timing: CarSubsystemTiming::new(),
-            player_car_id: 1,
-            car_simulation: CarSimSystem::new(),
+            player_car: None,
+            car_simulation: CarSimSystem::new()
         }
     }
     pub fn car_storage(&self) -> &CarStorage {
@@ -266,6 +285,7 @@ impl Cars {
             CursorMode::Cars => {
                 if let Some(picked) = &terrain.last_picked {
                     if input.action_repeat("Place Car") {
+                        println!("Placing car");
                         let mut rng = rng();
                         let car = make_random_car(picked.pos, &mut rng);
                         self.car_storage.spawn(car, &road_manager.roads);
@@ -280,13 +300,52 @@ impl Cars {
         }
 
         let current_sim_time = time.total_game_time;
+        if let Some(car) = self.player_car.as_ref().and_then(|player_car| self.car_storage.get(player_car.car_id)) {
+            gizmo.circle(car.pos, 6.0, [0.7, 0.6, 0.89, 0.8], 0.2, 0.0);
+        }
+        if let Some((car_id, distance)) = terrain.last_picked.as_ref().and_then(|p| self.find_car_to_select(p.pos)) {
+            if let Some(car) = self.car_storage.get(car_id) {
+                gizmo.circle(car.pos, distance, [0.2, 0.6, 0.89, 0.8], 0.2, 0.0);
+            }
 
+            if input.action_released("Select") {
+                self.stop_player_driving_car();
+                self.let_player_drive_car(car_id);
+            }
+        }
         // live visualization
         // if !updated_chunks.is_empty() {
         //     gizmo.visualize_chunk_updates_numbered(&updated_chunks, current_sim_time, 0.0);
         // }
     }
+    fn find_car_to_select(&self, mouse_pos: WorldPos) -> Option<(CarId, f32)> {
+        const MAX_DISTANCE2X2: f32 = 6.0 * 6.0;
 
+        let mut closest: Option<(CarId, f32)> = None;
+
+        for chunk_coord in mouse_pos.chunk.get_chunks_3x3() {
+            let Some(car_chunk) = self.car_storage.car_chunk_storage.get(&chunk_coord) else {
+                continue;
+            };
+
+            for &car_id in &car_chunk.car_ids {
+                let Some(car) = self.car_storage.get(car_id) else {
+                    continue;
+                };
+
+                let distance_sq = mouse_pos.delta_to(car.pos).length_squared();
+
+                if distance_sq < MAX_DISTANCE2X2
+                    && closest.is_none_or(|(_, best_dist)| distance_sq < best_dist)
+                {
+                    closest = Some((car_id, distance_sq));
+                }
+            }
+        }
+
+        closest
+    }
+    fn select_car(&mut self, car_id: CarId) {}
     fn spawn_cars(
         &mut self,
         road_manager: &RoadManager,
@@ -357,3 +416,5 @@ pub fn make_random_car(position: WorldPos, mut rng: &mut ThreadRng) -> Car {
     car.width = car.width * random_width_scale;
     car
 }
+
+

@@ -4,6 +4,7 @@ use crate::renderer::general_mesh_arena::{
 use crate::ui::vertex::VertexWithPosition;
 use crate::world::terrain::chunk_builder::GpuChunkHandle;
 use wgpu::{Buffer, BufferUsages, Device, Queue};
+use crate::resources::{GPU_TELEMETRY};
 
 struct AllocationOffsets {
     vertex: u64,
@@ -44,15 +45,18 @@ struct AllocationRequest {
 impl AllocationRequest {
     fn from_scratch<V>(scratch: &GeometryScratch<V>) -> Self {
         Self {
-            vertex_bytes: scratch.new_vertices.len() as u64 * size_of::<V>() as u64,
+            vertex_bytes: (scratch.new_vertices.len() as u64)
+                .saturating_mul(size_of::<V>() as u64),
             vertex_align: size_of::<V>() as u64,
-            index_bytes_above: scratch.indices_above.len() as u64 * 4,
-            index_bytes_under: scratch.indices_under.len() as u64 * 4,
+            index_bytes_above: (scratch.indices_above.len() as u64)
+                .saturating_mul(4),
+            index_bytes_under: (scratch.indices_under.len() as u64)
+                .saturating_mul(4),
         }
     }
 
     fn total_index_bytes(&self) -> u64 {
-        self.index_bytes_above + self.index_bytes_under
+        self.index_bytes_above.saturating_add(self.index_bytes_under)
     }
 }
 
@@ -66,6 +70,48 @@ pub struct MeshPage {
 }
 
 impl MeshPage {
+    fn range_waste(
+        free: &[FreeRange],
+        offset: u64,
+        size: u64,
+    ) -> Option<u64> {
+        let end = offset.checked_add(size)?;
+
+        free.iter().find_map(|range| {
+            let range_end = range.start.checked_add(range.size)?;
+
+            if offset >= range.start && end <= range_end {
+                Some(
+                    (offset - range.start)
+                        .saturating_add(range_end - end),
+                )
+            } else {
+                None
+            }
+        })
+    }
+
+    fn allocation_waste(&self, request: &AllocationRequest) -> Option<u64> {
+        let offsets = self.find_allocation_offsets(request)?;
+
+        let vertex_waste = Self::range_waste(
+            &self.free_v,
+            offsets.vertex,
+            request.vertex_bytes,
+        )?;
+
+        let index_waste = match offsets.index_base {
+            Some(offset) => Self::range_waste(
+                &self.free_i,
+                offset,
+                request.total_index_bytes(),
+            )?,
+            None => 0,
+        };
+
+        Some(vertex_waste.saturating_add(index_waste))
+    }
+
     fn try_allocate_and_upload<V: bytemuck::Pod>(
         &mut self,
         queue: &Queue,
@@ -78,14 +124,30 @@ impl MeshPage {
         self.commit_allocations(&offsets, request);
         self.upload_buffers(queue, scratch, &offsets, request);
 
-        Some(self.create_handle(scratch, &offsets, request, page_index))
+        Some(self.create_handle(
+            scratch,
+            &offsets,
+            request,
+            page_index,
+        ))
     }
 
-    fn find_allocation_offsets(&self, request: &AllocationRequest) -> Option<AllocationOffsets> {
-        let vertex_offset = find_fit(&self.free_v, request.vertex_bytes, request.vertex_align)?;
+    fn find_allocation_offsets(
+        &self,
+        request: &AllocationRequest,
+    ) -> Option<AllocationOffsets> {
+        let vertex_offset = find_fit(
+            &self.free_v,
+            request.vertex_bytes,
+            request.vertex_align,
+        )?;
 
         let index_offset_base = if request.total_index_bytes() > 0 {
-            Some(find_fit(&self.free_i, request.total_index_bytes(), 4)?)
+            Some(find_fit(
+                &self.free_i,
+                request.total_index_bytes(),
+                4,
+            )?)
         } else {
             None
         };
@@ -96,11 +158,23 @@ impl MeshPage {
         })
     }
 
-    fn commit_allocations(&mut self, offsets: &AllocationOffsets, request: &AllocationRequest) {
-        commit_alloc(&mut self.free_v, offsets.vertex, request.vertex_bytes);
+    fn commit_allocations(
+        &mut self,
+        offsets: &AllocationOffsets,
+        request: &AllocationRequest,
+    ) {
+        commit_alloc(
+            &mut self.free_v,
+            offsets.vertex,
+            request.vertex_bytes,
+        );
 
         if let Some(index_base) = offsets.index_base {
-            commit_alloc(&mut self.free_i, index_base, request.total_index_bytes());
+            commit_alloc(
+                &mut self.free_i,
+                index_base,
+                request.total_index_bytes(),
+            );
         }
     }
 
@@ -118,7 +192,8 @@ impl MeshPage {
         );
 
         let index_above_offset = offsets.index_base.unwrap_or(0);
-        let index_under_offset = index_above_offset + request.index_bytes_above;
+        let index_under_offset =
+            index_above_offset + request.index_bytes_above;
 
         if request.index_bytes_above > 0 {
             queue.write_buffer(
@@ -145,7 +220,8 @@ impl MeshPage {
         page_index: usize,
     ) -> GpuChunkHandle {
         let index_above_offset = offsets.index_base.unwrap_or(0);
-        let index_under_offset = index_above_offset + request.index_bytes_above;
+        let index_under_offset =
+            index_above_offset + request.index_bytes_above;
 
         GpuChunkHandle {
             page: page_index,
@@ -160,29 +236,129 @@ impl MeshPage {
 }
 
 pub struct TerrainMeshArena {
-    pub pages: Vec<MeshPage>,
+    pub pages: Vec<Option<MeshPage>>,
     pub page_v_bytes: u64,
     pub page_i_bytes: u64,
+    pub(crate) allocated_bytes: u64,
 }
 
 impl TerrainMeshArena {
-    pub fn new(device: &Device, page_v_bytes: u64, page_i_bytes: u64) -> Self {
-        let mut arena = Self {
+    pub fn new(
+        _device: &Device,
+        page_v_bytes: u64,
+        page_i_bytes: u64,
+    ) -> Self {
+        Self {
             pages: Vec::new(),
             page_v_bytes,
             page_i_bytes,
-        };
-        arena.add_page(device);
-        arena
+            allocated_bytes: 0,
+        }
     }
 
-    fn add_page(&mut self, device: &Device) {
+    pub fn clear(&mut self) {
+        self.pages.clear();
+        self.allocated_bytes = 0;
+    }
+
+    pub fn allocated_bytes(&self) -> u64 {
+        self.allocated_bytes
+    }
+
+    pub fn active_page_count(&self) -> usize {
+        self.pages.iter().filter(|page| page.is_some()).count()
+    }
+
+    pub fn get_page(&self, index: u32) -> Option<&MeshPage> {
+        self.pages.get(index as usize)?.as_ref()
+    }
+
+    pub fn trim_empty_pages(&mut self) -> u64 {
+        let mut released_bytes = 0u64;
+        let mut released_pages = 0usize;
+
+        for (page_index, slot) in self.pages.iter_mut().enumerate() {
+            let is_empty = slot.as_ref().is_some_and(|page| {
+                page.free_v.len() == 1
+                    && page.free_v[0].start == 0
+                    && page.free_v[0].size == page._vcap
+                    && page.free_i.len() == 1
+                    && page.free_i[0].start == 0
+                    && page.free_i[0].size == page._icap
+            });
+
+            if is_empty {
+                if let Some(page) = slot.take() {
+                    released_bytes = released_bytes
+                        .saturating_add(page._vcap)
+                        .saturating_add(page._icap);
+
+                    released_pages += 1;
+                    drop(page);
+
+                    tracing::debug!(
+                        page_index,
+                        "Released empty terrain GPU page"
+                    );
+                }
+            }
+        }
+
+        self.allocated_bytes = self.allocated_bytes
+            .saturating_sub(released_bytes);
+
+        if released_pages > 0 {
+            tracing::info!(
+                released_pages,
+                released_mib = released_bytes / (1024 * 1024),
+                remaining_pages = self.active_page_count(),
+                remaining_mib = self.allocated_bytes / (1024 * 1024),
+                "Terrain GPU arena trimmed"
+            );
+        }
+
+        released_bytes
+    }
+
+
+    fn add_page(&mut self, device: &Device) -> bool {
+        let Some(page_bytes) = self.page_v_bytes.checked_add(self.page_i_bytes) else {
+            return false;
+        };
+
+        if page_bytes == 0
+            || self.page_v_bytes == 0
+            || self.page_i_bytes == 0
+        {
+            return false;
+        }
+
+        let budget = terrain_vram_budget(self.allocated_bytes);
+
+        let Some(new_allocated) = self.allocated_bytes.checked_add(page_bytes) else {
+            return false;
+        };
+
+        if new_allocated > budget {
+            tracing::warn!(
+                allocated_mib = self.allocated_bytes / (1024 * 1024),
+                requested_mib = page_bytes / (1024 * 1024),
+                budget_mib = budget / (1024 * 1024),
+                "Terrain GPU allocation refused: VRAM budget exhausted"
+            );
+
+            return false;
+        }
+
+        let error_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+
         let vertex_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("terrain_v_page"),
             size: self.page_v_bytes,
             usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+
         let index_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("terrain_i_page"),
             size: self.page_i_bytes,
@@ -190,7 +366,20 @@ impl TerrainMeshArena {
             mapped_at_creation: false,
         });
 
-        self.pages.push(MeshPage {
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+
+        if let Some(error) = pollster::block_on(error_scope.pop()) {
+            tracing::error!(
+                error = %error,
+                "Terrain GPU page allocation failed"
+            );
+            return false;
+        }
+
+        let page = MeshPage {
             vertex_buf,
             index_buf,
             _vcap: self.page_v_bytes,
@@ -203,29 +392,72 @@ impl TerrainMeshArena {
                 start: 0,
                 size: self.page_i_bytes,
             }],
-        });
+        };
+
+        let page_index = if let Some(index) =
+            self.pages.iter().position(|page| page.is_none())
+        {
+            self.pages[index] = Some(page);
+            index
+        } else {
+            self.pages.push(Some(page));
+            self.pages.len() - 1
+        };
+
+        self.allocated_bytes = new_allocated;
+
+        tracing::debug!(
+            page_index,
+            active_pages = self.active_page_count(),
+            allocated_mib = self.allocated_bytes / (1024 * 1024),
+            budget_mib = budget / (1024 * 1024),
+            "Terrain GPU page allocated"
+        );
+
+        true
     }
 
-    pub(crate) fn alloc_and_upload<V: bytemuck::Pod + VertexWithPosition + Clone + Copy>(
+    pub(crate) fn alloc_and_upload<
+        V: bytemuck::Pod + VertexWithPosition + Clone + Copy,
+    >(
         &mut self,
         device: &Device,
         queue: &Queue,
         vertices: &[V],
         indices: &[u32],
         scratch: &mut GeometryScratch<V>,
-    ) -> GpuChunkHandle {
+    ) -> Option<GpuChunkHandle> {
         scratch.clear();
         scratch.new_vertices.extend_from_slice(vertices);
 
         clip_triangles_by_plane(indices, scratch);
 
-        let allocation = AllocationRequest::from_scratch::<V>(scratch);
+        let allocation = AllocationRequest::from_scratch(scratch);
+
+        if allocation.vertex_bytes == 0
+            || allocation.vertex_align == 0
+            || allocation.vertex_bytes > self.page_v_bytes
+            || allocation.total_index_bytes() > self.page_i_bytes
+        {
+            tracing::warn!(
+                vertex_bytes = allocation.vertex_bytes,
+                index_bytes = allocation.total_index_bytes(),
+                "Terrain mesh exceeds GPU page capacity"
+            );
+
+            return None;
+        }
 
         loop {
-            if let Some(handle) = self.try_allocate_and_upload(queue, scratch, &allocation) {
-                return handle;
+            if let Some(handle) =
+                self.try_allocate_and_upload(queue, scratch, &allocation)
+            {
+                return Some(handle);
             }
-            self.add_page(device);
+
+            if !self.add_page(device) {
+                return None;
+            }
         }
     }
 
@@ -235,34 +467,195 @@ impl TerrainMeshArena {
         scratch: &GeometryScratch<V>,
         request: &AllocationRequest,
     ) -> Option<GpuChunkHandle> {
-        for (page_index, page) in self.pages.iter_mut().enumerate() {
-            if let Some(handle) = page.try_allocate_and_upload(queue, scratch, request, page_index)
-            {
-                return Some(handle);
+        let mut best_page: Option<(usize, u64)> = None;
+
+        for (page_index, slot) in self.pages.iter().enumerate() {
+            let Some(page) = slot.as_ref() else {
+                continue;
+            };
+
+            let Some(waste) = page.allocation_waste(request) else {
+                continue;
+            };
+
+            if best_page.is_none_or(|(_, best_waste)| waste < best_waste) {
+                best_page = Some((page_index, waste));
             }
         }
-        None
+
+        let (page_index, _) = best_page?;
+
+        self.pages[page_index].as_mut()?.try_allocate_and_upload(
+            queue,
+            scratch,
+            request,
+            page_index,
+        )
+    }
+    pub fn theoretical_minimum_pages(&self) -> usize {
+        if self.page_v_bytes == 0 || self.page_i_bytes == 0 {
+            return 0;
+        }
+
+        let mut used_v = 0u64;
+        let mut used_i = 0u64;
+
+        for page in self.pages.iter().flatten() {
+            let free_v = page.free_v.iter()
+                .fold(0u64, |sum, r| sum.saturating_add(r.size));
+
+            let free_i = page.free_i.iter()
+                .fold(0u64, |sum, r| sum.saturating_add(r.size));
+
+            used_v = used_v.saturating_add(
+                page._vcap.saturating_sub(free_v)
+            );
+
+            used_i = used_i.saturating_add(
+                page._icap.saturating_sub(free_i)
+            );
+        }
+
+        let pages_v = used_v.div_ceil(self.page_v_bytes);
+        let pages_i = used_i.div_ceil(self.page_i_bytes);
+
+        pages_v.max(pages_i) as usize
     }
 
+    pub fn potentially_reclaimable_pages(&self) -> usize {
+        self.active_page_count()
+            .saturating_sub(self.theoretical_minimum_pages())
+    }
+
+    pub fn should_rebuild_for_fragmentation(&self) -> bool {
+        self.potentially_reclaimable_pages() >= 2
+    }
     pub(crate) fn free<V>(&mut self, handle: GpuChunkHandle) {
-        let page = &mut self.pages[handle.page as usize];
+        let page_index = handle.page as usize;
+
+        let Some(page) = self.pages
+            .get_mut(page_index)
+            .and_then(Option::as_mut)
+        else {
+            tracing::error!(
+                page_index,
+                "Attempted to free allocation from a missing terrain GPU page"
+            );
+            return;
+        };
+
         let stride = size_of::<V>() as u64;
 
-        let v_off = handle.base_vertex as u64 * stride;
-        let v_bytes = handle.vertex_count as u64 * stride;
-        free_insert_and_coalesce(&mut page.free_v, v_off, v_bytes);
-
-        if handle.index_count_above > 0 {
-            let i_off_above = handle.first_index_above as u64 * 4;
-            let i_bytes_above = handle.index_count_above as u64 * 4;
-            free_insert_and_coalesce(&mut page.free_i, i_off_above, i_bytes_above);
+        if stride == 0 || handle.base_vertex < 0 {
+            tracing::error!(
+                page_index,
+                "Invalid terrain vertex allocation handle"
+            );
+            return;
         }
-        if handle.index_count_under > 0 {
-            let i_off_under = handle.first_index_under as u64 * 4;
-            let i_bytes_under = handle.index_count_under as u64 * 4;
-            free_insert_and_coalesce(&mut page.free_i, i_off_under, i_bytes_under);
+
+        let vertex_offset = (handle.base_vertex as u64).saturating_mul(stride);
+        let vertex_bytes = (handle.vertex_count as u64).saturating_mul(stride);
+
+        let index_above_offset =
+            (handle.first_index_above as u64).saturating_mul(4);
+        let index_above_bytes =
+            (handle.index_count_above as u64).saturating_mul(4);
+
+        let index_under_offset =
+            (handle.first_index_under as u64).saturating_mul(4);
+        let index_under_bytes =
+            (handle.index_count_under as u64).saturating_mul(4);
+
+        if !can_free_range(
+            &page.free_v,
+            vertex_offset,
+            vertex_bytes,
+            page._vcap,
+        ) || !can_free_range(
+            &page.free_i,
+            index_above_offset,
+            index_above_bytes,
+            page._icap,
+        ) || !can_free_range(
+            &page.free_i,
+            index_under_offset,
+            index_under_bytes,
+            page._icap,
+        ) {
+            tracing::error!(
+                page_index,
+                "Invalid or duplicate terrain GPU allocation free"
+            );
+            return;
+        }
+
+        if vertex_bytes > 0 {
+            free_insert_and_coalesce(
+                &mut page.free_v,
+                vertex_offset,
+                vertex_bytes,
+            );
+        }
+
+        if index_above_bytes > 0 {
+            free_insert_and_coalesce(
+                &mut page.free_i,
+                index_above_offset,
+                index_above_bytes,
+            );
+        }
+
+        if index_under_bytes > 0 {
+            free_insert_and_coalesce(
+                &mut page.free_i,
+                index_under_offset,
+                index_under_bytes,
+            );
+        }
+
+        let page_empty = page.free_v.len() == 1
+            && page.free_v[0].start == 0
+            && page.free_v[0].size == page._vcap
+            && page.free_i.len() == 1
+            && page.free_i[0].start == 0
+            && page.free_i[0].size == page._icap;
+
+        if page_empty {
+            let page = self.pages[page_index].take().unwrap();
+            let page_bytes = page._vcap.saturating_add(page._icap);
+
+            drop(page);
+
+            self.allocated_bytes = self.allocated_bytes
+                .saturating_sub(page_bytes);
         }
     }
+}
+
+fn can_free_range(
+    free: &[FreeRange],
+    start: u64,
+    size: u64,
+    capacity: u64,
+) -> bool {
+    if size == 0 {
+        return true;
+    }
+
+    let Some(end) = start.checked_add(size) else {
+        return false;
+    };
+
+    if end > capacity {
+        return false;
+    }
+
+    !free.iter().any(|range| {
+        let range_end = range.start.saturating_add(range.size);
+
+        start < range_end && range.start < end
+    })
 }
 
 // Triangle clipping logic - completely separate from allocation
@@ -385,4 +778,31 @@ fn create_intersection_vertex<V: bytemuck::Pod + VertexWithPosition + Clone + Co
     let new_vertex = V::lerp(&vi, &vj, t);
     scratch.new_vertices.push(new_vertex);
     (scratch.new_vertices.len() - 1) as u32
+}
+
+const TERRAIN_VRAM_RESERVE: u64 = 1024 * 1024 * 1024;
+const TERRAIN_MAX_VRAM: u64 = 2 * 1024 * 1024 * 1024;
+const TERRAIN_FALLBACK_BUDGET: u64 = 512 * 1024 * 1024;
+
+fn terrain_vram_budget(arena_allocated_bytes: u64) -> u64 {
+    let Ok(gpu) = GPU_TELEMETRY.read() else {
+        return TERRAIN_FALLBACK_BUDGET;
+    };
+
+    let (Some(total), Some(used)) =
+        (gpu.memory_total_bytes, gpu.memory_used_bytes)
+    else {
+        return TERRAIN_FALLBACK_BUDGET;
+    };
+
+    if total == 0 {
+        return TERRAIN_FALLBACK_BUDGET;
+    }
+
+    let other_gpu_usage = used.saturating_sub(arena_allocated_bytes);
+
+    total
+        .saturating_sub(other_gpu_usage)
+        .saturating_sub(TERRAIN_VRAM_RESERVE)
+        .min(TERRAIN_MAX_VRAM)
 }

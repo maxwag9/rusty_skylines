@@ -1,8 +1,8 @@
 //! cars_render.rs
 
-use crate::helpers::positions::WorldPos;
+use rusty_skylines_utils::positions::WorldPos;
 use crate::resources::Time;
-use crate::world::cars::car_player::conform_car_to_terrain;
+use crate::world::cars::car_player::{conform_car_to_terrain, PlayerControls};
 use crate::world::cars::car_structs::{CarId, CarMode, CarStorage};
 use crate::world::terrain::terrain_subsystem::Terrain;
 use crate::world::world::World;
@@ -118,6 +118,11 @@ pub enum CarChange {
     CarMode(CarMode),
     Despawn,
     GenerateLotLayout(LotId),
+    DynamicsState {
+        yaw_rate: f32,
+        steering_angle: f32,
+        steering_vel: f32,
+    },
 }
 
 fn interpolate_car(
@@ -130,6 +135,7 @@ fn interpolate_car(
     parking_storage: &ParkingStorage,
     sf_options: &SignFindingOptions,
     target_pos: WorldPos,
+    player_controls: PlayerControls,
 ) -> Vec<CarChange> {
     const INTERP_BACKTIME: f64 = 0.0;
     const MAX_EXTRAP: f64 = 0.60;
@@ -154,6 +160,7 @@ fn interpolate_car(
                 zoning,
                 parking_storage,
                 sf_options,
+                player_controls
             ) {
                 Ok(ok) => ok,
                 Err(e) => match e {
@@ -272,7 +279,11 @@ fn interpolate_car(
         changes.push(CarChange::Velocity(vel));
         changes.push(CarChange::PhysicalTrajectory(None));
         changes.push(CarChange::CurrentLane(last.lane_ref));
-
+        changes.push(CarChange::DynamicsState {
+            yaw_rate: traj.end_yaw_rate,
+            steering_angle: traj.end_steering_angle,
+            steering_vel: traj.end_steering_vel,
+        });
         if traj.is_last_turn_of_sf_traj {
             changes.push(CarChange::SignfindingTrajectory(None));
 
@@ -621,6 +632,15 @@ fn apply_car_changes(
                     let layout = lot.generate_layout(parking_storage);
                     lot.layout = Some(layout); // TODO: Breaks real spawning?
                 }
+                CarChange::DynamicsState {
+                    yaw_rate,
+                    steering_angle,
+                    steering_vel,
+                } => {
+                    car.yaw_rate = yaw_rate;
+                    car.steering_angle = steering_angle;
+                    car.steering_vel = steering_vel;
+                }
             }
         }
         conform_car_to_terrain(car, terrain, time.render_dt);
@@ -634,18 +654,39 @@ fn apply_car_changes(
 }
 
 pub fn interpolate_cars(world: &mut World, variables: &Variables, settings: &Settings) {
-    let car_subsystem = &mut world.cars;
+    let cars = &mut world.cars;
 
     // Get all CLOSE cars (medium and far away cars are ghosts btw)
-    let close_ids: Vec<CarId> = {
-        let storage = car_subsystem.car_storage();
-        storage.car_chunk_storage.close_car_ids().collect()
+    let player_controls = PlayerControls::read(&mut world.input);
+
+    let active_ids: Vec<CarId> = {
+        let storage = cars.car_storage();
+
+        let mut ids: Vec<CarId> =
+            storage.car_chunk_storage.close_car_ids().collect();
+
+        ids.extend(
+            storage
+                .iter_cars()
+                .filter_map(|entry| {
+                    let car = entry.as_ref()?;
+
+                    matches!(&car.mode, CarMode::Player)
+                        .then_some(car.id)
+                }),
+        );
+
+        ids.sort_unstable();
+        ids.dedup();
+
+        ids
     };
+
     let sf_options = SignFindingOptions::new(variables, settings);
     // Calculate interpolation
     let changes: Vec<(CarId, Vec<CarChange>)> = {
-        let storage = car_subsystem.car_storage();
-        close_ids
+        let storage = cars.car_storage();
+        active_ids
             .par_iter()
             .map(|&car_id| {
                 (
@@ -663,6 +704,7 @@ pub fn interpolate_cars(world: &mut World, variables: &Variables, settings: &Set
                         &world.roads.parking,
                         &sf_options,
                         world.world_state.camera.eye_world(),
+                        player_controls
                     ), //},
                 )
             })
@@ -671,7 +713,7 @@ pub fn interpolate_cars(world: &mut World, variables: &Variables, settings: &Set
 
     // Apply
     {
-        let car_storage = car_subsystem.car_storage_mut();
+        let car_storage = cars.car_storage_mut();
         for (car_id, changes) in changes {
             apply_car_changes(
                 &world.terrain,

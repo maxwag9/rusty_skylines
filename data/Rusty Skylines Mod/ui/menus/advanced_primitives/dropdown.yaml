@@ -8,7 +8,7 @@ elements:
       - on:release button:left, toggle(str:{ap.0}_open)
       #- on:sel button:a, print(str:{ap}_open, false)
       #- on:scroll button:a, print(str:{ap}, scroll_delta)
-      - on:scroll button:a, inc(str:{ap.0}, scroll_delta)
+      - on:scroll, inc(str:{ap.0}, scroll_delta)
       - on:sel button:a, ifvareq({ap}_open, bool:false, forin({ap}.options, del_ap(self.menu, self.layer, expr:"{ap.0}_Option_"+{idx})))
       # If opening: Iterate over the options array and clone the template AP
       #- on:release button:a, print(str:{ap}.{idx})
@@ -28,13 +28,8 @@ elements:
 
     x: 0
     y: 0
-    w: 240
-    h: 60
-    color:
-      - 0.0
-      - 0.761
-      - 0.820
-      - 1.0
+    w: 180
+    h: 40
     border_color:
       - 0.8
       - 0.8
@@ -46,7 +41,7 @@ elements:
   - !Text
     id: Main Button Text
     actions:
-      - as:"Main Button Background", set(str:self.pt, expr:{self.pt} * ({as.size.x}*0.93) / {self.size.x}))
+      - as:["Main Button Background"], set(str:self.pt, expr:{self.pt} * ({as.size.x}*0.93) / {self.size.x}))
     x: 0
     y: 0
     pt: 16.0

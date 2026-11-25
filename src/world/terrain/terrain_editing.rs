@@ -1,5 +1,5 @@
 // terrain_editing.rs
-use crate::helpers::positions::{ChunkCoord, LocalPos, LodStep, WorldPos, chunk_size};
+use rusty_skylines_utils::positions::{ChunkCoord, LocalPos, LodStep, WorldPos, chunk_size};
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
 use crate::ui::vertex::Vertex;
 use crate::world::buildings::buildings::BuildingId;
@@ -238,6 +238,13 @@ impl Default for TerrainEditor {
 }
 
 impl TerrainEditor {
+    // pub fn clear(&mut self) {
+    //     self.edits.clear();
+    //     self.next_id = 0;
+    //     self.pristine_grids.clear();
+    //     self.affected_chunks.clear();
+    //     self.dirty_chunks.clear();
+    // }
     // Base grid Gen!!
     pub fn get_pristine_grid(
         &mut self,
@@ -603,14 +610,14 @@ impl TerrainEditor {
             build_simple_grid_mesh(&grid, coord, terrain_gen)
         };
 
-        let new_handle = arena.alloc_and_upload(device, queue, &vertices, &indices, scratch);
-        let old_handle = chunks.remove(&coord).map(|c| c.handle);
+        let Some(new_handle) = arena.alloc_and_upload(device, queue, &vertices, &indices, scratch) else { return None; };
+        let old_handle = chunks.remove(&coord).map(|c| c.handle).flatten();
 
         chunks.insert(
             coord,
             ChunkMeshLod {
                 state,
-                handle: new_handle,
+                handle: Some(new_handle),
                 cpu_vertices: vertices,
                 cpu_indices: indices,
                 height_grid: Arc::new(grid),
@@ -1085,9 +1092,9 @@ pub fn build_simple_grid_mesh(
             let dhdz = (h_u - h_d) * 0.5 * inv;
             let n = glam::Vec3::new(-dhdx, 1.0, -dhdz).normalize();
 
-            let pos = WorldPos::new(coord, LocalPos::new(local_x, h, local_z));
-            let m = terrain_gen.moisture(&pos, h);
-            let c = terrain_gen.color(&pos, h, m);
+            let pos = WorldPos::new(coord, LocalPos::new(local_x, h, local_z)).to_dvec2();
+            //let m = terrain_gen.moisture(&pos, h);
+            let c = terrain_gen.color(h, 1.0);
 
             vertices.push(Vertex {
                 local_position: [local_x, h, local_z],

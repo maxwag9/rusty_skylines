@@ -24,7 +24,7 @@ layers:
         roundness: 0.0
         border_thickness: 0.00
         fade: 0.0
-        blur: 10.5
+        #blur: 10.5
         glow_color:
           - 0.0
           - 0.0
@@ -140,8 +140,8 @@ layers:
       - !Text
         id: splash
         actions:
-          - on:startup, call(rust:get_new_splash); set(str:self.text, SPLASH_MESSAGE)
-          - button:"KeyA" trigger:r, call(rust:get_new_splash); set(str:self.text, SPLASH_MESSAGE)
+          - on:startup, call(rust:get_new_splash); set(str:self.tt, SPLASH_MESSAGE)
+          - button:"KeyA" trigger:r, call(rust:get_new_splash); set(str:self.tt, SPLASH_MESSAGE)
           - set(str:self.pt, expr:{self.pt} * ((400.0 + len({self.text}) * 2.0 + 25.0 * sin({total_time} * 8.0)) / {self.size.x}))
         x: 1530
         y: 200
@@ -157,23 +157,7 @@ layers:
             offset: [ 2.0, 1.0 ]
         anchor: TopCenter
         text: RUSTY SKYLINES SPLASH LOADING...
-
-
-      - !Advanced
-        name: language_slider
-        ap_name: slider
-        ap_var:
-          - "str:locale"
-          - "str:{lang.languages.language}"
-          - "0"
-          - "1"
-          - "1"
-          - "[str:en_US, str:en_PIRATE]"
-          - "[str:{lang.en_US}, str:{lang.en_PIRATE}]"
-          - "true"
-        x: 1075
-        y: 800
-        scale: 1.5
+      #- 'call(show_interaction, [[0.02, 0.02, 0.05, 1.0], false]))' # print(_mini_render_id)
 #  - name: test_buttons
 #    order: 3
 #    elements:

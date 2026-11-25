@@ -1,9 +1,7 @@
 pub(crate) use crate::helpers::implementations::RevisionedSmallVec;
 use crate::helpers::implementations::SerializableVec3;
 use crate::helpers::modpack::ModManager;
-use crate::helpers::positions::{ChunkCoord, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
-use crate::renderer::props::{PropInstanceId, Props};
 use crate::ui::input::Input;
 use crate::ui::parser::Value;
 use crate::ui::variables::Variables;
@@ -22,6 +20,7 @@ use crate::world::buildings::zoning::{Lot, LotEntrance, LotId, Zoning, ZoningTyp
 use crate::world::camera::camera::Camera;
 use crate::world::cars::car_structs::{ChunkDistance, SimTime};
 use crate::world::cars::partitions::{PartitionId, PartitionManager};
+use crate::world::props::props::{PropInstanceId, Props};
 use crate::world::roads::road_mesh_manager::RoadMeshManager;
 use crate::world::roads::road_structs::SegmentId;
 use crate::world::roads::road_subsystem::Roads;
@@ -37,6 +36,7 @@ use rand::rngs::ThreadRng;
 use rand_distr::num_traits::Zero;
 use rayon::iter::IntoParallelRefMutIterator;
 use revision::revisioned;
+use rusty_skylines_utils::positions::{ChunkCoord, WorldPos};
 use serde::Deserialize;
 use smallvec::SmallVec;
 use std::collections::{BTreeMap, HashMap};
@@ -805,12 +805,12 @@ impl Buildings {
 }
 
 impl Buildings {
-    pub fn new(mod_manager: &ModManager) -> Buildings {
+    pub fn new() -> Buildings {
         Self {
             storage: BuildingStorage::new(),
             partitions: PartitionManager::new(),
-            catalog: BuildingsCatalog::new(mod_manager),
-            utilities: UtilityNetwork::new(mod_manager),
+            catalog: BuildingsCatalog::new(),
+            utilities: UtilityNetwork::new(),
         }
     }
 
@@ -1640,11 +1640,10 @@ pub struct BuildingsCatalog {
 }
 
 impl BuildingsCatalog {
-    pub fn new(mod_manager: &ModManager) -> Self {
-        let mut catalog = Self {
+    pub fn new() -> Self {
+        let catalog = Self {
             ploppables: HashMap::new(),
         };
-        catalog.load(mod_manager);
         catalog
     }
     pub fn load(&mut self, mod_manager: &ModManager) {

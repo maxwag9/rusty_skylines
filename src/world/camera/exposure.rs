@@ -39,7 +39,7 @@ pub struct AutoExposure {
 }
 
 impl AutoExposure {
-    pub fn new(device: &Device, _queue: &Queue, mod_manager: &ModManager) -> Self {
+    pub fn new(device: &Device, mod_manager: &ModManager) -> Self {
         let shader_path = mod_manager
             .resource_path("shaders/compute/auto_exposure.wgsl")
             .expect("Missing shader 'shaders/compute/auto_exposure.wgsl'");

@@ -1,4 +1,4 @@
-use crate::renderer::ui_text_rendering::anchor_to;
+
 use crate::ui::input::Input;
 use crate::ui::menu::Menu;
 use crate::ui::ui_edit_manager::{TextEditCommand, UiEditManager};
@@ -484,7 +484,7 @@ pub fn text_top_left(text: &UiButtonText) -> (f32, f32, f32, f32) {
         .map(|c| (c.width.max(1.0), c.height.max(1.0)))
         .unwrap_or((text.width.max(1.0), text.height.max(1.0)));
 
-    let top_left = anchor_to(text.anchor, [text.x, text.y], width, height);
+    let top_left = text.anchor.anchor_to([text.x, text.y], width, height);
     (top_left[0], top_left[1], width, height)
 }
 

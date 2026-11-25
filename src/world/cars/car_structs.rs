@@ -1,4 +1,4 @@
-use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
+use rusty_skylines_utils::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 use crate::world::buildings::zoning::ZoningStorage;
 use crate::world::cars::car_simulation::CarTrajectory;
 use crate::world::cars::car_subsystem::make_random_car;
@@ -973,6 +973,7 @@ pub enum CarMode {
     Driving(Destination),
     Parked(ParkingSpotId),
     None,
+    Player,
 }
 impl CarMode {
     pub fn destination(&self) -> Option<&Destination> {
@@ -986,6 +987,9 @@ impl CarMode {
             CarMode::Parked(id) => Some(*id),
             _ => None,
         }
+    }
+    pub fn is_player(&self) -> bool {
+        matches!(self, CarMode::Player)
     }
 }
 impl Default for Car {
@@ -1018,7 +1022,8 @@ impl Default for Car {
             driver_profile: DriverProfile::Normal,
             gear: 0,
             wheel_radius: 0.34,
-            mode: CarMode::Driving(Destination::Building(0, 0, Some(SegmentId(0)), 0)), // TODO: Should be Parked?
+            mode: CarMode::None
+
         }
     }
 }

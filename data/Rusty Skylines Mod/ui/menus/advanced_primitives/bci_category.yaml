@@ -1,0 +1,65 @@
+name: bci_category
+elements:
+  - !Text
+    id: Category Text
+    actions: [ ]
+    #      - 'on:activated on:screen_resize as:["Branch background"], set(str:self.center, expr:{as.center}-{as.size}*0.49);'
+
+    x: 0
+    y: 0
+    pt: 16.0
+    color:
+      - 0.86
+      - 0.93
+      - 0.97
+      - 1.0
+    text: "{lang.bci.{ap.0}.{ap.1.{ap.2}.0}._name}"
+    anchor: TopLeft
+    decorations:
+      - color: [ 0.01, 0.01, 0.01, 1.0 ]
+        spread: 1.5
+      - color: [ 0.0, 0.0, 0.0, 0.7 ]
+        spread: 1.5
+        offset: [ 2, 3 ]
+        mode: Solid
+    misc:
+      active: true
+      touchable: false
+      editable: true
+  - !Rect
+    id: Category Text Background
+    actions:
+      - 'as:["Category Text"], set(str:as.center, self.center); set(str:self.size, expr:{as.rect}*1.24);'
+      - 'asdyn:[expr:"GUI_Category_AP_"+(max({ap.2}-1, 0)), "Category Text Background"],
+          ifvareq({ap.2}, 0, noop,
+            set(str:self.topleft, [expr:{as.topleft.x}+{as.rect.x}*1.05, as.topleft.y]); 
+        );'
+      #- 'as:[{ap.4}, "Branch background"], set(str:self.topleft.y, expr:{self.topleft})'# print("Category: {ap.5}")
+      - 'on:p as:[{ap.4}, "Branch background"], set(str:bci_vis.2, none:None); set(str:bci_vis_category_idx, {ap.2}); forin(ap.1.{ap.2}.1, 
+          set(str:ap_name, expr:"GUI_Item_AP_"+{idx});
+          set(str:pos, expr:[({as.center.x}-{as.size.x}*0.45+30*{idx}), ({as.center.y})]); 
+          
+          add_ap(self.menu, ap_name, "bci_item", [{ap.0}, ap.1, ap.2, idx, ap_name, "{ap.4}", self.layer, {ap.5}], pos, 1.0, false);
+        );
+      '
+      - 'ifvareq(bci_sel.1, {ap.1.{ap.2}.0}, set(str:self.color.border, [0.4, 0.28, 0.55, 0.95]), set(str:self.color.border, [0.2, 0.48, 0.55, 0.95])); ifvareq(bci_vis_category_idx, {ap.2}, set(str:self.color.fill, [0.025, 0.015, 0.055, 0.98]), set(str:self.color.fill, [0.065, 0.115, 0.155, 0.98]); call(show_interaction, [[0.065, 0.115, 0.155, 0.98], false]); del_aps(self.menu, self.layer);)'
+    x: 0
+    y: 0
+    w: 100
+    h: 40
+    rotation: 0.0
+    border_thickness: 1.5
+    roundness: 0.16
+    fade: 0.0
+    blur: 0
+    glow_color:
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+    glow_misc: { }
+    misc:
+      active: true
+      touchable: true
+      editable: true
+

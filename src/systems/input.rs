@@ -1,4 +1,5 @@
-use crate::helpers::positions::chunk_size;
+use std::cmp::min;
+use rusty_skylines_utils::positions::chunk_size;
 use crate::resources::Resources;
 use crate::ui::helper::calc_move_speed;
 use crate::world::camera::camera::{CameraMode, ground_camera_target, resolve_pitch_by_search};
@@ -8,14 +9,34 @@ pub fn run_inputs(resources: &mut Resources) {
     let world = &mut resources.world;
 
     let dt = world.time.target_sim_dt;
-    if dt <= 0.0 {
-        return;
-    }
-    let terrain_subsystem = &world.terrain;
+    let render_dt = world.time.render_dt;
 
     let camera = &mut world.world_state.camera;
     let cam_ctrl = &mut world.world_state.cam_controller;
+
+    if dt <= 0.0 {
+        if cam_ctrl.is_celestial_tracking() {
+            let tracking_dt = if render_dt.is_finite() {
+                render_dt.clamp(0.0, 0.1)
+            } else {
+                0.0
+            };
+
+            let t = 1.0
+                - (-cam_ctrl.orbit_smoothness.max(0.0) * 60.0 * tracking_dt).exp();
+
+            camera.yaw += (cam_ctrl.target_yaw - camera.yaw) * t;
+            camera.pitch += (cam_ctrl.target_pitch - camera.pitch) * t;
+
+            clamp_pitch(&mut camera.pitch);
+        }
+
+        return;
+    }
+
+    let terrain_subsystem = &world.terrain;
     let input = &mut world.input;
+
 
     // Mode toggle — edge-triggered so holding the key doesn't retrigger.
     if input.action_repeat("Toggle Camera Mode") {
@@ -47,39 +68,54 @@ pub fn run_inputs(resources: &mut Resources) {
 
     let zooming = input.action_down("Zoom");
 
-    if zooming {
-        // cam_ctrl.zoom(
-        //     camera,
-        //     resources.ui.variables.get_f64("zoom_speed").unwrap_or(1.0) as f32,
-        // );
-        cam_ctrl.zoom_at_cursor(
-            camera,
-            resources.ui.variables.get_f64("zoom_speed").unwrap_or(1.0) as f32,
-            input.mouse.pos,
-            Vec2::new(
-                resources.render_core.window_size.width,
-                resources.render_core.window_size.height,
-            ),
-        );
+    cam_ctrl.update_zoom_input(
+        camera,
+        zooming,
+        resources.ui.variables.get_f64("zoom_speed").unwrap_or(1.0) as f32,
+        resources.ui.variables.get_f64("unzoom_speed").unwrap_or(1.0) as f32,
+        input.mouse.pos,
+        Vec2::new(
+            resources.render_core.window_size.width,
+            resources.render_core.window_size.height,
+        ),
+    );
 
-        resources.ui.variables.set_bool("zoomed", true);
-    } else {
-        if cam_ctrl.zoom_time_start.is_some() {
-            cam_ctrl.zoom_deactivate(camera);
-        }
-        cam_ctrl.zoom_end(
-            camera,
-            resources
-                .ui
-                .variables
-                .get_f64("unzoom_speed")
-                .unwrap_or(1.0) as f32,
-        );
-        resources.ui.variables.set_bool("zoomed", false);
-    }
+    resources.ui.variables.set_bool(
+        "zoomed",
+        zooming || cam_ctrl.is_zoom_locked(),
+    );
 
     let mut wish = Vec3::ZERO;
-    if !resources.settings.editor_mode && !resources.ui.touch_manager.hovered().is_some()
+    let screen = resources.render_core.window_size;
+    let aspect = screen.width / screen.height;
+
+    let mouse = input.mouse.pos;
+
+    let edge_x = screen.width * resources.settings.edge_scrolling_size as f32 * 0.01;
+    let edge_y = screen.height * resources.settings.edge_scrolling_size as f32 * 0.01; // * aspect;
+
+    let x = mouse.x;
+    let y = mouse.y;
+
+    if resources.settings.edge_scrolling && input.window_focused && input.mouse.cursor_inside {
+        if x > 0.0 && x < edge_x {
+            wish -= right * (1.0 - x / edge_x);
+        }
+
+        if x < screen.width - 1.0 && x > screen.width - 1.0 - edge_x {
+            wish += right * (1.0 - (screen.width - 1.0 - x) / edge_x);
+        }
+
+        if y > 0.0 && y < edge_y {
+            wish += forward * (1.0 - y / edge_y);
+        }
+
+        if y < screen.height - 1.0 && y > screen.height - 1.0 - edge_y {
+            wish -= forward * (1.0 - (screen.height - 1.0 - y) / edge_y);
+        }
+    }
+
+    if !resources.settings.editor_mode && resources.ui.touch_manager.hovered().is_none()
     //&& !resources.settings.drive_car
     {
         if input.action_down("Fly Camera Forward") {
@@ -236,5 +272,5 @@ pub fn run_inputs(resources: &mut Resources) {
 }
 
 fn clamp_pitch(p: &mut f32) {
-    *p = p.clamp(-60.0f32.to_radians(), 89.99f32.to_radians());
+    *p = p.clamp(-89.99_f32.to_radians(), 89.99_f32.to_radians());
 }

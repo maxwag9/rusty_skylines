@@ -545,27 +545,23 @@ layers:
           - 0.0
         glow_misc: { }
 
-      - !Advanced
-        name: forest_cluster_strength_slider
-        ap_name: slider
-        ap_var:
-          - "str:forest_cluster_strength"
-          - "str:Forest tendency"
-          - "0.0"
-          - "1.0"
-          - "0.05"
-          - "none:None"
-          - "none:None"
-          - "false"
-        x: 1600
-        y: 800
-        scale: 1.5
-        misc:
-          touchable: false
-
-
-
-
+      #      - !Advanced
+      #        name: forest_cluster_strength_slider
+      #        ap_name: slider
+      #        ap_vars:
+      #          - "str:forest_cluster_strength"
+      #          - "str:Forest tendency"
+      #          - "0.0"
+      #          - "1.0"
+      #          - "0.05"
+      #          - "none:None"
+      #          - "none:None"
+      #          - "false"
+      #        x: 1600
+      #        y: 800
+      #        scale: 1.5
+      #        misc:
+      #          touchable: false
 
       - !Rect
         id: set_road_mode_straight
@@ -711,7 +707,23 @@ layers:
         x: 500
         y: 1040
         scale: 1.0
-
+      - !Advanced
+        name: roads_button
+        ap_name: button
+        ap_vars:
+          - "str:Roads"
+          - "25"
+          #- "str:on:r layer_active(self.menu, str:branch); if(_result, close_layer(self.menu, str:branch); set(str:cursor_mode, str:None);, open_layer(self.menu, str:branch); set(str:cursor_mode, str:Roads);) " #ifvareq(cursor_mode, Buildings, set(str:self.color.fill, [0.0, 1.0, 0.0, 1.0]))
+          - 'str:on:r call(rust:get_road_types); set(str:ap_name, "GUI_Branch_AP"); del_ap(self.menu, self.layer, ap_name); ifvareq(expr:{branch_open??false}, false, add_ap(self.menu, ap_name, "bci_branch", ["Roads", "road_types", ap_name, ["on:release set(str:cursor_mode, str:Roads)", "on:activated as:[str:Item Preview Render] call(rust:queue_mini_render, [[0.0, 100.0, 0.0], [0.0, 90.0, 0.0], [2560, 2560], 40, Test, repvar:replace_all_road_types([{ap:ap.0}, {ap:ap.1.{ap:ap.2}.0}, {ap:ap.1.{ap:ap.2}.1.{ap:ap.3}.0}]) ]); set(str:as.texture, repvar:minirender:{_mini_render_id}); call(rust:render_mini_render, _mini_render_id)
+          "]], [1260, 1100], 1.0, false); set(str:branch_open, true);, set(str:branch_open, false);)'
+        x: 800
+        y: 940
+        scale: 1.0
+#  - name: branch
+#    order: 3
+#    active: false
+#    elements:
+#
 #      - !Advanced
 #        name: tp_nut__button
 #        ap_name: button

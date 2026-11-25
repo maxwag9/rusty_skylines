@@ -8,6 +8,7 @@ use crate::ui::ui_editor::{Menus, get_element_active, get_element_kind, get_laye
 use crate::ui::ui_touch_manager::GlobalEvent;
 use crate::ui::ui_touch_manager::{ElementEvent, ElementRef};
 use std::cmp::PartialEq;
+use tracing::error;
 
 /// Helper trait for parsing argument types
 pub trait ParseArg: Sized {
@@ -139,39 +140,7 @@ macro_rules! define_commands {
     // SPECIAL FIELD: commands
     (@parse $args:ident, $idx:ident, commands, $ftype:ty) => {{
         if let Some(raw) = $args.get($idx) {
-            #[allow(unused_assignments)]
-            {
-                $idx += 1;
-            }
-
-            let mut cmds = Vec::new();
-            let mut start = 0;
-            let mut depth = 0isize; // Track () [] {}
-            let bytes = raw.as_bytes();
-
-            for i in 0..bytes.len() {
-                match bytes[i] {
-                    b'(' | b'[' | b'{' => depth += 1,
-                    b')' | b']' | b'}' => depth -= 1,
-                    b';' if depth == 0 => {
-                        // Only split on ';' if we are not inside brackets/parens
-                        let part = raw[start..i].trim();
-                        if !part.is_empty() {
-                            cmds.extend(parse_primitive_action(part))
-                        }
-                        start = i + 1;
-                    }
-                    _ => {}
-                }
-            }
-
-            // Don't forget the last command after the final ';'
-            let part = raw[start..].trim();
-            if !part.is_empty() {
-                cmds.extend(parse_primitive_action(part))
-            }
-
-            Some(cmds)
+            Some(parse_action_sequence(raw))
         } else {
             Some(Vec::new())
         }
@@ -180,39 +149,10 @@ macro_rules! define_commands {
     // SPECIAL FIELD: then / else_branch
     (@parse $args:ident, $idx:ident, then, $ftype:ty) => {{
         if let Some(raw) = $args.get($idx) {
-            #[allow(unused_assignments)]
             {
                 $idx += 1;
             }
-
-            let mut cmds = Vec::new();
-            let mut start = 0;
-            let mut depth = 0isize; // Track () [] {}
-            let bytes = raw.as_bytes();
-
-            for i in 0..bytes.len() {
-                match bytes[i] {
-                    b'(' | b'[' | b'{' => depth += 1,
-                    b')' | b']' | b'}' => depth -= 1,
-                    b';' if depth == 0 => {
-                        // Only split on ';' if we are not inside brackets/parens
-                        let part = raw[start..i].trim();
-                        if !part.is_empty() {
-                            cmds.extend(parse_primitive_action(part))
-                        }
-                        start = i + 1;
-                    }
-                    _ => {}
-                }
-            }
-
-            // Don't forget the last command after the final ';'
-            let part = raw[start..].trim();
-            if !part.is_empty() {
-                cmds.extend(parse_primitive_action(part))
-            }
-
-            Some(cmds)
+            Some(parse_action_sequence(raw))
         } else {
             Some(Vec::new())
         }
@@ -220,39 +160,7 @@ macro_rules! define_commands {
 
     (@parse $args:ident, $idx:ident, else_branch, $ftype:ty) => {{
         if let Some(raw) = $args.get($idx) {
-            #[allow(unused_assignments)]
-            {
-                $idx += 1;
-            }
-
-            let mut cmds = Vec::new();
-            let mut start = 0;
-            let mut depth = 0isize; // Track () [] {}
-            let bytes = raw.as_bytes();
-
-            for i in 0..bytes.len() {
-                match bytes[i] {
-                    b'(' | b'[' | b'{' => depth += 1,
-                    b')' | b']' | b'}' => depth -= 1,
-                    b';' if depth == 0 => {
-                        // Only split on ';' if we are not inside brackets/parens
-                        let part = raw[start..i].trim();
-                        if !part.is_empty() {
-                            cmds.extend(parse_primitive_action(part))
-                        }
-                        start = i + 1;
-                    }
-                    _ => {}
-                }
-            }
-
-            // Don't forget the last command after the final ';'
-            let part = raw[start..].trim();
-            if !part.is_empty() {
-                cmds.extend(parse_primitive_action(part))
-            }
-
-            Some(cmds)
+            Some(parse_action_sequence(raw))
         } else {
             Some(Vec::new())
         }
@@ -260,19 +168,15 @@ macro_rules! define_commands {
 
     (@branch $args:ident, $idx:ident) => {{
         let raw = $args.get($idx)?;
-        #[allow(unused_assignments)]
-        {
-            $idx += 1;
-        }
-
-        let cmds = raw.split(';').map(str::trim).filter(|s| !s.is_empty()).map(|s| parse_primitive_action(s)).flatten().collect();
-
-        Some(cmds)
+        $idx += 1;
+        Some(parse_action_sequence(raw))
     }};
     // SPECIAL FIELD: raw String
     (@parse $args:ident, $idx:ident, $field:ident, String) => {{
         let val = $args.get($idx).cloned().unwrap_or_default();
-        $idx += 1;
+        {
+            $idx += 1;
+        }
         Some(val)
     }};
     // GENERIC FIELD PARSER
@@ -303,6 +207,10 @@ define_commands! {
     "menu_active" | "menuactive"
         => MenuActive {menu_name: String },
 
+    "layer_active" | "layeractive"
+        => LayerActive {menu_name: String, layer_name: String },
+    "undirty" => UnDirty {menu_name: String, layer_name: String },
+
     // ===== LAYER COMMANDS =====
     "open_layer" | "openlayer"
         => OpenLayer {menu_name: String, layer_name: String },
@@ -326,35 +234,28 @@ define_commands! {
     "mul_var" | "mulvar" | "mul"
         => MulVar {name: String, factor: String },
 
-    "toggle_var" | "togglevar" | "toggle"
-        => ToggleVar {name: String },
+    "toggle_var" | "togglevar" | "toggle"=> ToggleVar {name: String },
 
-    "clamp" | "clampvar"
-        => Clamp {name: String, min: String, max: String },
+    "clamp" | "clampvar"=> Clamp {name: String, min: String, max: String },
 
     // ===== FLOW CONTROL =====
-    "delay" | "wait" | "sleep"
-        => Delay {seconds: String },
+    "delay" | "wait" | "sleep"=> Delay {seconds: String },
 
-    "halt" | "break"
-        => Halt,
+    "halt" | "break"=> Halt,
 
-    "skip"
-        => Skip { count: usize },
+    "skip"=> Skip { count: usize },
     "for" | "forin" => For {value: String, commands: Vec<UiCommand> },
     "if" => If {condition: String, then: Vec<UiCommand>, else_branch: Vec<UiCommand> },
 
-    "ifvareq"
-        => IfVarEq {var_name: String, value: String, then: Vec<UiCommand>, else_branch: Vec<UiCommand>},
+    "ifvareq"=> IfVarEq {var_name: String, value: String, then: Vec<UiCommand>, else_branch: Vec<UiCommand>},
 
-    "add_element" | "addelem" | "add"
-        => AddElement {menu: String, layer: String, id: String, kind: String, center: String, actions: String, undoable: bool},
+    "add_element" | "addelem" | "add"=> AddElement {menu: String, layer: String, id: String, kind: String, center: String, actions: String, undoable: bool},
 
-    "add_ap" | "addap"
-        => AddAP {menu: String, name: String, ap_name: String, ap_var: String, center: String, scale: String, is_temporary: bool},
+    "add_ap" | "addap"=> AddAP {menu: String, name: String, ap_name: String, ap_var: String, center: String, scale: String, is_temporary: bool},
 
-    "del_ap" | "delap"
-        => DeleteAP {menu: String, layer: String, reference_id: String},
+    "del_ap" | "delap"=> DeleteAP {menu: String, layer: String, reference_id: String},
+    
+    "del_aps" | "delaps"=> DeleteAPsInLayer {menu: String, layer: String},
 
     "clone_element" | "cloneelem" | "clone"
         => CloneElement {
@@ -377,11 +278,9 @@ define_commands! {
         to_layer: String,
         undoable: bool},
 
-    "delete_element" | "delelem" | "delete"
-        => DeleteElement {menu: String, layer: String, id: String, undoable: bool},
+    "delete_element" | "delelem" | "delete" => DeleteElement {menu: String, layer: String, id: String, undoable: bool},
 
-    "delete_layer" | "dellayer"
-        => DeleteLayer {menu: String, layer: String, undoable: bool},
+    "delete_layer" | "dellayer" => DeleteLayer {menu: String, layer: String, undoable: bool},
 
     "save" | "savegame" => SaveGame {and_exit: String },
 
@@ -393,6 +292,8 @@ define_commands! {
     // ===== DEBUG COMMANDS =====
     "print" | "log" | "echo"
         => Print {statement: String },
+    "printnc"
+        => PrintNoChat {statement: String },
 
     "debug_vars" | "debugvars"
         => DebugVars,
@@ -526,75 +427,7 @@ pub fn run_actions(
 }
 
 /// Handle a single action string that may be an event wrapper
-fn handle_action_str(action: &str) -> Vec<UiCommand> {
-    let s = action.trim();
-
-    if s.is_empty() {
-        return vec![];
-    }
-
-    let bytes = s.as_bytes();
-    let len = s.len();
-
-    // Parse identifier (wrapper/function name)
-    let mut pos = 0;
-    while pos < len && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
-        pos += 1;
-    }
-
-    // Must have identifier followed by '(' for it to be a wrapper
-    if pos == 0 || pos >= len || bytes[pos] != b'(' {
-        return vec![];
-    }
-
-    let wrapper = &s[..pos];
-    let open_paren = pos;
-
-    // Find matching close paren (handles nested parens)
-    let mut depth = 0isize;
-    let mut close_paren = None;
-    for i in open_paren..len {
-        match bytes[i] {
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    close_paren = Some(i);
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let close_paren = match close_paren {
-        Some(cp) => cp,
-        None => return vec![], // Unbalanced parens
-    };
-
-    let inner = s[open_paren + 1..close_paren].trim();
-    process_inner_content(inner)
-}
-
 /// Process the inner content of a matched event wrapper
-fn process_inner_content(inner: &str) -> Vec<UiCommand> {
-    for part in split_top_level(inner, b',') {
-        let cmds = handle_action_str(part);
-
-        if !cmds.is_empty() {
-            return cmds;
-        }
-
-        let cmds = parse_primitive_action(part);
-
-        if !cmds.is_empty() {
-            return cmds;
-        }
-    }
-
-    vec![]
-}
-
 /// Parse arguments from a string into a Vec<String>
 ///
 /// Behavior:
@@ -606,226 +439,319 @@ fn process_inner_content(inner: &str) -> Vec<UiCommand> {
 ///
 /// Nested parentheses are always respected:
 ///   "func(a, b), other arg" -> ["func(a, b)", "other arg"]
-fn parse_arguments(args_str: &str) -> Vec<String> {
-    let s = args_str.trim();
+//kkl/*kkl?*/
+
+fn handle_action_str(action: &str) -> Vec<UiCommand> {
+    let s = action.trim();
+
     if s.is_empty() {
-        return Vec::new();
+        return vec![];
     }
 
     let bytes = s.as_bytes();
     let len = s.len();
 
-    let mut args = Vec::new();
-    let mut start = 0usize;
-
-    let mut paren_depth = 0isize;
-    let mut bracket_depth = 0isize;
-    let mut brace_depth = 0isize;
-    let mut in_string = false;
-    let mut escape = false;
-
-    let mut saw_top_level_comma = false;
-
-    for i in 0..len {
-        let b = bytes[i];
-
-        if in_string {
-            if escape {
-                escape = false;
-                continue;
-            }
-            match b {
-                b'\\' => escape = true,
-                b'"' => in_string = false,
-                _ => {}
-            }
-            continue;
-        }
-
-        match b {
-            b'"' => in_string = true,
-            b'(' => paren_depth += 1,
-            b')' => paren_depth -= 1,
-            b'[' => bracket_depth += 1,
-            b']' => bracket_depth -= 1,
-            b'{' => brace_depth += 1,
-            b'}' => brace_depth -= 1,
-            b',' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                saw_top_level_comma = true;
-                let part = s[start..i].trim();
-                if !part.is_empty() {
-                    args.push(part.to_string());
-                }
-                start = i + 1;
-            }
-            _ => {}
-        }
+    let mut pos = 0;
+    while pos < len && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
+        pos += 1;
     }
 
-    let part = s[start..].trim();
-    if !part.is_empty() {
-        args.push(part.to_string());
+    if pos == 0 || pos >= len || bytes[pos] != b'(' {
+        return vec![];
     }
 
-    if saw_top_level_comma {
-        return args;
-    }
+    let open_paren = pos;
 
-    let mut args = vec![s.to_string()];
-    let mut pos = 0usize;
+    let close_paren = match find_matching_close_paren(s, open_paren) {
+        Some(cp) => cp,
+        None => return vec![],
+    };
 
-    while pos < len {
-        while pos < len && bytes[pos].is_ascii_whitespace() {
-            pos += 1;
-        }
-        if pos >= len {
-            break;
-        }
-
-        let arg_start = pos;
-
-        let mut paren_depth = 0isize;
-        let mut bracket_depth = 0isize;
-        let mut brace_depth = 0isize;
-        let mut in_string = false;
-        let mut escape = false;
-
-        while pos < len {
-            let b = bytes[pos];
-
-            if in_string {
-                if escape {
-                    escape = false;
-                    pos += 1;
-                    continue;
-                }
-                match b {
-                    b'\\' => escape = true,
-                    b'"' => in_string = false,
-                    _ => {}
-                }
-                pos += 1;
-                continue;
-            }
-
-            match b {
-                b'"' => {
-                    in_string = true;
-                    pos += 1;
-                }
-                b'(' => {
-                    paren_depth += 1;
-                    pos += 1;
-                }
-                b')' => {
-                    paren_depth -= 1;
-                    pos += 1;
-                }
-                b'[' => {
-                    bracket_depth += 1;
-                    pos += 1;
-                }
-                b']' => {
-                    bracket_depth -= 1;
-                    pos += 1;
-                }
-                b'{' => {
-                    brace_depth += 1;
-                    pos += 1;
-                }
-                b'}' => {
-                    brace_depth -= 1;
-                    pos += 1;
-                }
-                b if b.is_ascii_whitespace()
-                    && paren_depth == 0
-                    && bracket_depth == 0
-                    && brace_depth == 0 =>
-                {
-                    break;
-                }
-                _ => pos += 1,
-            }
-        }
-
-        let arg = s[arg_start..pos].trim();
-        if !arg.is_empty() {
-            args.push(arg.to_string());
-        }
-    }
-
-    args
+    let inner = s[open_paren + 1..close_paren].trim();
+    process_inner_content(inner)
 }
 
-fn split_top_level_semicolons(s: &str) -> Vec<&str> {
+fn process_inner_content(inner: &str) -> Vec<UiCommand> {
+    for part in split_top_level(inner, b',') {
+        let cmds = handle_action_str(&part);
+
+        if !cmds.is_empty() {
+            return cmds;
+        }
+
+        let cmds = parse_primitive_action(&part);
+
+        if !cmds.is_empty() {
+            return cmds;
+        }
+    }
+
+    vec![]
+}
+
+pub fn parse_arguments(args_str: &str) -> Vec<String> {
+    let s = args_str.trim();
+
+    if s.is_empty() {
+        return Vec::new();
+    }
+
+    let (args, saw_comma, _) =
+        split_top_level_scoped(s, |ch| ch == ',');
+
+    if saw_comma {
+        args
+    } else {
+        vec![s.to_string()]
+    }
+}
+fn parse_action_sequence(raw: &str) -> Vec<UiCommand> {
+    split_top_level_semicolons(raw)
+        .into_iter()
+        .flat_map(|part| parse_primitive_action(&part))
+        .collect()
+}
+fn split_top_level_semicolons(s: &str) -> Vec<String> {
     split_top_level(s, b';')
 }
-fn split_top_level(s: &str, delimiter: u8) -> Vec<&str> {
-    let bytes = s.as_bytes();
 
+fn split_top_level(s: &str, delimiter: u8) -> Vec<String> {
+    split_top_level_scoped(s, |ch| ch == delimiter as char).0
+}
+
+fn split_top_level_scoped<F>(
+    s: &str,
+    is_separator: F,
+) -> (Vec<String>, bool, String)
+where
+    F: Fn(char) -> bool,
+{
     let mut parts = Vec::new();
-    let mut start = 0usize;
+    let mut current = String::new();
+    let mut normalized = String::new();
 
     let mut paren_depth = 0isize;
     let mut bracket_depth = 0isize;
     let mut brace_depth = 0isize;
 
     let mut in_string = false;
-    let mut escape = false;
+    let mut saw_separator = false;
 
-    for i in 0..bytes.len() {
-        let b = bytes[i];
+    let mut chars = s.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.peek().copied() {
+                let at_top_level = !in_string
+                    && paren_depth == 0
+                    && bracket_depth == 0
+                    && brace_depth == 0;
+
+                if at_top_level && is_separator(next) {
+                    chars.next();
+                    current.push(next);
+                    normalized.push(next);
+                    continue;
+                }
+
+                if matches!(
+                    next,
+                    '"' | '\\' | '(' | ')' | '[' | ']' | '{' | '}'
+                ) {
+                    chars.next();
+
+                    current.push('\\');
+                    current.push(next);
+
+                    normalized.push('\\');
+                    normalized.push(next);
+
+                    continue;
+                }
+            }
+
+            current.push('\\');
+            normalized.push('\\');
+            continue;
+        }
 
         if in_string {
-            if escape {
-                escape = false;
-                continue;
+            if ch == '"' {
+                in_string = false;
             }
 
-            match b {
-                b'\\' => escape = true,
-                b'"' => in_string = false,
-                _ => {}
+            current.push(ch);
+            normalized.push(ch);
+            continue;
+        }
+
+        match ch {
+            '"' => {
+                in_string = true;
+                current.push(ch);
+                normalized.push(ch);
+            }
+            '(' => {
+                paren_depth += 1;
+                current.push(ch);
+                normalized.push(ch);
+            }
+            ')' => {
+                paren_depth -= 1;
+                current.push(ch);
+                normalized.push(ch);
+            }
+            '[' => {
+                bracket_depth += 1;
+                current.push(ch);
+                normalized.push(ch);
+            }
+            ']' => {
+                bracket_depth -= 1;
+                current.push(ch);
+                normalized.push(ch);
+            }
+            '{' => {
+                brace_depth += 1;
+                current.push(ch);
+                normalized.push(ch);
+            }
+            '}' => {
+                brace_depth -= 1;
+                current.push(ch);
+                normalized.push(ch);
+            }
+            _ if paren_depth == 0
+                && bracket_depth == 0
+                && brace_depth == 0
+                && is_separator(ch) =>
+                {
+                    saw_separator = true;
+
+                    let part = current.trim();
+
+                    if !part.is_empty() {
+                        parts.push(part.to_string());
+                    }
+
+                    current.clear();
+                    normalized.push(ch);
+                }
+            _ => {
+                current.push(ch);
+                normalized.push(ch);
+            }
+        }
+    }
+
+    let part = current.trim();
+
+    if !part.is_empty() {
+        parts.push(part.to_string());
+    }
+
+    (parts, saw_separator, normalized)
+}
+
+pub fn find_matching_close_paren(s: &str, open_paren: usize) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth = 0isize;
+    let mut in_string = false;
+    let mut i = open_paren;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+
+        if b == b'\\' {
+            if i + 1 < bytes.len() {
+                let next = bytes[i + 1];
+
+                if in_string
+                    || matches!(next, b'\\' | b'"' | b'(' | b')')
+                {
+                    i += 2;
+                    continue;
+                }
             }
 
+            i += 1;
+            continue;
+        }
+
+        if in_string {
+            if b == b'"' {
+                in_string = false;
+            }
+
+            i += 1;
             continue;
         }
 
         match b {
             b'"' => in_string = true,
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
 
-            b'(' => paren_depth += 1,
-            b')' => paren_depth -= 1,
-
-            b'[' => bracket_depth += 1,
-            b']' => bracket_depth -= 1,
-
-            b'{' => brace_depth += 1,
-            b'}' => brace_depth -= 1,
-
-            _ if b == delimiter && paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                let part = s[start..i].trim();
-
-                if !part.is_empty() {
-                    parts.push(part);
+                if depth == 0 {
+                    return Some(i);
                 }
-
-                start = i + 1;
             }
-
             _ => {}
         }
+
+        i += 1;
     }
 
-    let part = s[start..].trim();
-
-    if !part.is_empty() {
-        parts.push(part);
-    }
-
-    parts
+    None
 }
 
+// fn parse_primitive_action(action: &str) -> Vec<UiCommand> {
+//     let s = action.trim();
+//
+//     if s.is_empty() {
+//         return Vec::new();
+//     }
+//
+//     let chained = split_top_level_semicolons(s);
+//
+//     if chained.len() > 1 {
+//         return chained
+//             .into_iter()
+//             .flat_map(|part| parse_primitive_action(&part))
+//             .collect();
+//     }
+//
+//     let mut out = Vec::new();
+//
+//     if let Some(open_paren) = s.find('(') {
+//         let func_name = s[..open_paren].trim();
+//
+//         if let Some(close_paren) = find_matching_close_paren(s, open_paren) {
+//             let args_str = s[open_paren + 1..close_paren].trim();
+//             let args = parse_arguments(args_str);
+//
+//             if let Some(cmd) = make_ui_command(func_name, args) {
+//                 out.push(cmd);
+//             }
+//
+//             let remainder = s[close_paren + 1..]
+//                 .trim_start_matches(|c: char| c.is_whitespace() || c == ';');
+//
+//             if !remainder.is_empty() {
+//                 out.extend(parse_primitive_action(remainder));
+//             }
+//
+//             return out;
+//         }
+//     }
+//
+//     if let Some(cmd) = make_ui_command(s, Vec::new()) {
+//         out.push(cmd);
+//     }
+//
+//     out
+// }
 fn parse_primitive_action(action: &str) -> Vec<UiCommand> {
     let s = action.trim();
 
@@ -834,10 +760,11 @@ fn parse_primitive_action(action: &str) -> Vec<UiCommand> {
     }
 
     let chained = split_top_level_semicolons(s);
+
     if chained.len() > 1 {
         return chained
             .into_iter()
-            .flat_map(|part| parse_primitive_action(part))
+            .flat_map(|part| parse_primitive_action(&part))
             .collect();
     }
 
@@ -845,37 +772,23 @@ fn parse_primitive_action(action: &str) -> Vec<UiCommand> {
 
     if let Some(open_paren) = s.find('(') {
         let func_name = s[..open_paren].trim();
-        let bytes = s.as_bytes();
-        let mut depth = 0isize;
-        let mut close_paren = None;
 
-        for i in open_paren..s.len() {
-            match bytes[i] {
-                b'(' => depth += 1,
-                b')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        close_paren = Some(i);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        if let Some(close_paren) = close_paren {
+        if let Some(close_paren) = find_matching_close_paren(s, open_paren) {
             let args_str = s[open_paren + 1..close_paren].trim();
-            let args: Vec<String> = parse_arguments(args_str);
+            let args = parse_arguments(args_str);
 
             if let Some(cmd) = make_ui_command(func_name, args) {
                 out.push(cmd);
             }
 
-            let rest = s[close_paren + 1..].trim();
-            if let Some(rest) = rest.strip_prefix(';') {
-                out.extend(parse_primitive_action(rest));
+            let remainder = s[close_paren + 1..]
+                .trim_start_matches(|c: char| c.is_whitespace() || c == ';');
+
+            if remainder.is_empty() || remainder.starts_with(')') {
+                return out;
             }
 
+            out.extend(parse_primitive_action(remainder));
             return out;
         }
     }
@@ -886,7 +799,6 @@ fn parse_primitive_action(action: &str) -> Vec<UiCommand> {
 
     out
 }
-
 fn button_matches(
     input: &mut Input,
     button: ParsedButton,
@@ -1067,7 +979,15 @@ pub fn compile_actions(
         };
         let filters = parse_action_filters(&mut element_ctx, &mut action_string, menus);
 
+        // println!(
+        //     "[Action Compile] Filters: {:?}\nRemaining: {:?}",
+        //     filters,
+        //     action_string
+        // );
+
         let commands = parse_primitive_action(action_string.trim());
+
+        //println!("[Action Compile] Commands: {:#?}", commands);
         let compiled_action = CompiledAction {
             element_ctx,
             filters,
@@ -1239,38 +1159,109 @@ fn try_parse_as(
         } else {
             raw.as_str()
         };
+
         let arr = Value::split_array_elements(inner);
-        filters.as_filter = AsFilter::Dynamic(arr.iter().map(|str| str.to_string()).collect());
+        filters.as_filter = AsFilter::Dynamic(
+            arr.iter().map(|str| str.to_string()).collect()
+        );
+
+        return Some(consumed);
+    }
+    // Is as:?
+    let Some((raw, consumed)) = parse_prefixed_value(input, "as:") else {
+        return None;
+    };
+
+    let inner = raw
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'));
+
+    let Some(inner) = inner else {
+        error!("Invalid `as:` filter: expected an array, got {:?}", raw);
         return Some(consumed);
     };
-    // Is as:?
-    let (raw, consumed) = parse_prefixed_value(input, "as:")?;
+
+    let elements = Value::split_array_elements(inner);
+
+    if let Some(element) = elements.iter().find(|element| {
+        contains_unquoted_dynamic_reference(element)
+    }) {
+        error!(
+        "Invalid `as:` filter: dynamic expression {:?} is not supported. Use `asdyn:` instead.",
+        element
+    );
+        return Some(consumed);
+    }
 
     let Some(arr) = Value::parse_array_pure(raw.as_str()) else {
-        return Some(consumed);
-    };
-
-    let self_element = if let Some(current) = element_ctx.self_element.as_ref() {
-        current
-    } else if arr.len() == 3 {
-        &ElementRef::default()
-    } else {
+        error!(
+            "Failed to parse `as:` filter: expected an array, got {:?}",
+            raw
+        );
         return Some(consumed);
     };
     //println!("{:?}", arr);
     let (menu, layer, id) = match arr.as_slice() {
-        [id] => (
-            self_element.menu.clone(),
-            self_element.layer.clone(),
+        [id] => {
+            let Some(current) = element_ctx.self_element.as_ref() else {
+                error!(
+                    "Failed to resolve `as:[{}]`: no current self element context",
+                    id
+                );
+                return Some(consumed);
+            };
+
+            (
+                current.menu.clone(),
+                current.layer.clone(),
+                id.to_string(),
+            )
+        }
+        [layer, id] => {
+            let Some(current) = element_ctx.self_element.as_ref() else {
+                error!(
+                    "Failed to resolve `as:[{}, {}]`: no current self element context",
+                    layer, id
+                );
+                return Some(consumed);
+            };
+
+            (
+                current.menu.clone(),
+                layer.to_string(),
+                id.to_string(),
+            )
+        }
+        [menu, layer, id] => (
+            menu.to_string(),
+            layer.to_string(),
             id.to_string(),
         ),
-        [layer, id] => (self_element.menu.clone(), layer.to_string(), id.to_string()),
-        [menu, layer, id, ..] => (menu.to_string(), layer.to_string(), id.to_string()),
-        [] => return Some(consumed),
+        _ => {
+            error!(
+                "Invalid `as:` filter: expected 1, 2, or 3 elements, got {} in {:?}",
+                arr.len(),
+                raw
+            );
+            return Some(consumed);
+        }
     };
-    let Some(kind) = get_element_kind(menus, menu.as_str(), layer.as_str(), id.as_str()) else {
+
+    let Some(kind) = get_element_kind(
+        menus,
+        menu.as_str(),
+        layer.as_str(),
+        id.as_str(),
+    ) else {
+        error!(
+            "Failed to resolve `as:` filter: element does not exist: menu={:?}, layer={:?}, id={:?}. Might need 'asdyn:'",
+            menu,
+            layer,
+            id
+        );
         return Some(consumed);
     }; // grad sport gleich sport, hmm grad sport, deswegen schwitze ich mama
+
     let as_element = ElementRef {
         menu,
         layer,
@@ -1588,30 +1579,40 @@ enum ParsedButton {
     Any,
     Key(String),
 }
-fn testing_slider() {
-    let min: f64 = 1.0;
-    let max: f64 = 10.0;
-    let step = 1.0;
+fn contains_unquoted_dynamic_reference(input: &str) -> bool {
+    let input = input.trim();
 
-    let slider_bar_width = 140.0;
-    let slider_bar_middle_x = 410.0;
-    let knob_x = 334.0;
-    let mouse_x = 362.0;
+    if input.starts_with("str:") {
+        return false;
+    }
+    if input.starts_with("self.") || input.starts_with("as.") {
+        return true;
+    }
 
-    let min_px = slider_bar_middle_x - slider_bar_width * 0.5;
-    let max_px = slider_bar_middle_x + slider_bar_width * 0.5;
-    let num_steps: f64 = (min - max).abs();
-    let px_per_step: f64 = slider_bar_width / num_steps;
+    let bytes = input.as_bytes();
+    let mut quote = None;
+    let mut escaped = false;
 
-    let target_x = mouse_x;
-    let left_step = target_x - px_per_step;
-    let right_step = target_x + px_per_step;
-    let abs_left = (target_x - left_step).abs();
-    let abs_right = (target_x - right_step).abs();
+    for i in 0..bytes.len() {
+        let byte = bytes[i];
 
-    let knob_x = if abs_left < abs_right {
-        left_step
-    } else {
-        right_step
-    };
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == q {
+                quote = None;
+            }
+
+            continue;
+        }
+
+        if byte == b'"' || byte == b'\'' {
+            quote = Some(byte);
+            continue;
+        }
+    }
+
+    false
 }

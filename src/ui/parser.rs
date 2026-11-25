@@ -149,7 +149,7 @@ impl Value {
                                 },
                                 None => Value::String(value.to_string()),
                             };
-                        let expr_value = expr_value.into_string();
+                        let expr_value = expr_value.to_string(); //expr_value.to_literal();
                         let post_value = Value::from_str(
                             settings,
                             variables,
@@ -217,11 +217,19 @@ impl Value {
                         // }
                     }
                     _ => {
-                        return Value::String(format!(
-                            "'{}', the type '{}' doesn't exist. Use 'expr:xyz' for Expressions.",
-                            s, ty
-                        ));
+                        // println!(
+                        //     "[Value] Unknown prefix '{}', preserving as literal string: '{}'",
+                        //     ty, s
+                        // );
+                        return Value::String(s.to_string());
                     }
+                    // _ => {
+                    //
+                    //     return Value::String(format!(
+                    //         "[Value from_str] < {} >, the type '{}' doesn't exist. Use 'expr:xyz' for Expressions.",
+                    //         s, ty
+                    //     ));
+                    // }
                 }
             }
         }
@@ -330,11 +338,18 @@ impl Value {
                         return Value::None;
                     }
                     _ => {
-                        return Value::String(format!(
-                            "'{}', the type '{}' doesn't exist. Use 'expr:xyz' for Expressions.",
-                            s, ty
-                        ));
+                        // println!(
+                        //     "[Value] Unknown prefix '{}', preserving as literal string: '{}'",
+                        //     ty, s
+                        // );
+                        return Value::String(s.to_string());
                     }
+                    // _ => {
+                    //     return Value::String(format!(
+                    //         "[Value from_str_pure] < {} >, the type '{}' doesn't exist. Use 'expr:xyz' for Expressions.",
+                    //         s, ty
+                    //     ));
+                    // }
                 }
             }
         }
@@ -379,7 +394,7 @@ impl Value {
         name: &str,
     ) -> Option<Value> {
         if let Some(var) = Self::get_element_property(menus, element_ctx, name) {
-            // Maybe optimize here? But low priority, because it just checks sef/as anyway.
+            // Maybe optimize here? But low priority, because it just checks self/as anyway.
             return Some(var);
         }
         //println!("Name: '{}', Element Context: {:?}", name, element_ctx);
@@ -401,15 +416,35 @@ impl Value {
         name: &str,
     ) -> Option<Value> {
         let mut parts = name.split('.');
-
-        let element_ref = match parts.next()? {
+        let el_name = parts.next()?;
+        let property = parts.next()?;
+        let element_ref = match el_name {
             "self" => element_ctx.self_element.as_ref(),
-            "as" => element_ctx.as_element.as_ref(),
+            "as" => {
+                let as_element = element_ctx.as_element.as_ref();
+                if property == "exists" {
+                    return Some(Value::Bool(as_element.is_some()));
+                }
+                //println!("'{name}' and '{:?}'", as_element);
+                as_element
+            },
             _ => return None,
         }?;
 
-        let property = parts.next()?;
 
+        if property == "color" {
+            let component = parts.collect::<Vec<_>>().join(".");
+            if component.is_empty() {
+                return None;
+            }
+
+            return Self::get_element_property2(
+                menus,
+                element_ref,
+                property,
+                Some(&component),
+            );
+        }
         let first = parts.next();
         let (component, index) = match first {
             None => (None, None),
@@ -475,19 +510,67 @@ impl Value {
             "active" => Some(Value::Bool(
                 menu.active && layer.active && element.is_active(),
             )),
-            "center" => Some(Value::Array(vec![
-                Value::F64(element.center()[0] as f64),
-                Value::F64(element.center()[1] as f64),
-            ])),
-            "anchor_center" => {
-                if let Some(text) = element.as_text() {
-                    let center = anchor_to(text.anchor, text.center(), text.width, text.height);
-                    Some(Value::Array(vec![
-                        Value::F64(center[0] as f64),
-                        Value::F64(center[1] as f64),
-                    ]))
+            "touchable" => Some(Value::Bool(
+                element.is_touchable(),
+            )),
+            "topleft" | "bottomleft" | "topright" | "bottomright" => {
+                let (corner_x, corner_y) = match property {
+                    "topleft" => (0.0, 0.0),
+                    "topright" => (1.0, 0.0),
+                    "bottomleft" => (0.0, 1.0),
+                    "bottomright" => (1.0, 1.0),
+                    _ => (0.5, 0.5),
+                };
+
+                let (top_left, size) = if let Some(text) = element.as_text() {
+                    (
+                        text.anchor.anchor_to(text.center(), text.width, text.height),
+                        [text.width, text.height],
+                    )
                 } else {
-                    None
+                    let center = element.center();
+                    let size = element.size2()?;
+
+                    (
+                        [
+                            center[0] - size[0] * 0.5,
+                            center[1] - size[1] * 0.5,
+                        ],
+                        size,
+                    )
+                };
+
+                let value = Value::from_vec([
+                    top_left[0] + size[0] * corner_x,
+                    top_left[1] + size[1] * corner_y,
+                ]);
+
+                match component.and_then(|c| Variables::component_index(c)) {
+                    Some(idx) => value.as_array()?.get(idx).cloned(),
+                    None => Some(value),
+                }
+            }
+            "center" => {
+                let center = if let Some(text) = element.as_text() {
+                    let top_left = text.anchor.anchor_to(
+                        text.center(),
+                        text.width,
+                        text.height,
+                    );
+
+                    [
+                        top_left[0] + text.width * 0.5,
+                        top_left[1] + text.height * 0.5,
+                    ]
+                } else {
+                    element.center()
+                };
+
+                let value = Value::from_vec(center);
+
+                match component.and_then(Variables::component_index) {
+                    Some(idx) => value.as_array()?.get(idx).cloned(),
+                    None => Some(value),
                 }
             }
             "radius" => {
@@ -524,14 +607,39 @@ impl Value {
                 Some(Value::Array(comps))
             }
             "color" => {
-                if let Some(component) = component {
-                    if let Some(color) = element.color(ColorComponent::from_str(component)) {
-                        Some(Value::from_vec(color))
-                    } else {
-                        None
+                let component = component?;
+                let mut parts = component.split('.');
+
+                let component_name = parts.next()?;
+
+                let color_component = match component_name {
+                    "deco" => ColorComponent::DecorationIndex(
+                        parts.next()?.parse::<u32>().ok()?,
+                    ),
+                    "vertex_index" => ColorComponent::VertexIndex(
+                        parts.next()?.parse::<u32>().ok()?,
+                    ),
+                    other => ColorComponent::from_str(other),
+                };
+
+                let color = element.color(color_component)?;
+                let value = Value::from_vec(color);
+
+                match parts.next() {
+                    Some(channel) => {
+                        if parts.next().is_some() {
+                            return None;
+                        }
+
+                        let index = Variables::component_index(channel)?;
+
+                        if index >= 4 {
+                            return None;
+                        }
+
+                        value.as_array()?.get(index).cloned()
                     }
-                } else {
-                    None
+                    None => Some(value),
                 }
             }
             "text" => {
@@ -549,6 +657,22 @@ impl Value {
                 }
             }
             _ => None,
+        }
+    }
+    pub fn to_literal(&self) -> String {
+        match self {
+            Value::F64(n) => n.to_string(),
+            Value::I64(n) => n.to_string(),
+            Value::String(s) => {
+                let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+                format!("\"{}\"", escaped)
+            }
+            Value::Bool(b) => b.to_string(),
+            Value::Array(arr) => {
+                let items: Vec<String> = arr.iter().map(|v| v.to_literal()).collect();
+                format!("[{}]", items.join(", "))
+            }
+            Value::None => "none".to_string(),
         }
     }
     pub fn is_f64(&self) -> Option<Value> {
@@ -887,36 +1011,66 @@ impl Value {
         let mut chars = s.chars().peekable();
 
         while let Some(c) = chars.next() {
-            if c == '{' {
-                let mut var_name = String::new();
-                let mut found_end = false;
-
-                // Consume characters until we find the closing '}'
-                for inner_c in chars.by_ref() {
-                    if inner_c == '}' {
-                        found_end = true;
-                        break;
-                    }
-                    var_name.push(inner_c);
-                }
-
-                if found_end && !var_name.is_empty() {
-                    let value =
-                        Self::from_str(&settings, variables, menus, element_ctx, &var_name, false);
-                    // Replace with the variable's string representation -- Huh?!
-                    result.push_str(&value.to_string());
-                } else {
-                    // Unclosed brace or empty {}, leave as is
-                    result.push('{');
-                    result.push_str(&var_name);
-                    if found_end {
-                        result.push('}');
-                    }
-                }
-            } else {
+            if c != '{' {
                 result.push(c);
+                continue;
             }
+
+            let mut var_name = String::new();
+            let mut depth = 1usize;
+            let mut found_end = false;
+
+            for inner_c in chars.by_ref() {
+                match inner_c {
+                    '{' => {
+                        depth += 1;
+                        var_name.push(inner_c);
+                    }
+                    '}' => {
+                        depth -= 1;
+
+                        if depth == 0 {
+                            found_end = true;
+                            break;
+                        }
+
+                        var_name.push(inner_c);
+                    }
+                    _ => var_name.push(inner_c),
+                }
+            }
+
+            if !found_end {
+                result.push('{');
+                result.push_str(&var_name);
+                break;
+            }
+
+            if var_name.is_empty() {
+                result.push_str("{}");
+                continue;
+            }
+
+            let resolved_name = Self::replace_inline_variables(
+                variables,
+                settings,
+                menus,
+                element_ctx,
+                &var_name,
+            );
+
+            let value = Self::from_str(
+                settings,
+                variables,
+                menus,
+                element_ctx,
+                &resolved_name,
+                false,
+            );
+
+            result.push_str(&value.to_string());
         }
+
         result
     }
 
@@ -1847,22 +2001,63 @@ pub fn get_builtin<'a>(
             //              .collect::<Vec<_>>());
             Ok(Value::Array(
                 wrap_messages(&messages, wrap_at, pt)
-                    .into_iter()
-                    .flatten()
-                    .map(Value::String)
-                    .collect(),
             ))
         }),
 
         "wrap_text_lines" => boxed_builtin(move |args| {
             let (messages, wrap_at, pt) = parse_wrap_messages(&args, "wrap_text_lines")?;
 
-            Ok(Value::Array(
-                wrap_messages(&messages, wrap_at, pt)
-                    .into_iter()
-                    .map(|lines| Value::Array(lines.into_iter().map(Value::String).collect()))
-                    .collect(),
-            ))
+            let wrapped = wrap_messages(&messages, wrap_at, pt);
+
+            let mut result = Vec::new();
+
+            for message in wrapped {
+                let Value::Array(mut parts) = message else {
+                    continue;
+                };
+
+                let Value::Array(lines) = parts.remove(0) else {
+                    continue;
+                };
+
+                for line in lines {
+                    let mut unit = vec![line];
+                    unit.extend_from_slice(&parts);
+                    result.push(Value::Array(unit));
+                }
+            }
+
+            Ok(Value::Array(result))
+        }),
+        "sort_tree" => boxed_builtin(move |args| {
+            let nodes = match get_arg(&args, 0, "sort_tree")? {
+                Value::Array(nodes) => nodes,
+                v => {
+                    return Err(FunctionError::InvalidType {
+                        expected: "array",
+                        got: v.type_name(),
+                        function: "sort_tree",
+                    });
+                }
+            };
+            let mode = normalize_sort_mode(&args.get(1).map(|v| v.to_string()).unwrap_or_default());
+            Ok(Value::Array(sort_tree_nodes(nodes, &mode)))
+        }),
+        "flatten_tree" => boxed_builtin(move |args| {
+            let nodes = match get_arg(&args, 0, "flatten_tree")? {
+                Value::Array(nodes) => nodes,
+                v => {
+                    return Err(FunctionError::InvalidType {
+                        expected: "array",
+                        got: v.type_name(),
+                        function: "flatten_tree",
+                    });
+                }
+            };
+            let prefix = args.get(1).map(|v| v.to_string()).unwrap_or_default();
+            let mut rows = Vec::new();
+            flatten_tree_nodes(nodes, &prefix, "", 0, vars, &mut rows);
+            Ok(Value::Array(rows))
         }),
         "padleft" => boxed_builtin(move |args| {
             let val = get_arg(&args, 0, "padleft")?;
@@ -2370,6 +2565,36 @@ pub fn get_builtin<'a>(
                 Ok(Value::String(val.to_string()))
             }
         }),
+        "format_memory" => boxed_builtin(move |args| {
+            let val = get_arg(&args, 0, "format_memory")?;
+            match val {
+                Value::F64(n) => {
+                    Ok(Value::String(format_memory(*n as u64)))
+                }
+                Value::I64(n) => {
+                    Ok(Value::String(format_memory(*n as u64)))
+                }
+                Value::Array(arr) => {
+                    Ok(Value::Array(arr.iter().map(|v|
+                        match val {
+                            Value::F64(n) => {
+                                Value::String(format_memory(*n as u64))
+                            }
+                            Value::I64(n) => {
+                                Value::String(format_memory(*n as u64))
+                            }
+                            _ => val.clone(),
+                        }
+                    ).collect()))
+                }
+                _ => Err(FunctionError::InvalidType {
+                    expected: "F64 or I64 or Array of F64/I64",
+                    got: val.type_name(),
+                    function: "format_memory",
+                })
+            }
+           
+        }),
         "comma" => boxed_builtin(move |args| {
             let n = arg_f64(&args, 0, "comma")?;
             let decimals = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
@@ -2699,14 +2924,14 @@ pub fn get_builtin<'a>(
                 None => Ok(Value::F64(rng.random())),
             }
         }),
-        "scaled_pt" => boxed_builtin(move |args| {
-            let pt = arg_f64(&args, 0, "scaled_pt")? as f32;
+        "scaled_size" => boxed_builtin(move |args| {
+            let size = arg_f64(&args, 0, "scaled_size")? as f32;
             let element_ref = element_ctx
                 .self_element
                 .as_ref()
                 .or_else(|| element_ctx.as_element.as_ref());
-            let element_ref = element_ref.ok_or(FunctionError::Other { message: format!("[Parser] Tried running expr builtin function '{name}' in empty element somehow, I seriously don't know how the hell you did this."), function: "scaled_pt" })?;
-            let element = get_element_borrowed(menus, element_ref).ok_or(FunctionError::Other { message: format!("[Parser] Tried getting element '{element_ref:?}', element doesn't seem to exist, not to my knowledge."), function: "scaled_pt" })?;
+            let element_ref = element_ref.ok_or(FunctionError::Other { message: format!("[Parser] Tried running expr builtin function '{name}' in empty element somehow, don't run this in the global actions..…."), function: "scaled_size" })?;
+            let element = get_element_borrowed(menus, element_ref).ok_or(FunctionError::Other { message: format!("[Parser] Tried getting element '{element_ref:?}', element doesn't seem to exist, not to my knowledge."), function: "scaled_size" })?;
 
             let x_scale = vars.window_size.width / 1920.0;
             let y_scale = vars.window_size.height / 1080.0;
@@ -2716,8 +2941,37 @@ pub fn get_builtin<'a>(
                 .resize_behaviour()
                 .uniform_scale(x_scale, y_scale, uniform_scale);
 
-            let scaled_pt = pt * scale;
-            Ok(Value::F64(scaled_pt as f64))
+            let scaled_size = size * scale;
+            Ok(Value::F64(scaled_size as f64))
+        }),
+        "fit_text_pt" => boxed_builtin(move |args| {
+            let base_pt = arg_f64(&args, 0, "fit_text_pt")? as f32;
+            let max_width = arg_f64(&args, 1, "fit_text_pt")? as f32;
+
+            let element_ref = element_ctx
+                .self_element
+                .as_ref()
+                .or_else(|| element_ctx.as_element.as_ref());
+
+            let element_ref = element_ref.ok_or(FunctionError::Other {
+                message: "fit_text_pt must be called from a text element".to_string(),
+                function: "fit_text_pt",
+            })?;
+
+            let element = get_element_borrowed(menus, element_ref).ok_or(FunctionError::Other {
+                message: format!("Could not find text element '{element_ref:?}'."),
+                function: "fit_text_pt",
+            })?;
+
+            let text = element.text().ok_or(FunctionError::InvalidType {
+                expected: "text element",
+                got: "non-text element",
+                function: "fit_text_pt",
+            })?;
+
+            Ok(Value::F64(
+                fit_text_point_size(&text, base_pt, max_width) as f64
+            ))
         }),
         _ => return None,
     })
@@ -2771,8 +3025,7 @@ pub enum AnnoyingError {
     OverflowWarning { pos: usize },
 }
 
-use crate::renderer::ui::with_font_system;
-use crate::renderer::ui_text_rendering::anchor_to;
+use crate::renderer::ui::ui::with_font_system;
 use crate::ui::actions::ElementContext;
 use crate::ui::ui_edit_manager::ColorComponent;
 use crate::ui::ui_editor::{Menus, get_element_borrowed, get_layer_ap_vars};
@@ -2780,6 +3033,7 @@ use crate::ui::ui_touch_manager::{ElementRef, Touchable};
 use crate::ui::vertex::UiElement;
 use owo_colors::OwoColorize;
 use sluggrs_skylines::cosmic_text;
+use crate::resources::format_memory;
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -2996,28 +3250,28 @@ fn get_dynamic_ap_opt(
     else {
         return None;
     };
+
     let vars = get_layer_ap_vars(menus, element_ref);
+
     if vars.is_empty() {
         return None;
     }
+
+    let name = name.strip_prefix("ap:").unwrap_or(name);
     let name = Value::from_str(settings, variables, menus, element_context, name, true);
-    let Some(name) = name.as_str() else {
-        //println!("[UI get AP var] name wasn't resolved to string");
-        return None;
-    };
-    let Some(ap_var) = UiElement::get_ap(name, vars.as_slice()) else {
-        //println!("[UI get AP var] ap var '{}' doesn't exist in layer '{}' from menu '{}'", name, element_ref.layer, element_ref.menu);
-        return None;
-    };
-    let var = Value::from_str(
+
+    let name = name.as_str()?;
+
+    let ap_var = UiElement::get_ap(name, vars.as_slice())?;
+
+    Some(Value::from_str(
         settings,
         variables,
         menus,
         element_context,
         ap_var.as_str(),
         false,
-    );
-    Some(var)
+    ))
 }
 
 fn combine_array_values<F>(left: Vec<Value>, right: Vec<Value>, mut op: F) -> Option<Vec<Value>>
@@ -3930,7 +4184,42 @@ impl<'a> Parser<'a> {
             if op.kind == TokenKind::Colon && self.peek_n(1).kind != TokenKind::Dot {
                 break;
             }
+            if op.kind == TokenKind::Percent
+                && !matches!(
+                    self.peek_n(1).kind,
+                    TokenKind::Number(_)
+                        | TokenKind::Ident(_)
+                        | TokenKind::RParen
+                        | TokenKind::RBracket
+                        | TokenKind::RBrace
+                        | TokenKind::LParen
+                        | TokenKind::LBracket
+                        | TokenKind::LBrace
+                        | TokenKind::StrLit(_)
+                        | TokenKind::True
+                        | TokenKind::False
+                        | TokenKind::None
+                        | TokenKind::Minus
+                        | TokenKind::Not
+                        | TokenKind::BitNot
+                )
+            {
+                self.pos += 1;
 
+                let span = Span {
+                    start: get_span(&left).start,
+                    end: op.span.end,
+                };
+
+                left = Expr::Binary {
+                    left: Box::new(left),
+                    operator: TokenKind::Slash,
+                    right: Box::new(Expr::Number(100.0, op.span)),
+                    span,
+                };
+
+                continue;
+            }
             let (l_bp, r_bp) = match op.kind {
                 TokenKind::Pipe => (1, 2),
                 TokenKind::Question => (2, 0),
@@ -3958,7 +4247,44 @@ impl<'a> Parser<'a> {
             }
 
             self.pos += 1;
+            if matches!(&op.kind, TokenKind::Plus | TokenKind::Minus) {
+                let percentage_token = self.peek();
+                let percent_token = self.peek_n(1);
+                let following_token = self.peek_n(2);
 
+                if let (TokenKind::Number(percentage), TokenKind::Percent) =
+                    (&percentage_token.kind, &percent_token.kind)
+                {
+                    if matches!(
+                        &following_token.kind,
+                        TokenKind::End
+                            | TokenKind::RParen
+                            | TokenKind::RBracket
+                            | TokenKind::RBrace
+                            | TokenKind::Comma
+                            | TokenKind::Plus
+                            | TokenKind::Colon
+                            | TokenKind::Question
+                    ) {
+                        let factor = match &op.kind {
+                            TokenKind::Plus => 1.0 + percentage / 100.0,
+                            TokenKind::Minus => 1.0 - percentage / 100.0,
+                            _ => unreachable!(),
+                        };
+
+                        let percentage_span = Span {
+                            start: percentage_token.span.start,
+                            end: percent_token.span.end,
+                        };
+
+                        self.pos += 2;
+
+                        left = scale_last_additive_term(left, factor, percentage_span);
+
+                        continue;
+                    }
+                }
+            }
             if op.kind == TokenKind::Question {
                 let yes = self.parse_expr_bp(0)?;
                 if self.peek().kind != TokenKind::Colon {
@@ -4863,16 +5189,16 @@ pub fn eval_expr(
     let hasher = &mut DefaultHasher::new();
     hasher.write(expr.as_bytes());
     let expr_hash = hasher.finish();
-    fn print_error(err: String, expr_hash: u64) {
+    fn print_error(element_ctx: &ElementContext, err: String, expr_hash: u64) {
         let dedup_parse_errors = true;
 
         if dedup_parse_errors {
             let mut printed = printed_parse_errors().lock().unwrap();
             if printed.insert(expr_hash) {
-                eprintln!("{err}");
+                eprintln!("{err}; {element_ctx}");
             }
         } else {
-            eprintln!("{err}");
+            eprintln!("{err}; {element_ctx}");
         }
     }
 
@@ -4880,7 +5206,7 @@ pub fn eval_expr(
         Ok(t) => t,
         Err(e) => {
             if settings.print_parse_errors {
-                print_error(format!("LexError for '{}': {}", expr, e), expr_hash);
+                print_error(element_ctx, format!("LexError for '{}': {}", expr, e), expr_hash);
             }
             return None;
         }
@@ -4891,7 +5217,7 @@ pub fn eval_expr(
         Ok(a) => a,
         Err(e) => {
             if settings.print_parse_errors {
-                print_error(format!("ParseError for '{}': {}", expr, e), expr_hash);
+                print_error(element_ctx, format!("ParseError for '{}': {}", expr, e), expr_hash);
             }
             return None;
         }
@@ -4901,7 +5227,7 @@ pub fn eval_expr(
         Ok(a) => a,
         Err(e) => {
             if settings.print_parse_errors {
-                print_error(format!("TypeError for '{}': {}", expr, e), expr_hash);
+                print_error(element_ctx, format!("TypeError for '{}': {}", expr, e), expr_hash);
             }
             return None;
         }
@@ -4911,20 +5237,20 @@ pub fn eval_expr(
         Ok(v) => Some(v),
         Err(e) => {
             if settings.print_parse_errors {
-                print_error(format!("EvalError for '{}': {}", expr, e), expr_hash);
+                print_error(element_ctx, format!("EvalError for '{}': {}", expr, e), expr_hash);
             }
             None
         }
     }
 }
 
-fn wrap_messages(messages: &[String], wrap_at: f64, pt: f64) -> Vec<Vec<String>> {
+fn wrap_messages(messages: &[Vec<Value>], wrap_at: f64, pt: f64) -> Vec<Value> {
     use cosmic_text::{Attrs, Buffer, Metrics, Shaping, Wrap};
 
     with_font_system(|font_system| {
         messages
             .iter()
-            .map(|message| {
+            .map(|message_vec| {
                 let mut buffer = Buffer::new(
                     font_system,
                     Metrics::new(pt.max(1.0) as f32, (pt * 1.375).max(1.0) as f32),
@@ -4932,10 +5258,10 @@ fn wrap_messages(messages: &[String], wrap_at: f64, pt: f64) -> Vec<Vec<String>>
 
                 buffer.set_wrap(Wrap::WordOrGlyph);
                 buffer.set_size(Some(wrap_at.max(1.0) as f32), None);
-                buffer.set_text(message, &Attrs::new(), Shaping::Advanced, None);
+                buffer.set_text(message_vec.first().unwrap().as_str().unwrap(), &Attrs::new(), Shaping::Advanced, None);
                 buffer.shape_until_scroll(font_system, false);
 
-                buffer
+                let wrapped_lines = buffer
                     .layout_runs()
                     .map(|run| {
                         let start = run.glyphs.iter().map(|g| g.start).min();
@@ -4943,12 +5269,15 @@ fn wrap_messages(messages: &[String], wrap_at: f64, pt: f64) -> Vec<Vec<String>>
 
                         match (start, end) {
                             (Some(start), Some(end)) => {
-                                run.text.get(start..end).unwrap_or("").to_string()
+                                Value::String(run.text.get(start..end).unwrap_or("").to_string())
                             }
-                            _ => String::new(),
+                            _ => Value::String(String::new())
                         }
                     })
-                    .collect()
+                    .collect();
+                let mut final_array = vec![Value::Array(wrapped_lines)];
+                final_array.extend_from_slice(message_vec);
+                Value::Array(final_array)
             })
             .collect()
     })
@@ -4957,16 +5286,33 @@ fn wrap_messages(messages: &[String], wrap_at: f64, pt: f64) -> Vec<Vec<String>>
 fn parse_wrap_messages(
     args: &[Value],
     function: &'static str,
-) -> Result<(Vec<String>, f64, f64), FunctionError> {
+) -> Result<(Vec<Vec<Value>>, f64, f64), FunctionError> {
     let messages = match args.first() {
-        Some(Value::String(message)) => vec![message.clone()],
+        Some(Value::String(message)) => vec![vec![Value::String(message.clone())]],
         Some(Value::Array(messages)) => messages
             .iter()
             .map(|value| match value {
-                Value::String(text) => Ok(text.clone()),
+                Value::String(text) => Ok(vec![Value::String(text.clone())]),
+                Value::Array(text_combi) => {
+                    if let Some(txt) = text_combi.first() {
+                        if txt.is_string().is_none() {
+                            return Err(FunctionError::InvalidType {
+                                expected: "string",
+                                got: "non-string value",
+                                function,
+                            });
+                        }
+                    } else {
+                        return Err(FunctionError::InvalidValue {
+                            message: "Text combi array should have the text as the first element of the inner array. If you don't want TExt Combi behaviour, you should have simple Strings in the Array you passed in and not Arrays in the Array.".to_string(),
+                            function,
+                        });
+                    }
+                    Ok(text_combi.clone())
+                }
                 _ => Err(FunctionError::InvalidType {
-                    expected: "string",
-                    got: "value",
+                    expected: "string or array",
+                    got: "non-string, non-array value",
                     function,
                 }),
             })
@@ -5058,5 +5404,221 @@ fn describe_token(token: &Token) -> String {
         TokenKind::End => "end of input".to_string(),
         TokenKind::RBrace => "`}`".to_string(),
         TokenKind::LBrace => "`{`".to_string(),
+    }
+}
+
+fn tree_node_name(node: &[Value]) -> String {
+    node.first().map(|v| v.to_string()).unwrap_or_default()
+}
+
+fn tree_node_ms(node: &[Value]) -> f64 {
+    match node.last() {
+        Some(Value::F64(n)) => *n,
+        Some(Value::I64(n)) => *n as f64,
+        _ => 0.0,
+    }
+}
+
+fn tree_node_children(node: &[Value]) -> Vec<Value> {
+    if node.len() < 3 {
+        return Vec::new();
+    }
+    node[1..node.len() - 1]
+        .iter()
+        .filter(|v| matches!(v, Value::Array(_)))
+        .cloned()
+        .collect()
+}
+
+fn normalize_sort_mode(mode: &str) -> String {
+    mode.chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect::<String>()
+        .to_lowercase()
+}
+
+fn sort_tree_nodes(nodes: &[Value], mode: &str) -> Vec<Value> {
+    let mut sorted: Vec<Value> = nodes
+        .iter()
+        .map(|node| match node {
+            Value::Array(items) if items.len() >= 2 => {
+                let mut rebuilt = vec![items[0].clone()];
+                rebuilt.extend(sort_tree_nodes(&tree_node_children(items), mode));
+                rebuilt.push(items[items.len() - 1].clone());
+                Value::Array(rebuilt)
+            }
+            other => other.clone(),
+        })
+        .collect();
+
+    let by_ms = |v: &Value| match v {
+        Value::Array(items) => tree_node_ms(items),
+        _ => 0.0,
+    };
+    let by_name = |v: &Value| match v {
+        Value::Array(items) => tree_node_name(items).to_lowercase(),
+        _ => String::new(),
+    };
+
+    match mode {
+        "highesttolowest" | "descending" | "desc" => sorted.sort_by(|a, b| {
+            by_ms(b)
+                .partial_cmp(&by_ms(a))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        "lowesttohighest" | "ascending" | "asc" => sorted.sort_by(|a, b| {
+            by_ms(a)
+                .partial_cmp(&by_ms(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        "atoz" | "alphabetical" | "az" => sorted.sort_by(|a, b| by_name(a).cmp(&by_name(b))),
+        "ztoa" | "za" => sorted.sort_by(|a, b| by_name(b).cmp(&by_name(a))),
+        _ => {}
+    }
+
+    sorted
+}
+
+fn flatten_tree_nodes(
+    nodes: &[Value],
+    prefix: &str,
+    path: &str,
+    depth: i64,
+    vars: &Variables,
+    out: &mut Vec<Value>,
+) {
+    for node in nodes {
+        let Value::Array(items) = node else {
+            continue;
+        };
+        if items.len() < 2 {
+            continue;
+        }
+        let name = tree_node_name(items);
+        let path = format!("{}/{}", path, name);
+        let key: String = format!("{}{}", prefix, path)
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || matches!(c, '_' | ' ' | '/' | '-') {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let children = tree_node_children(items);
+        let open = !children.is_empty() && vars.get_bool(&key).unwrap_or(false);
+        let kind = if children.is_empty() {
+            0
+        } else if open {
+            2
+        } else {
+            1
+        };
+        out.push(Value::Array(vec![
+            Value::I64(depth),
+            Value::String(name),
+            Value::F64(tree_node_ms(items)),
+            Value::I64(kind),
+            Value::String(key),
+        ]));
+        if open {
+            flatten_tree_nodes(&children, prefix, &path, depth + 1, vars, out);
+        }
+    }
+}
+fn fit_text_point_size(text: &str, base_pt: f32, max_width: f32) -> f32 {
+    use cosmic_text::{Attrs, Buffer, Metrics, Shaping, Wrap};
+
+    let base_pt = base_pt.max(1.0);
+    let max_width = max_width.max(1.0);
+
+    if text.is_empty() {
+        return base_pt;
+    }
+
+    with_font_system(|font_system| {
+        let shaping = if text.is_ascii() {
+            Shaping::Basic
+        } else {
+            Shaping::Advanced
+        };
+
+        let mut measure_width = |pt: f32| {
+            let mut buffer = Buffer::new(
+                font_system,
+                Metrics::new(pt, (pt * 1.2).max(1.0)),
+            );
+
+            buffer.set_wrap(Wrap::None);
+            buffer.set_size(None, None);
+            buffer.set_text(text, &Attrs::new(), shaping, None);
+            buffer.shape_until_scroll(font_system, false);
+
+            buffer
+                .layout_runs()
+                .map(|run| run.line_w)
+                .fold(0.0, f32::max)
+        };
+
+        if measure_width(base_pt) <= max_width {
+            return base_pt;
+        }
+
+        let min_pt = 1.0;
+
+        if measure_width(min_pt) > max_width {
+            return min_pt;
+        }
+
+        let mut low = min_pt;
+        let mut high = base_pt;
+
+        for _ in 0..14 {
+            let mid = (low + high) * 0.5;
+
+            if measure_width(mid) <= max_width {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+
+        low
+    })
+}
+fn scale_expression(expr: Expr, factor: f64, factor_span: Span) -> Expr {
+    let start = get_span(&expr).start;
+    let end = factor_span.end;
+
+    Expr::Binary {
+        left: Box::new(expr),
+        operator: TokenKind::Star,
+        right: Box::new(Expr::Number(factor, factor_span)),
+        span: Span { start, end },
+    }
+}
+
+fn scale_last_additive_term(expr: Expr, factor: f64, factor_span: Span) -> Expr {
+    match expr {
+        Expr::Binary {
+            left,
+            operator,
+            right,
+            span,
+        } if matches!(&operator, TokenKind::Plus | TokenKind::Minus) => {
+            let scaled_right = scale_expression(*right, factor, factor_span.clone());
+
+            Expr::Binary {
+                left,
+                operator,
+                right: Box::new(scaled_right),
+                span: Span {
+                    start: span.start,
+                    end: factor_span.end,
+                },
+            }
+        }
+        other => scale_expression(other, factor, factor_span),
     }
 }

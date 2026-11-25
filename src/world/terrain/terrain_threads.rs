@@ -1,4 +1,4 @@
-use crate::helpers::positions::{ChunkCoord, LodStep};
+use rusty_skylines_utils::positions::{ChunkCoord, LodStep};
 use crate::world::terrain::chunk_builder::{ChunkBuilder, ChunkHeightGrid, ChunkState, CpuChunkMesh, TreeSpawningParams};
 use crate::world::terrain::terrain_editing::TerrainEdit;
 use crate::world::terrain::terrain_gen::TerrainGenerator;
@@ -267,7 +267,7 @@ impl ChunkWorkerPool {
 
         for _ in 0..worker_count {
             let result_tx = result_tx.clone();
-            let terrain_gen = TerrainGenerator::from_terrain_gen(terrain_gen);
+            let terrain_gen = terrain_gen.clone();
             let queue = queue.clone();
 
             std::thread::spawn(move || {

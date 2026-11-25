@@ -11,7 +11,7 @@
 @group(0) @binding(7) var t_shadow: texture_depth_2d_array;
 
 @group(1) @binding(0) var<uniform> uniforms: Uniforms;
-
+@group(1) @binding(1) var<uniform> alpha_cutoff: vec4<f32>;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -60,22 +60,26 @@ fn vs_main(
 ) -> VertexOutput {
     var out: VertexOutput;
 
-    let dc: vec2<i32> = instance.chunk_xz - uniforms.camera_chunk;
+    let dc = instance.chunk_xz - uniforms.camera_chunk;
 
-    let rx = f32(dc.x) * uniforms.chunk_size + (instance.local_pos.x - uniforms.camera_local.x);
+    let rx = f32(dc.x) * uniforms.chunk_size
+        + (instance.local_pos.x - uniforms.camera_local.x);
     let ry = instance.local_pos.y - uniforms.camera_local.y;
-    let rz = f32(dc.y) * uniforms.chunk_size + (instance.local_pos.z - uniforms.camera_local.z);
+    let rz = f32(dc.y) * uniforms.chunk_size
+        + (instance.local_pos.z - uniforms.camera_local.z);
 
     let instance_pos = vec3<f32>(rx, ry, rz);
 
     let seed = instance.seed;
     let wind_strength = instance.wind_strength;
-    let time = uniforms.time;
+    let time = uniforms.game_time;
 
     var local_pos = vertex.position;
 
     let height_factor = max(local_pos.y, 0.0);
-    let wind_offset = sin(time * 2.0 + seed * 6.283) * wind_strength * height_factor * 0.1;
+    let wind_offset = sin(time * 2.0 + seed * 6.283)
+        * wind_strength * height_factor * 0.1;
+
     local_pos.x += wind_offset;
     local_pos.z += wind_offset * 0.5;
 
@@ -90,26 +94,80 @@ fn vs_main(
 
     let transformed = rotated * instance.scale;
 
-    let render_pos = instance_pos + transformed;
-
     let normal_rotated = vec3<f32>(
         vertex.normal.x * c - vertex.normal.z * s,
         vertex.normal.y,
         vertex.normal.x * s + vertex.normal.z * c
     );
 
+    var render_pos = instance_pos + transformed;
+    var world_normal = normalize(normal_rotated);
+
+    if (alpha_cutoff.y > 0.5) {
+        // Camera is at the origin in camera-relative render coordinates.
+        let to_camera = -instance_pos;
+
+        var billboard_front = vec3<f32>(0.0, 0.0, -1.0);
+
+        if (dot(to_camera, to_camera) > 0.000001) {
+            billboard_front = normalize(to_camera);
+        }
+
+        // Construct a complete orthonormal billboard basis.
+        let world_up = vec3<f32>(0.0, 1.0, 0.0);
+
+        var billboard_right = cross(world_up, billboard_front);
+
+        // Avoid degeneracy when looking almost vertically.
+        if (dot(billboard_right, billboard_right) < 0.000001) {
+            let right_candidate = vec3<f32>(
+                uniforms.view_proj[0][0],
+                0.0,
+                uniforms.view_proj[2][0]
+            );
+
+            billboard_right =
+                right_candidate
+                - billboard_front * dot(right_candidate, billboard_front);
+
+            if (dot(billboard_right, billboard_right) < 0.000001) {
+                billboard_right = vec3<f32>(1.0, 0.0, 0.0);
+            }
+        }
+
+        billboard_right = normalize(billboard_right);
+
+        let billboard_up = normalize(
+            cross(billboard_front, billboard_right)
+        );
+
+        // Transform billboard geometry into camera-facing world space.
+        let billboard_offset =
+            billboard_right * local_pos.x
+            + billboard_up * local_pos.y
+            + billboard_front * local_pos.z;
+
+        render_pos = instance_pos + billboard_offset * instance.scale;
+
+        world_normal = normalize(
+            billboard_right * vertex.normal.x
+            + billboard_up * vertex.normal.y
+            + billboard_front * vertex.normal.z
+        );
+    }
+
     out.clip_position = uniforms.view_proj * vec4<f32>(render_pos, 1.0);
     out.uv = vertex.uv;
-    out.world_normal = normalize(normal_rotated);
+    out.world_normal = world_normal;
     out.render_pos = render_pos;
     out.instance_color = instance.color;
     out.vertex_color = vertex.color;
     out.texture_id = vertex.texture_id;
     out.prev_pos_cs = out.clip_position;
     out.seed = instance.seed;
+
     return out;
 }
-
 
 @fragment
 fn fs_main(in: VertexOutput) -> FragmentOut {
@@ -131,13 +189,13 @@ fn fs_main(in: VertexOutput) -> FragmentOut {
             tex_color = textureSample(tex4, texture_sampler, in.uv);
         }
         default: {
-            tex_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
+            tex_color = vec4<f32>(1.0);
         }
     }
 
     let base_color = tex_color * in.vertex_color * in.instance_color;
 
-    if (base_color.a < 0.25) {
+    if (base_color.a < alpha_cutoff.x) {
         discard;
     }
 
@@ -160,7 +218,7 @@ fn fs_main(in: VertexOutput) -> FragmentOut {
 
     let lit_color = varied_color * lighting;
 
-    out.color = vec4<f32>(lit_color, base_color.a);
+    out.color = vec4<f32>(lit_color, 1.0);
     out.normal = vec4<f32>(N * 0.5 + 0.5, 1.0);
     out.motion = vec2<f32>(0.0, 0.0);
 

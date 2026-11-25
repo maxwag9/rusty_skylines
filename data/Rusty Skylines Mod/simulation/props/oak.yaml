@@ -1,0 +1,237 @@
+name: oak
+textures:
+  - slot: 1
+    shader: shaders/textures/leaves.wgsl
+    resolution: 1024
+    mipmap_mode: Generate
+    params:
+      color_primary: [ 0.22, 0.40, 0.12, 1.0 ]
+      color_secondary: [ 0.30, 0.50, 0.18, 1.0 ]
+      seed: 69
+      scale: 1.5
+      roughness: 0.8
+      octaves: 0.6
+      persistence: 0.5
+      lacunarity: 0.3
+    compression: Bc7
+
+  - slot: 2
+    shader: shaders/textures/bark.wgsl
+    resolution: 1024
+    mipmap_mode: Generate
+    params:
+      color_primary: [ 0.36, 0.26, 0.18, 1.0 ]
+      color_secondary: [ 0.25, 0.18, 0.12, 1.0 ]
+      seed: 69
+      scale: 1.5
+      roughness: 0.8
+      octaves: 0.0
+      persistence: 0.0
+      lacunarity: 0.0
+    compression: Bc7Opaque
+geometry:
+  shader: shaders/props/tree_geometry.wgsl
+  entry_point: main
+  workgroups: [ 1, 1, 1 ]
+  # Crown reaches roughly 10-13 units out and 15-17 units up (measured from the
+  # trunk base), so the culling sphere has to be much larger than before.
+  bounds_radius: 24.0
+
+  # Base bindings — shared by every LOD.
+  # LODs only supply overrides for the fields they want to change.
+  #
+  # Tree structure
+  # --------------
+  #   axiom       F F F X          short, stout trunk (3 segments), then X
+  #   X  (rule)   5 primary limbs: 4 spreading ones at ~base_angle, rolled
+  #               around the trunk, plus 1 upright one in the middle
+  #   A  (rule)   one limb = 4 segments with a side branch (A) after
+  #               segments 1, 2 and 3, and a leaf tip (L) at the end
+  #
+  # Every iteration after the first adds one level of limbs (3 side branches
+  # per limb), so  drawn limb levels = iterations - 1.  Any A that is left
+  # after the last iteration is a terminal bud and becomes a leaf tuft.
+  #
+  # Expanded command count:  it=2:121  it=3:406  it=4:1261  it=5:3826
+  # (command_capacity must stay above these, max 4096).
+  bindings:
+    - binding: 0
+      type: uniform
+      fields:
+        - name: iterations
+          type: u32
+          value: 5
+        - name: axiom_length
+          type: u32
+          value: 4
+        - name: rule_count
+          type: u32
+          value: 2
+        - name: command_capacity
+          type: u32
+          value: 4096
+        - name: base_length
+          type: f32
+          value: 1.6            # trunk segment length; limbs shrink by length_decay per level
+        - name: base_thickness
+          type: f32
+          value: 0.8            # trunk radius (the very base flares ~35% wider)
+        - name: base_angle
+          type: f32
+          value: 1.0            # ~57 degrees: wide, spreading limbs (varies +-35% per branch)
+        - name: length_decay
+          type: f32
+          value: 0.84
+        - name: thickness_decay
+          type: f32
+          value: 0.62           # child branch radius relative to the parent at the fork
+        - name: seed
+          type: u32
+          value: 2
+        - name: radial_segments
+          type: u32
+          value: 10
+        - name: min_branch_thickness
+          type: f32
+          value: 0.005
+        - name: leaf_scale
+          type: f32
+          value: 2.0           # leaf tuft diameter in world units
+        - name: leaf_density
+          type: f32
+          value: 0.6            # fraction of leaf spots that actually get a tuft
+        - name: leaf_thickness_threshold
+          type: f32
+          value: 0.04
+        - name: leaf_depth_threshold
+          type: u32
+          value: 3
+        # --- new fields (keep the scalar count a multiple of 4 for alignment) ---
+        - name: taper
+          type: f32
+          value: 0.93           # radius multiplier per segment along a branch
+        - name: tropism
+          type: f32
+          value: 0.09           # gentle upward curl of limbs; raise for a taller crown
+        - name: jitter
+          type: f32
+          value: 0.22           # random bend per segment (rad) -> gnarled limbs
+        - name: roll_angle
+          type: f32
+          value: 2.4            # ~137 degrees between successive branches
+        - name: billboard
+          type: vec4<u32>
+          value: [ 0, 0, 0, 0 ]
+        - name: axiom
+          type: array<vec4<u32>, 4>
+          value:
+            - [ 70, 70, 70, 88 ]   # F F F X
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+        - name: rules
+          type: array<vec4<u32>, 4>
+          value:
+            # symbol=65 (A), production_offset=0,  production_length=20
+            - [ 65, 0, 20, 0 ]
+            # symbol=88 (X), production_offset=20, production_length=23
+            - [ 88, 20, 23, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+        - name: productions
+          type: array<vec4<u32>, 32>
+          value:
+            # A -> F [&A] \ F [&A] \ F [&A] \ F L          (20 symbols, offset 0)
+            - [ 70, 91, 38, 65 ]    # F [ & A
+            - [ 93, 92, 70, 91 ]    # ] \ F [
+            - [ 38, 65, 93, 92 ]    # & A ] \
+            - [ 70, 91, 38, 65 ]    # F [ & A
+            - [ 93, 92, 70, 76 ]    # ] \ F L
+            # X -> [&A] \ [&A] \ [&A] \ [&A] \ [A]         (23 symbols, offset 20)
+            - [ 91, 38, 65, 93 ]    # [ & A ]
+            - [ 92, 91, 38, 65 ]    # \ [ & A
+            - [ 93, 92, 91, 38 ]    # ] \ [ &
+            - [ 65, 93, 92, 91 ]    # A ] \ [
+            - [ 38, 65, 93, 92 ]    # & A ] \
+            - [ 91, 65, 93, 0 ]     # [ A ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+            - [ 0, 0, 0, 0 ]
+
+    - binding: 1
+      type: storage
+      access: read_write
+      format: u32
+      capacity: 524288          # vertex words (PropVertex = 13 u32s) -> ~40k vertices
+      usage: [ storage, vertex ]
+
+    - binding: 2
+      type: storage
+      access: read_write
+      format: u32
+      capacity: 262144          # index words
+      usage: [ storage, index ]
+
+    - binding: 3
+      type: storage
+      access: read_write
+      format: u32
+      capacity: 4               # counters: [vertex_count, index_count, error, command_count]
+      usage: [ storage, copy_src ]
+
+  # LODs only declare distance + the fields they want to override on binding 0.
+  # Fewer iterations = fewer limb levels, so the leaf tufts get bigger (and the
+  # depth threshold lower) to keep the crown's size and fullness roughly constant.
+  lods:
+    - distance: 0
+      alpha_cutoff: 0.85
+
+    - distance: 30
+      alpha_cutoff: 0.65
+      overrides:
+        0:
+          iterations: 4
+          command_capacity: 1536
+          radial_segments: 6
+          min_branch_thickness: 0.01
+          leaf_scale: 2.4
+          leaf_density: 0.85
+
+    - distance: 180
+      alpha_cutoff: 0.40
+      overrides:
+        0:
+          iterations: 3
+          command_capacity: 512
+          radial_segments: 4
+          min_branch_thickness: 0.02
+          leaf_scale: 3.0
+          leaf_density: 1.0
+          leaf_depth_threshold: 2
+
+    - distance: 500
+      alpha_cutoff: 0.15
+      storage_capacities:
+        1: 2048
+        2: 512
+      overrides:
+        0:
+          billboard: [ 1, 0, 0, 0 ]

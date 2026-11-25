@@ -1,4 +1,4 @@
-use crate::helpers::positions::{WorldPos, chunk_size};
+use rusty_skylines_utils::positions::{WorldPos, chunk_size};
 use glam::{Vec2, Vec3};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -88,7 +88,7 @@ pub fn stable_cloud_weather_uv(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::helpers::positions::{ChunkCoord, LocalPos};
+    use rusty_skylines_utils::positions::{ChunkCoord, LocalPos};
 
     #[test]
     fn upward_ray_intersects_cloud_layer() {

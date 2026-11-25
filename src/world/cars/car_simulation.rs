@@ -1,4 +1,4 @@
-use crate::helpers::positions::{ChunkCoord, WorldPos};
+use rusty_skylines_utils::positions::{ChunkCoord, WorldPos};
 use crate::world::cars::car_structs::{CarId, SimTime};
 use crate::world::roads::roads::LaneRef;
 use glam::{Quat, Vec3};

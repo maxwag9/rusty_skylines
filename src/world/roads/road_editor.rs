@@ -1,13 +1,11 @@
-use crate::helpers::positions::{LocalPos, WorldPos};
+use std::cmp::max;
+use rusty_skylines_utils::positions::{LocalPos, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::ui::input::Input;
 use crate::world::roads::road_helpers::*;
 use crate::world::roads::road_mesh_manager::{CLEARANCE, ChunkCoord};
 use crate::world::roads::road_structs::*;
-use crate::world::roads::roads::{
-    Lane, LaneGeometry, METERS_PER_LANE_POLYLINE_STEP, RoadCommand, RoadManager, RoadStorage,
-    nearest_lane_to_point, project_point_to_lane_xz, sample_lane_position,
-};
+use crate::world::roads::roads::{nearest_lane_to_point, project_point_to_lane_xz, sample_lane_position, Lane, LaneGeometry, RoadCommand, RoadManager, RoadStorage, RoadTypes, METERS_PER_LANE_POLYLINE_STEP};
 use crate::world::sound::sound::Sounds;
 use crate::world::statisticals::CityState;
 use crate::world::statisticals::money::*;
@@ -15,6 +13,13 @@ use crate::world::terrain::terrain_subsystem::{CursorMode, Terrain};
 use glam::{Vec2, Vec3, Vec3Swizzles};
 use std::collections::HashSet;
 use std::mem::take;
+use anyhow::__private::kind;
+use tracing::error;
+use usvg::filter::ColorChannel::R;
+use xxhash_rust::xxh3::xxh3_64;
+use crate::helpers::modpack::ModManager;
+use crate::ui::variables::Variables;
+use crate::world::buildings::utilities::utilities::Utility;
 
 const NODE_SNAP_RADIUS: f64 = 3.0;
 const LANE_SNAP_RADIUS: f64 = 8.0;
@@ -49,6 +54,7 @@ pub struct RoadEditor {
     pub pending_outside_commands: Vec<RoadEditorCommand>,
     pub pending_chunk_rebuilds: Vec<ChunkCoord>,
     pub last_road_length: f64,
+    pub selected_road_type: (String, u64)
 }
 
 impl RoadEditor {
@@ -59,6 +65,7 @@ impl RoadEditor {
             pending_outside_commands: Vec::new(),
             pending_chunk_rebuilds: Vec::new(),
             last_road_length: Default::default(),
+            selected_road_type: ("Nothing Selected".to_string(), 0),
         }
     }
 
@@ -70,14 +77,28 @@ impl RoadEditor {
         input: &mut Input,
         gizmo: &mut Gizmo,
         sounds: &mut Sounds,
+        variables: &mut Variables,
+        mod_manager: &ModManager,
     ) -> Vec<RoadEditorCommand> {
         let Some(road_type) = (match terrain.cursor.mode {
-            CursorMode::Roads => Some(&terrain.cursor.road_type),
+            CursorMode::Roads => {
+                let mut road_type = RoadType::default();
+                road_type.road_geom.lanes_each_direction.0 = variables.get_i64("rt.left_lanes").unwrap_or(1) as LeftLaneCount;
+                road_type.road_geom.lanes_each_direction.1 = variables.get_i64("rt.right_lanes").unwrap_or(1) as RightLaneCount;
+                road_type.road_settings.speed_limit = variables.get_f64("rt.speed_limit").unwrap_or(16.6) as f32;
+                road_type.road_geom.lane_width = variables.get_f64("rt.lane_width").map(|w| w as f32).unwrap_or(RoadGeometry::default().lane_width);
+                // road_type.name = variables.get_string("rt.name").map(|n|n.to_string()).unwrap_or_else(|| {
+                //     let name = get_road_type_name(&road_type);
+                //     variables.set_string("rt.name", name.clone());
+                //     name
+                // });
+                Some(road_type)
+            }, //Some(&terrain.cursor.road_type),
             _ => None,
         }) else {
             return take(&mut self.pending_outside_commands);
         };
-        let road_type_id = road_manager.road_types.add_road_type(&road_type);
+        let road_type_id = self.selected_road_type.1;
         self.style.set_road_type_id(road_type_id);
         let storage = &road_manager.roads;
         let mut output = Vec::new();
@@ -211,7 +232,7 @@ impl RoadEditor {
         let end_anchor = self.build_anchor_from_snap(storage, snap);
         let end_pos = snap.world_pos;
         let polyline =
-            make_straight_centerline(terrain_renderer, start_pos, end_pos, road_type.structure);
+            make_straight_centerline(terrain_renderer, start_pos, end_pos, road_type.structure());
         let estimated_length = end_pos.length_to(start_pos);
 
         let (is_valid, reason) = self.validate_placement(storage, start, &end_anchor);
@@ -1731,7 +1752,7 @@ impl RoadEditor {
         let speed = road_type.speed_limit();
         let capacity = road_type.capacity();
         let mask = road_type.vehicle_mask();
-        let lane_width = road_type.lane_width;
+        let lane_width = road_type.lane_width();
 
         // Right side lanes (start -> end)
         for i in 0..right_lanes {
@@ -1741,7 +1762,7 @@ impl RoadEditor {
                 centerline,
                 lane_index,
                 lane_width,
-                road_type.structure,
+                road_type.structure(),
             );
             let geom = LaneGeometry::from_polyline(poly);
             //gizmo.polyline(geom.points.as_slice(), [0.0, 0.0, 0.2, 1.0], 0.0, false, 2.0, 10.0);
@@ -1972,4 +1993,53 @@ pub fn sample_polyline_at(points: &[WorldPos], lengths: &[f64], t: f64) -> (Worl
     let pos = points[i0].lerp(points[i1], seg_t);
     let dir = points[i1].to_relative_pos(points[i0]).normalize_or_zero();
     (pos, dir)
+}
+
+pub fn get_road_type_name(road_type: &RoadType) -> String {
+    let lanes = road_type.total_lanes();
+    let (left, right) = road_type.lanes_each_direction();
+    let speed_kmh = road_type.speed_limit().max(0.0) * 3.6;
+
+    let class = if lanes >= 4 && speed_kmh >= 100.0 {
+        "Motorway"
+    } else if lanes >= 2 && speed_kmh >= 80.0 {
+        "Expressway"
+    } else if lanes >= 6 {
+        "Boulevard"
+    } else if lanes >= 4 {
+        "Avenue"
+    } else if lanes == 3 {
+        "Main Road"
+    } else if lanes == 2 {
+        "Street"
+    } else if lanes == 1 {
+        "Lane"
+    } else {
+        "Path"
+    };
+
+    let modifier = if (left == 0) != (right == 0) {
+        "One-Way"
+    } else if road_type.road_geom.median_width > 0.05 {
+        "Divided"
+    } else if speed_kmh <= 30.0 {
+        "Quiet"
+    } else if road_type.road_geom.sidewalk_width >= 1.0 {
+        "Urban"
+    } else if road_type.road_geom.lane_width >= 4.0 {
+        "Wide"
+    } else if road_type.road_geom.lane_width <= 3.0 && lanes > 0 {
+        "Narrow"
+    } else if road_type.road_geom.sidewalk_width > 0.05 {
+        "Walkable"
+    } else {
+        "Rural"
+    };
+
+    format!("{modifier} {class}")
+}
+pub type RoadTypeId = u64;
+
+pub fn make_road_type_id(mod_id: &str, local_id: &str) -> RoadTypeId {
+    xxh3_64(format!("{mod_id}:{local_id}").as_bytes())
 }

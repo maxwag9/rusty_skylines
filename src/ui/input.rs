@@ -161,6 +161,7 @@ pub struct Mouse {
     pub buttons: MouseButtons,
 
     pub scroll_delta: Vec2,
+    pub cursor_inside: bool
 }
 
 impl Mouse {
@@ -171,6 +172,7 @@ impl Mouse {
             delta: Vec2::ZERO,
             buttons: MouseButtons::default(),
             scroll_delta: Vec2::ZERO,
+            cursor_inside: true,
         }
     }
 
@@ -245,6 +247,7 @@ pub struct Input {
     pub clipboard: Clipboard,
     pub gilrs: Gilrs,
     keybinds_blocked: bool,
+    pub window_focused: bool
 }
 
 impl Input {
@@ -282,6 +285,7 @@ impl Input {
             clipboard,
             gilrs: Gilrs::new().expect("Failed to initialize gilrs"),
             keybinds_blocked: false,
+            window_focused: true
         }
     }
 

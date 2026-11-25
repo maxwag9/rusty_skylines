@@ -1,8 +1,8 @@
-use crate::renderer::ui::{
+use crate::renderer::ui::ui::{
     CircleParams, HandleParams, OutlineParams, UiRenderer, make_poly_ssbo, upload_poly_vbo,
 };
-use crate::renderer::ui_text_rendering::{
-    anchor_to, render_corner_brackets, render_editor_caret, render_editor_outline, render_selection,
+use crate::renderer::ui::ui_text_rendering::{
+    render_corner_brackets, render_editor_caret, render_editor_outline, render_selection,
 };
 use crate::resources::Time;
 use crate::ui::ui_touch_manager::{ElementRef, UiTouchManager};
@@ -289,7 +289,7 @@ pub fn upload_text(
     layer: &mut RuntimeLayer,
     time_system: &Time,
     touch_manager: &UiTouchManager,
-    menu_name: &String,
+    menu_name: &str,
 ) {
     let mut vertices: Vec<UiVertexText> = Vec::new();
     let layer_name = layer.name.clone();
@@ -308,7 +308,7 @@ pub fn upload_text(
         t.width = cache.width;
         t.height = cache.height;
 
-        let pos = anchor_to(t.anchor, [t.x, t.y], t.width, t.height);
+        let pos = t.anchor.anchor_to([t.x, t.y], t.width, t.height);
 
         let is_selected = touch_manager.selection.is_selected(&ElementRef::new(
             menu_name,

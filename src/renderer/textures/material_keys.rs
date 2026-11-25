@@ -1,6 +1,9 @@
 use crate::helpers::modpack::ModManager;
 use tracing::error;
-use wgpu_render_manager::generator::{MipmapMode, TextureKey, TextureParams};
+use wgpu_render_manager::generator::{MipmapMode, TextureCompressionMode, TextureKey, TextureParams};
+
+pub const OPAQUE_TEXTURE_COMPRESSION_MODE: TextureCompressionMode = TextureCompressionMode::Bc7Opaque;
+pub const ALPHA_TEXTURE_COMPRESSION_MODE: TextureCompressionMode = TextureCompressionMode::Bc7;
 
 pub fn road_material_keys(mod_manager: &ModManager) -> Vec<TextureKey> {
     let Some(asphalt) = mod_manager.resource_path("shaders/textures/asphalt.wgsl") else {
@@ -28,6 +31,7 @@ pub fn road_material_keys(mod_manager: &ModManager) -> Vec<TextureKey> {
             },
             resolution: 512,
             mipmap_mode: MipmapMode::Generate,
+            compression: OPAQUE_TEXTURE_COMPRESSION_MODE
         },
         TextureKey {
             shader_id: goo.to_path_buf(),
@@ -41,6 +45,7 @@ pub fn road_material_keys(mod_manager: &ModManager) -> Vec<TextureKey> {
             },
             resolution: 512,
             mipmap_mode: MipmapMode::Generate,
+            compression: OPAQUE_TEXTURE_COMPRESSION_MODE
         },
         TextureKey {
             shader_id: asphalt.to_path_buf(),
@@ -54,6 +59,7 @@ pub fn road_material_keys(mod_manager: &ModManager) -> Vec<TextureKey> {
             },
             resolution: 512,
             mipmap_mode: MipmapMode::Generate,
+            compression: OPAQUE_TEXTURE_COMPRESSION_MODE
         },
         TextureKey {
             shader_id: asphalt.to_path_buf(),
@@ -67,6 +73,7 @@ pub fn road_material_keys(mod_manager: &ModManager) -> Vec<TextureKey> {
             },
             resolution: 512,
             mipmap_mode: MipmapMode::Generate,
+            compression: OPAQUE_TEXTURE_COMPRESSION_MODE
         },
         TextureKey {
             shader_id: asphalt.to_path_buf(),
@@ -80,6 +87,7 @@ pub fn road_material_keys(mod_manager: &ModManager) -> Vec<TextureKey> {
             },
             resolution: 512,
             mipmap_mode: MipmapMode::Generate,
+            compression: OPAQUE_TEXTURE_COMPRESSION_MODE
         },
         TextureKey {
             shader_id: asphalt.to_path_buf(),
@@ -93,6 +101,7 @@ pub fn road_material_keys(mod_manager: &ModManager) -> Vec<TextureKey> {
             },
             resolution: 512,
             mipmap_mode: MipmapMode::Generate,
+            compression: OPAQUE_TEXTURE_COMPRESSION_MODE
         },
     ]
 }
@@ -115,6 +124,7 @@ pub fn cars_material_keys(mod_manager: &ModManager) -> Vec<TextureKey> {
         },
         resolution: 512,
         mipmap_mode: MipmapMode::Generate,
+        compression: OPAQUE_TEXTURE_COMPRESSION_MODE
     }]
 }
 
@@ -150,6 +160,7 @@ pub fn terrain_material_keys(mod_manager: &ModManager) -> Vec<TextureKey> {
             },
             resolution: 1024,
             mipmap_mode: MipmapMode::Generate,
+            compression: OPAQUE_TEXTURE_COMPRESSION_MODE
         },
         TextureKey {
             shader_id: grass.to_path_buf(),
@@ -166,6 +177,7 @@ pub fn terrain_material_keys(mod_manager: &ModManager) -> Vec<TextureKey> {
             },
             resolution: 1024,
             mipmap_mode: MipmapMode::Generate,
+            compression: OPAQUE_TEXTURE_COMPRESSION_MODE
         },
         TextureKey {
             shader_id: rock.to_path_buf(),
@@ -182,6 +194,7 @@ pub fn terrain_material_keys(mod_manager: &ModManager) -> Vec<TextureKey> {
             },
             resolution: 1024,
             mipmap_mode: MipmapMode::Generate,
+            compression: OPAQUE_TEXTURE_COMPRESSION_MODE
         },
         TextureKey {
             shader_id: rock.to_path_buf(),
@@ -198,6 +211,7 @@ pub fn terrain_material_keys(mod_manager: &ModManager) -> Vec<TextureKey> {
             },
             resolution: 1024,
             mipmap_mode: MipmapMode::Generate,
+            compression: OPAQUE_TEXTURE_COMPRESSION_MODE
         },
         TextureKey {
             shader_id: dirt.to_path_buf(),
@@ -214,6 +228,7 @@ pub fn terrain_material_keys(mod_manager: &ModManager) -> Vec<TextureKey> {
             },
             resolution: 1024,
             mipmap_mode: MipmapMode::Generate,
+            compression: OPAQUE_TEXTURE_COMPRESSION_MODE
         },
     ]
 }

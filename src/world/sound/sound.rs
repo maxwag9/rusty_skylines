@@ -1,5 +1,5 @@
 use crate::helpers::modpack::ModManager;
-use crate::helpers::positions::{ChunkSize, WorldPos};
+use rusty_skylines_utils::positions::{ChunkSize, WorldPos};
 use crate::resources::Resources;
 use crate::world::sound::car_sounds::{CarAudioState, collect_car_audio};
 use crate::world::sound::sfx::{SfxConfig, SfxVoice};
@@ -13,6 +13,7 @@ use std::f32::consts::PI;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tracing::error;
 
 pub fn run_sounds(resources: &mut Resources) {
     // every frame
@@ -168,15 +169,15 @@ impl Sounds {
     const MAX_CONSECUTIVE_FAILURES: u32 = 10;
     const BACKOFF_MAX: Duration = Duration::from_secs(30);
 
-    pub fn new(mod_manager: &ModManager) -> Self {
+    pub fn new(mod_manager: Option<&ModManager>) -> Self {
         Self::new_robust(mod_manager).unwrap_or_else(|e| {
-            eprintln!("Audio initialization failed: {}", e);
-            eprintln!("Continuing without audio, will retry periodically...");
+            error!("[Sounds] Audio initialization failed: {}", e);
+            error!("[Sounds] Continuing without audio, will retry periodically...");
             Self::new_silent()
         })
     }
 
-    fn new_silent() -> Self {
+    pub fn new_silent() -> Self {
         let now = Instant::now();
         Self {
             stream: None,
@@ -351,7 +352,7 @@ impl Sounds {
             match result {
                 Ok(stream) => {
                     println!(
-                        "Audio initialized: {}, buffer size: {:?}",
+                        "[Sounds] Audio initialized: {}, buffer size: {:?}",
                         attempt.description,
                         stream.buffer_size()
                     );
@@ -401,7 +402,7 @@ impl Sounds {
         Ok(stream)
     }
 
-    pub fn new_robust(mod_manager: &ModManager) -> Result<Self, AudioError> {
+    pub fn new_robust(mod_manager: Option<&ModManager>) -> Result<Self, AudioError> {
         let available_hosts = cpal::available_hosts();
         if available_hosts.is_empty() {
             return Err(AudioError::NoHostsAvailable);
@@ -421,7 +422,11 @@ impl Sounds {
         //     init_cars_audio(state);
         // }
 
-        let sfxs = Self::load_sfxs(mod_manager);
+        let sfxs = if let Some(mod_manager) = mod_manager {
+            Self::load_sfxs(mod_manager)
+        } else {
+            HashMap::new()
+        };
 
         let now = Instant::now();
         Ok(Self {

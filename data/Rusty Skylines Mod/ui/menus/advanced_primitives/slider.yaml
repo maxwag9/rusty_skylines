@@ -8,21 +8,23 @@ elements:
     w: 300
     h: 80
     color:
-      - 0.00
-      - 0.00
-      - 0.00
-      - 0.8
+      - 0.0
+      - 0.761
+      - 0.820
+      - 0.7
     border_color:
-      - 1.0
-      - 1.0
-      - 1.0
-      - 0.2
+      - 0.8
+      - 0.8
+      - 0.8
+      - 0.8
     roundness: 0.05
-    border_thickness: 4
+    border_thickness: 3
 
   - !Rect
     id: slider_bar
-    actions: [ ]
+    actions:
+      - on:press,
+        call(slider_update, [expr:{mouse_pos.x}, expr:{self.center.x}, expr:{self.size.x}])
     x: 0
     y: 0
     w: 270
@@ -33,16 +35,33 @@ elements:
       - 0.9
       - 0.9
     roundness: 0.4
+    misc:
+      pressable: true
 
   - !Circle
     id: Slider knob
     actions:
+
       - on:startup,
         set(str:{ap.0}_target_pos, self.center.x);
         set(str:{ap.0}_shadow_pos, self.center.x);
         set(str:{ap.0}_tug_offset, 0.0);
         set(str:{ap.0}_dragging, false)
-
+      - on:startup,
+        set(str:slider_update, [
+        "set(str:min_px, expr:{args.1}-{args.2}*0.5);",
+        "set(str:max_px, expr:{args.1}+{args.2}*0.5);",
+        "set(str:clamped_mouse_x, expr:clamp({args.0}, {min_px}, {max_px}));",
+        "set(str:mouse_t, expr:({clamped_mouse_x}-{min_px})/({max_px}-{min_px}));",
+        "set(expr:{ap:ap.0}+"_tug_offset", expr:({clamped_mouse_x}-{({ap:ap.0}+"_shadow_pos")})*0.22);",
+        "if(ap:ap.7,
+        set(str:option_index, expr:round({mouse_t}*({ap:ap.5}.len-1)));
+        if(expr:{({ap:ap.0}+"_last_option_index")??0} != {option_index}, call(rust:play_sound, str:ButtonHover));
+        
+        set(expr:{ap:ap.0}+"_last_option_index", option_index); set(ap:ap.0, expr:array_get({ap:ap.5}, {option_index})); set(expr:{ap:ap.0}+"_target_pos", expr:{min_px}+({option_index}/max({ap:ap.5}.len-1, 1)*{args.2})),
+        
+        set(str:slider_value, expr:{ap:ap.2}+{mouse_t}*({ap:ap.3}-{ap:ap.2})); set(str:snapped_slider_value, expr:clamp({ap:ap.2}+round(({slider_value}-{ap:ap.2})/{ap:ap.4})*{ap:ap.4}, {ap:ap.2}, {ap:ap.3})); if(expr:is_some({ap:ap.5}), set(str:snapped_slider_value, expr:nearest({snapped_slider_value}, {ap:ap.5})), set(str:snapped_slider_value, expr:{snapped_slider_value})); if(expr:{({ap:ap.0}+"_last_snapped_slider_value")??0} != {snapped_slider_value}, call(rust:play_sound, str:ButtonHover)); set(expr:{ap:ap.0}+"_last_snapped_slider_value", snapped_slider_value); set(ap:ap.0, snapped_slider_value); set(expr:{ap:ap.0}+"_target_pos", expr:{min_px}+(({snapped_slider_value}-{ap:ap.2})/({ap:ap.3}-{ap:ap.2})*{args.2})));"
+        ])
       - as:["slider_bar"],
         set(str:min_px, expr:{as.center.x} - {as.size.x} * 0.5);
         if({ap.7},
@@ -64,36 +83,17 @@ elements:
       - on:h_exit, set(str:self.radius, expr:{self.radius}/1.1)
 
       - on:drag_move as:["slider_bar"],
-        set(str:min_px, expr:{as.center.x} - {as.size.x} * 0.5);
-        set(str:max_px, expr:{as.center.x} + {as.size.x} * 0.5);
-        set(str:clamped_mouse_x, expr:clamp({mouse_pos.x}, {min_px}, {max_px}));
-        set(str:mouse_t, expr:({clamped_mouse_x}-{min_px})/({max_px}-{min_px}));
-        set(str:{ap.0}_tug_offset, expr:(clamp({mouse_pos.x}, {as.center.x} - {as.size.x} * 0.5, {as.center.x} + {as.size.x} * 0.5) - {{ap.0}_shadow_pos}) * 0.22);
-        
-        
-        if({ap.7},
-        set(str:option_index, expr:round({mouse_t}*({ap.5}.len-1)));
-        if(expr:{{ap.0}_last_option_index??0} != {option_index}, call(rust:play_sound, str:ButtonHover));
-        set(str:{ap.0}_last_option_index, option_index);
-        set(str:{ap.0}, expr:array_get({ap.5}, {option_index}));
-        set(str:{ap.0}_target_pos, expr:{min_px}+({option_index}/({ap.5}.len-1)*{as.size.x})),
-
-        set(str:slider_value, expr:{ap.2}+{mouse_t}*({ap.3}-{ap.2}));
-        set(str:snapped_slider_value, expr:round({slider_value}/{ap.4})*{ap.4});
-        if(expr:{{ap.0}_last_snapped_slider_value??0} != {snapped_slider_value}, call(rust:play_sound, str:ButtonHover));
-        set(str:{ap.0}_last_snapped_slider_value, snapped_slider_value);
-
-        if(expr:is_some({ap.5}),
-        set(str:{ap.0}, expr:nearest({snapped_slider_value}, {ap.5})),
-        set(str:{ap.0}, snapped_slider_value)
-        );
-        set(str:{ap.0}_target_pos, expr:{min_px}+(({{ap.0}}-{ap.2})/({ap.3}-{ap.2})*{as.size.x}))
-        );
+        call(slider_update, [expr:{mouse_pos.x}, expr:{as.center.x}, expr:{as.size.x}])
 
       - set(str:{ap.0}_shadow_pos, expr:{{ap.0}_shadow_pos} + ({{ap.0}_target_pos} - {{ap.0}_shadow_pos}) * (1 - exp(-5.0 * {render_dt})));
         set(str:{ap.0}_tug_offset, expr:{{ap.0}_tug_offset}*0.8);
 
       - set(str:self.center.x, expr:{{ap.0}_shadow_pos} + {{ap.0}_tug_offset});
+      - on:screen_resize,
+        set(str:{ap.0}_shadow_pos, expr:{{ap.0}_target_pos});
+        set(str:{ap.0}_tug_offset, 0.0);
+        set(str:self.center.x, {ap.0}_target_pos)
+
     x: 0.0
     y: 0.0
     radius: 20
@@ -119,8 +119,8 @@ elements:
       #- print(none.is_some)
 
       - "if(expr:is_some({ap.6}),
-          set(str:self.template, str:{ap.1}: {expr:{ap.6}.get( index_of( {ap.5}, {{ap.0}} ) ) }  ),
-          set(str:self.template, str:{ap.1}: {{ap.0}});
+          set(str:self.template, str:{ap.1}: {expr:format({ap.6}.get(index_of({ap.5}, {{ap.0}})), contains(str({ap.4}), '.') ? len(split(str({ap.4}), '.').get(1)) : 0)}{expr:if('{ap.8}'.lower != 'none', '{ap.8}', '')}  ),
+          set(str:self.template, str:{ap.1}: {expr:format({{ap.0}}, contains(str({ap.4}), '.') ? len(split(str({ap.4}), '.').get(1)) : 0)}{expr:if('{ap.8}'.lower != 'none', '{ap.8}', '')}  );
         )"
     x: 0
     y: 0

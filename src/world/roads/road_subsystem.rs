@@ -20,8 +20,11 @@ use crate::world::roads::road_structs::RoadEditorCommand;
 use crate::world::sound::sound::Sounds;
 use crate::world::statisticals::CityState;
 use std::collections::HashMap;
+use std::mem::take;
 use wgpu::util::DeviceExt;
 use wgpu::{Device, Queue};
+use crate::helpers::modpack::ModManager;
+use crate::ui::variables::Variables;
 
 pub struct ChunkGpuMesh {
     pub vertex: wgpu::Buffer,
@@ -218,6 +221,15 @@ impl Roads {
             parking: ParkingStorage::new(),
         }
     }
+    pub fn clear(&mut self) {
+        let road_types = take(&mut self.road_manager.road_types);
+        self.road_manager = RoadManager::new();
+        self.road_manager.road_types = road_types;
+        self.road_editor = RoadEditor::new();
+        self.road_commands.clear();
+        self.preview_state = RoadPreviewState::new();
+        self.parking = ParkingStorage::new();
+    }
     /// World-only update: runs the editor, applies commands to road storage and car subsystem.
     /// Returns the commands so the render subsystem can process previews/meshes.
     pub fn update(
@@ -226,11 +238,12 @@ impl Roads {
         cars: &mut Cars,
         city_state: &mut CityState,
         input: &mut Input,
-        _time: &Time,
         settings: &Settings,
         gizmo: &mut Gizmo,
         sounds: &mut Sounds,
         buildings: &mut Buildings,
+        variables: &mut Variables,
+        mod_manager: &ModManager,
     ) {
         self.road_commands = self.road_editor.update(
             &mut self.road_manager,
@@ -239,6 +252,8 @@ impl Roads {
             input,
             gizmo,
             sounds,
+            variables,
+            mod_manager,
         );
         self.preview_state.ingest(self.road_commands.as_slice());
         // Apply preview commands to preview_roads (world-side storage mutation only, no mesh)

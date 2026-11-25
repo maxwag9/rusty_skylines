@@ -1,4 +1,4 @@
-use crate::helpers::positions::WorldPos;
+use rusty_skylines_utils::positions::WorldPos;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::structs::{Aabb, Blas, BvhNode, RTVertex, Tlas, TlasInstance};
 use crate::world::camera::camera::Camera;

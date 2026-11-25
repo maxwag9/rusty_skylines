@@ -1,0 +1,70 @@
+name: directory_list_option
+elements:
+  - !Rect
+    id: Directory List Option Background
+    actions:
+      - 'on:activated, set(str:self.size.y, expr:{ap.2}); set(str:self.size.x, expr:{ap.3})'
+      - 'on:release button:left, if(expr:get(get({{ap.0}_rows}, {ap.1}), 3) > 0, toggle(expr:get(get({{ap.0}_rows}, {ap.1}), 4)))'
+      - 'on:hover_enter, call(rust:play_sound, str:ButtonHover)'
+      - 'on:press, call(rust:play_sound, str:ButtonPress)'
+      - 'call(show_interaction, [[0.02, 0.02, 0.02, 0.95], false])'
+    x: 0
+    y: 0
+    w: 300
+    h: 34
+    color:
+      - 0.02
+      - 0.02
+      - 0.02
+      - 0.95
+    border_color:
+      - 0.1
+      - 0.1
+      - 0.1
+      - 0.7
+    roundness: 0.03
+    border_thickness: 1
+
+  - !Text
+    id: Directory List Option Name
+    actions:
+      - 'on:activated on:screen_resize as:["Directory List Option Background"], set(str:self.center.x, expr:{as.center.x}-{as.size.x}*0.5+10.0); set(str:self.pt, expr:fit_text_pt(({as.size.y}*0.55 < 15.0 ? {as.size.y}*0.55 : 15.0), {as.size.x}*0.70))'
+    x: -140
+    y: 0
+    pt: 15.0
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    text: '{expr:repeat("   ", get(get({{ap.0}_rows}, {ap.1}), 0)) + (get(get({{ap.0}_rows}, {ap.1}), 3) > 1 ? "v " : (get(get({{ap.0}_rows}, {ap.1}), 3) > 0 ? "> " : "- ")) + get(get({{ap.0}_rows}, {ap.1}), 1)}'
+    anchor: CenterLeft
+    decorations:
+      - color: [ 0.0, 0.0, 0.0, 1.0 ]
+        spread: 2.0
+    misc:
+      active: true
+      touchable: false
+      editable: false
+
+  - !Text
+    id: Directory List Option Value
+    actions:
+      - 'on:activated on:screen_resize as:["Directory List Option Background"], set(str:self.center.x, expr:{as.center.x}+{as.size.x}*0.5-10.0); set(str:self.pt, expr:fit_text_pt(({as.size.y}*0.55 < 15.0 ? {as.size.y}*0.55 : 15.0), {as.size.x}*0.20))'
+    x: 140
+    y: 0
+    pt: 15.0
+    color:
+      - 0.75
+      - 0.85
+      - 1.0
+      - 1.0
+    text: '{expr:fix(get(get({{ap.0}_rows}, {ap.1}), 2), 2)} ms'
+    anchor: CenterRight
+    decorations:
+      - color: [ 0.0, 0.0, 0.0, 1.0 ]
+        spread: 2.0
+    misc:
+      active: true
+      touchable: false
+      editable: false

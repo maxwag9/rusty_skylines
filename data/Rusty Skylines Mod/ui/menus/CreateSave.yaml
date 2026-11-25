@@ -348,12 +348,26 @@ layers:
         x: 960
         y: 440
       - !Advanced
+        name: terrain_preset_textbox
+        ap_name: textbox
+        ap_vars:
+          - "str:{lang.create_save.terrain_preset}"
+          - "50"
+          - "Center"
+          - ""
+          - ""
+          - ""
+          - ""
+          - "str:set(str:new_preset, expr:trim({self.text}));"
+        x: 960
+        y: 540
+      - !Advanced
         name: create_the_save_finally_button
         ap_name: button
         ap_vars:
           - "str:{lang.create_save.create_finally}"
           - "40"
-          - "str:on:r call(rust:create_save, [new_save_name, new_difficulty]); set(str:show_world, true); set(str:editor_mode, false); set(str:override_mode, false); load_save(new_save_name, false); call(open_play_menus);"
+          - "str:on:r call(rust:create_save, [new_save_name, new_difficulty, new_preset]); set(str:show_world, true); set(str:editor_mode, false); set(str:override_mode, false); load_save(new_save_name, false); call(open_play_menus);"
         x: 1560
         y: 1010
         scale: 1.0

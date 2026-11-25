@@ -107,7 +107,7 @@ impl Menu {
                             ap_layers.push(layer);
                         }
 
-                        if ap.is_temporary {
+                        if ap.discard_reference {
                             ids_to_remove.push(idx);
                         }
                     }

@@ -6,9 +6,13 @@ layers:
       - !Rect
         id: Menu Background
         actions:
-          - on:startup, set(str:point_size_chat_texts, 20); set(str:text_line_height_chat, expr:{point_size_chat_texts}*1.2); set(str:texts_amount_chat, expr:{self.size.y}/{text_line_height_chat}); forin(texts_amount_chat, set(str:ct_name, expr:"chat_text_"+{idx}); set(str:ca_idx, expr:"chat_array."+{idx}) del_ap(self.menu, self.layer, ct_name); add_ap(self.menu, ct_name, chat_text, ["chat_array", idx, ca_idx], [0.0, self.center.y], 1.0, false); );
-          #- on:startup, forin(40, set(expr:"CHAT."+{idx}, "_..."); );
-          - on:startup on:always, set(str:chat_bottom, expr:{self.center.y}+{self.size.y}*0.5); set(str:chat_top, expr:{self.center.y}-{self.size.y}*0.5); set(str:scaled_point_size_chat_texts, expr:scaled_pt({point_size_chat_texts})); set(str:chat_array, expr:reverse(wrap_text(get_range({CHAT}, -{texts_amount_chat}, -1), {self.size.x}, {scaled_point_size_chat_texts}))); # print(chat_array);
+          - on:startup, set(str:point_size_chat_texts, 20); set(str:text_line_height_chat, expr:{point_size_chat_texts}*1.2); set(str:texts_amount_chat, expr:{self.size.y}/{text_line_height_chat}); forin(texts_amount_chat, set(str:ct_name, expr:"chat_text_"+{idx}); set(str:ca_idx, expr:"chat_array."+{idx}) del_ap(self.menu, self.layer, ct_name); add_ap(self.menu, ct_name, chat_text, ["chat_array", idx, ca_idx], [0.0, self.center.y], 1.0, false); ); set(str:CHAT_OFFSET, 0)
+          - on:startup, forin(texts_amount_chat, set(expr:"CHAT."+{idx}, [" ", 0.0]);); set(expr:"CHAT."+int({texts_amount_chat}), [START_MESSAGE, 0.0]); set(str:CHAT_OPEN, false) #  set(expr:"CHAT."+{idx}, "")  set(expr:"CHAT."+{idx}, expr:"CHAT."+{idx}+"_...");
+          - on:startup on:always, set(str:chat_bottom, expr:{self.center.y}+{self.size.y}*0.5); set(str:chat_top, expr:{self.center.y}-{self.size.y}*0.5); set(str:scaled_point_size_chat_texts, expr:scaled_size({point_size_chat_texts})); set(str:chat_array, expr:reverse(wrap_text_lines(get_range({CHAT}, -{texts_amount_chat}-{CHAT_OFFSET}, -1-{CHAT_OFFSET}), {self.size.x}, {scaled_point_size_chat_texts})));  #printnc(chat_array.0.0);
+          #- clamp(str:CHAT_OFFSET, 0, expr:max(0, len({CHAT})-{texts_amount_chat}*2+2));
+          - on:scroll, inc(str:CHAT_OFFSET, scroll_delta); clamp(str:CHAT_OFFSET, 0, expr:max(0, len({CHAT})-{texts_amount_chat}*2+1));
+          - on:startup, set(str:hide_chat, repvar:scope:a as:[{self.menu}, {self.layer}, {self.id}]\, set(str:as.color.fill.a, 0.0); set(str:CHAT_OPEN, false); set(str:CHAT_JUST_CLOSED, true); set(str:TIME_SINCE_CHAT_CLOSED, total_time); set(str:as.touchable, false););
+            set(str:show_chat, repvar:scope:a as:[{self.menu}, {self.layer}, {self.id}]\, set(str:as.color.fill.a, 0.4); set(str:CHAT_OPEN, true); set(str:as.touchable, true);); call(hide_chat);   #          - if(CHAT_OPEN, set(str:self.active, true))
           # forin(, if(expr:{idx}<{texts_amount_chat}, ))               # print([chat_top, chat_bottom])   # print(chat_array);
         x: 200
         y: 600
@@ -38,7 +42,7 @@ layers:
         glow_misc: { }
         misc:
           active: true
-          touchable: false
+          touchable: true
           editable: true
       - !Advanced
         name: chat_textbox
@@ -47,8 +51,10 @@ layers:
           - "str:Chat..."
           - "40"
           - "Center"
-          - 'str:["button:\"Open Chat\" trigger:r in:any, call(open_chat)", "button:\"Close Chat\" trigger:r in:any, call(close_chat)"]'
-          - 'str:print(expr:trim("<"+{USERNAME}+"> "+{self.text}));'
+          - 'str:["button:\"Open Chat\" trigger:r in:any, call(start_textbox)", "button:\"Close Chat\" trigger:r in:any, call(stop_textbox); call(hide_chat)"]'
+          - "call(show_chat)"
+          - 'str:if(expr:trim({self.text})!="", print(expr:trim("<"+{USERNAME}+"> "+{self.text})); ); call(hide_chat); '
+          - ""
         x: 80
         y: 925
         scale: 1.0

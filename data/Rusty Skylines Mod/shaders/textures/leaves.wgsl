@@ -377,7 +377,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let shadow = final_alpha * params.shadow_strength * 0.15;
                     let shaded = leaf_result.rgb * (1.0 - shadow);
                     final_color = mix(final_color, shaded, leaf_result.a);
-                    final_alpha = final_alpha + leaf_result.a * (1.0 - final_alpha);
+                    final_alpha = 1.0;// final_alpha + leaf_result.a * (1.0 - final_alpha);
                 }
             }
         }
