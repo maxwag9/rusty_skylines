@@ -57,7 +57,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 }
 
 @group(0) @binding(0) var building_sampler : sampler;
-@group(0) @binding(1) var textures : texture_2d_array<f32>;
+@group(0) @binding(1) var textures: binding_array<texture_2d<f32>, 4096>;
 @group(0) @binding(2) var s_shadow: sampler_comparison;
 @group(0) @binding(3) var t_shadow: texture_depth_2d_array;
 
@@ -74,10 +74,9 @@ fn fs_main(input: VertexOutput) -> FragmentOut {
     var out: FragmentOut;
 
     let tex = textureSample(
-        textures,
+        textures[input.material_id],
         building_sampler,
-        input.uv,
-        input.material_id
+        input.uv
     );
 
     let N = normalize(input.world_normal);

@@ -2,6 +2,7 @@ use crate::data::{DebugViewState, Settings, ShadowType};
 use crate::gpu_timestamp;
 use crate::helpers::modpack::ModManager;
 use crate::helpers::paths::next_screenshot_path;
+use crate::mini_renderer::MiniRenderer;
 use crate::renderer::clouds::clouds::CloudSubsystem;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
@@ -31,6 +32,7 @@ use crate::world::camera::exposure::AutoExposure;
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::car_subsystem::{CarRenderSubsystem, Cars};
 use crate::world::props::props::Props;
+use crate::world::props::props_renderer::PropsRenderer;
 use crate::world::roads::road_subsystem::{RoadRenderSubsystem, Roads};
 use crate::world::sound::sound::Sounds;
 use crate::world::terrain::terrain_gen::TerrainGenerator;
@@ -54,16 +56,13 @@ use wgpu_render_manager::compute_system::{BufferSet, ComputePipelineOptions};
 use wgpu_render_manager::fullscreen::{DebugVisualization, DepthDebugParams};
 use wgpu_render_manager::generator::TextureKey;
 use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions, RendererBufferBinding};
-use wgpu_render_manager::renderer::RenderManager;
+use wgpu_render_manager::renderer::{RenderManager, TEXTURE_BINDING_ARRAY_CAPACITY};
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
-use crate::mini_renderer::MiniRenderer;
-use crate::world::props::props_renderer::PropsRenderer;
 
 pub struct Renderer {
     // gpu objects
-
     pub device: Device,
     pub queue: Queue,
     pub config: SurfaceConfiguration,
@@ -84,7 +83,7 @@ pub struct Renderer {
     pub gizmo: Gizmo,
     pub props_renderer: PropsRenderer,
     pub clouds: CloudSubsystem,
-    pub auto_exposure: AutoExposure
+    pub auto_exposure: AutoExposure,
 }
 
 impl Renderer {
@@ -96,7 +95,7 @@ impl Renderer {
         size: PhysicalSize<f32>,
         camera: &Camera,
         mod_manager: &ModManager,
-        gpu_timestamps_enabled: bool
+        gpu_timestamps_enabled: bool,
     ) -> Self {
         let shader_watcher = ShaderWatcher::new(mod_manager.shader_paths())
             .ok()
@@ -160,11 +159,8 @@ impl Renderer {
         self.road_renderer = RoadRenderSubsystem::new(&self.device);
         self.building_renderer = BuildingRenderer::new(&self.device);
         self.props_renderer = PropsRenderer::new();
-        self.car_renderer = CarRenderSubsystem::new(
-            &self.device,
-            &self.queue,
-            &mut self.rt_subsystem,
-        );
+        self.car_renderer =
+            CarRenderSubsystem::new(&self.device, &self.queue, &mut self.rt_subsystem);
         self.clouds.invalidate_history();
     }
     pub fn resize(&mut self, surface: &Surface, new_size: PhysicalSize<u32>, ui: &mut Ui) {
@@ -258,7 +254,10 @@ impl Renderer {
 
         timer.checkpoint(["Render Preview", "Preparation", "Renderer State"], true);
 
-        timer.checkpoint(["Render Preview", "Preparation", "Props Geometry Init"], false);
+        timer.checkpoint(
+            ["Render Preview", "Preparation", "Props Geometry Init"],
+            false,
+        );
 
         self.props_renderer.initialize_gpu_geometry(
             &world.props,
@@ -267,7 +266,10 @@ impl Renderer {
             &mut self.render_manager,
         );
 
-        timer.checkpoint(["Render Preview", "Preparation", "Props Geometry Init"], true);
+        timer.checkpoint(
+            ["Render Preview", "Preparation", "Props Geometry Init"],
+            true,
+        );
 
         timer.checkpoint(["Render Preview", "Preparation", "Terrain Update"], false);
 
@@ -286,7 +288,10 @@ impl Renderer {
 
         timer.checkpoint(["Render Preview", "Preparation", "Terrain Update"], true);
 
-        timer.checkpoint(["Render Preview", "Preparation", "Road Renderer Update"], false);
+        timer.checkpoint(
+            ["Render Preview", "Preparation", "Road Renderer Update"],
+            false,
+        );
 
         self.road_renderer.update(
             &mut world.terrain,
@@ -297,9 +302,15 @@ impl Renderer {
             &mut self.gizmo,
         );
 
-        timer.checkpoint(["Render Preview", "Preparation", "Road Renderer Update"], true);
+        timer.checkpoint(
+            ["Render Preview", "Preparation", "Road Renderer Update"],
+            true,
+        );
 
-        timer.checkpoint(["Render Preview", "Preparation", "Building Renderer Update"], false);
+        timer.checkpoint(
+            ["Render Preview", "Preparation", "Building Renderer Update"],
+            false,
+        );
 
         self.building_renderer.update(
             &mut self.render_manager,
@@ -315,9 +326,15 @@ impl Renderer {
             &mut self.gizmo,
         );
 
-        timer.checkpoint(["Render Preview", "Preparation", "Building Renderer Update"], true);
+        timer.checkpoint(
+            ["Render Preview", "Preparation", "Building Renderer Update"],
+            true,
+        );
 
-        timer.checkpoint(["Render Preview", "Preparation", "Props Instance Upload"], false);
+        timer.checkpoint(
+            ["Render Preview", "Preparation", "Props Instance Upload"],
+            false,
+        );
 
         self.props_renderer.upload_instances(
             &mut world.props,
@@ -329,7 +346,10 @@ impl Renderer {
             mod_manager,
         );
 
-        timer.checkpoint(["Render Preview", "Preparation", "Props Instance Upload"], true);
+        timer.checkpoint(
+            ["Render Preview", "Preparation", "Props Instance Upload"],
+            true,
+        );
     }
     pub fn render_preview(
         &mut self,
@@ -360,11 +380,11 @@ impl Renderer {
         self.prepare_preview_render(world, settings, aspect, mod_manager, timer);
         timer.checkpoint(["Render Preview", "Preparation"], true);
 
-        let mut encoder = self.device.create_command_encoder(
-            &CommandEncoderDescriptor {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("Mini Render Encoder"),
-            },
-        );
+            });
 
         let render_config = RenderPassConfig::from_settings(settings);
         let camera = &world.world_state.camera;
@@ -425,7 +445,10 @@ impl Renderer {
         mod_manager: &ModManager,
         mini_renderer: Option<&mut MiniRenderer>,
     ) {
-        world.time.timer.checkpoint(["Render", "Everything but Acquire Frame"], false);
+        world
+            .time
+            .timer
+            .checkpoint(["Render", "Everything but Acquire Frame"], false);
         if settings.render_debug_print {
             println!("[render] start");
         }
@@ -435,7 +458,8 @@ impl Renderer {
 
         let time = &mut world.time;
 
-        time.timer.checkpoint(["Render", "Update Render", "Update Render"], false);
+        time.timer
+            .checkpoint(["Render", "Update Render", "Update Render"], false);
         time.timer.checkpoint("UI Render Update", false);
         self.ui_renderer.update(
             ui,
@@ -447,13 +471,19 @@ impl Renderer {
             settings,
             mod_manager,
         );
-        time.timer.checkpoint(["Render", "Update Render", "UI Render Update"], true);
+        time.timer
+            .checkpoint(["Render", "Update Render", "UI Render Update"], true);
         time.timer.checkpoint(["Render", "Update Render"], true);
 
-
-        world.time.timer.checkpoint(["Render", "Update Render"], false);
+        world
+            .time
+            .timer
+            .checkpoint(["Render", "Update Render"], false);
         self.update_render(world, ui, settings, aspect, screen_size, mod_manager);
-        world.time.timer.checkpoint(["Render", "Update Render"], true);
+        world
+            .time
+            .timer
+            .checkpoint(["Render", "Update Render"], true);
         if settings.render_debug_print {
             print!(" [render] after update_render");
         }
@@ -461,13 +491,17 @@ impl Renderer {
 
         time.frame_checkpoint(FrameTimeCheckpointType::BeforeAcquireFrame);
 
-        time.timer.checkpoint(["Render", "Everything but Acquire Frame"], true);
-        time.timer.checkpoint(["Render", "Wrapper", "Acquire Frame"], false);
+        time.timer
+            .checkpoint(["Render", "Everything but Acquire Frame"], true);
+        time.timer
+            .checkpoint(["Render", "Wrapper", "Acquire Frame"], false);
         let Some(frame) = acquire_frame(&surface, &self.device, &self.config) else {
             return;
         };
-        time.timer.checkpoint(["Render", "Wrapper", "Acquire Frame"], true);
-        time.timer.checkpoint(["Render", "Everything but Acquire Frame"], false);
+        time.timer
+            .checkpoint(["Render", "Wrapper", "Acquire Frame"], true);
+        time.timer
+            .checkpoint(["Render", "Everything but Acquire Frame"], false);
         time.frame_checkpoint(FrameTimeCheckpointType::AfterAcquireFrame);
         if settings.render_debug_print {
             print!("[render] acquired frame");
@@ -513,7 +547,7 @@ impl Renderer {
                 &world.cars.car_storage(),
                 settings,
                 mod_manager,
-                mini_renderer
+                mini_renderer,
             );
         });
 
@@ -534,7 +568,8 @@ impl Renderer {
         self.profiler
             .end_frame(&self.device, &self.queue, &mut ui.variables);
 
-        time.timer.checkpoint(["Render", "Everything but Acquire Frame"], true);
+        time.timer
+            .checkpoint(["Render", "Everything but Acquire Frame"], true);
     }
 
     pub fn update_render(
@@ -678,7 +713,8 @@ impl Renderer {
         let target_pos_render = eye.to_relative_pos(WorldPos::zero());
         ui.variables.set_i64("target_pos_cx", camera.target.chunk.x);
         ui.variables.set_i64("target_pos_cz", camera.target.chunk.z);
-        ui.variables.set_array("target_pos", target_pos_render.to_array());
+        ui.variables
+            .set_array("target_pos", target_pos_render.to_array());
 
         buildings.update(
             camera,
@@ -749,7 +785,15 @@ impl Renderer {
             false,
         );
         //time.timer.checkpoint("Props Upload", false);
-        self.props_renderer.upload_instances(props, &self.device, &self.queue, camera, terrain, &mut self.render_manager, mod_manager);
+        self.props_renderer.upload_instances(
+            props,
+            &self.device,
+            &self.queue,
+            camera,
+            terrain,
+            &mut self.render_manager,
+            mod_manager,
+        );
         //time.timer.checkpoint("Props Upload", true);
     }
 
@@ -895,7 +939,8 @@ impl Renderer {
             time.timer.checkpoint(["Render", "Pass", "GTAO"], true);
         });
         gpu_timestamp!(encoder, &mut self.profiler, "Cloud_Upsample_Composite", {
-            time.timer.checkpoint(["Render", "Pass", "Cloud Upsample"], false);
+            time.timer
+                .checkpoint(["Render", "Pass", "Cloud Upsample"], false);
             if settings.show_world && self.clouds.settings.enabled {
                 render_cloud_composite_depth_aware(
                     encoder,
@@ -959,9 +1004,18 @@ impl Renderer {
             time.timer.checkpoint(["Render", "Pass", "Gizmo"], true);
         });
 
-        time.timer.checkpoint(["Render", "Pass", "UI Render"], false);
+        time.timer
+            .checkpoint(["Render", "Pass", "UI Render"], false);
         gpu_timestamp!(encoder, &mut self.profiler, "UI", {
-            self.execute_ui_pass(encoder, ui, time, input, settings, mod_manager, mini_renderer);
+            self.execute_ui_pass(
+                encoder,
+                ui,
+                time,
+                input,
+                settings,
+                mod_manager,
+                mini_renderer,
+            );
         });
         time.timer.checkpoint(["Render", "Pass", "UI Render"], true);
 
@@ -1538,7 +1592,7 @@ impl Renderer {
             ui_loader,
             &self.pipelines,
             settings,
-            mini_renderer
+            mini_renderer,
         );
     }
 
@@ -2015,6 +2069,11 @@ pub fn create_device(adapter: &Adapter) -> ((Device, Queue), bool) {
             Features::TEXTURE_BINDING_ARRAY,
             "Dynamically indexed arrays of individual texture bindings. Allows stuff like Buildings to use a ton of textures with different resolutions and compression types instead of one resolution and one compression type",
         ),
+        (
+            "SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING",
+            Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING,
+            "TLDR: Makes all shaders be able to actually use the texture they need. More slop: Non-uniform indexing of texture and storage buffer binding arrays. Allows different shader invocations to independently select different array entries, enabling per-object and per-material resource selection within the same draw call.",
+        ),
     ];
 
     let timestamp_feature_requirements = [
@@ -2042,25 +2101,22 @@ pub fn create_device(adapter: &Adapter) -> ((Device, Queue), bool) {
     let missing_features = feature_requirements
         .iter()
         .filter(|(_, feature, _)| !supported_features.contains(*feature))
-        .map(|(name, _, description)| {
-            format!("  - {name}: {description}")
-        })
+        .map(|(name, _, description)| format!("  - {name}: {description}"))
         .collect::<Vec<_>>();
 
     //let missing_timestamp_features = vec!["  - TIMESTAMP_QUERY_INSIDE_ENCODERS: Writing GPU timestamps directly inside command encoders. That means being able to know how long the GPU needs for each part of rendering. Apple Silicon basically doesn't support this.".to_string()];
     let missing_timestamp_features = timestamp_feature_requirements
         .iter()
         .filter(|(_, feature, _)| !supported_features.contains(*feature))
-        .map(|(name, _, description)| {
-            format!("  - {name}: {description}")
-        })
+        .map(|(name, _, description)| format!("  - {name}: {description}"))
         .collect::<Vec<_>>();
 
     let gpu_timestamps_enabled = missing_timestamp_features.is_empty();
 
     let timestamp_diagnostic = if gpu_timestamps_enabled {
         "\nGPU FRAMETIME PROFILING: ENABLED\n\
-             All required timestamp features are available.\n".to_string()
+             All required timestamp features are available.\n"
+            .to_string()
     } else {
         format!(
             "\n\
@@ -2135,22 +2191,33 @@ pub fn create_device(adapter: &Adapter) -> ((Device, Queue), bool) {
     }
 
     if gpu_timestamps_enabled {
-        required_features |=
-            Features::TIMESTAMP_QUERY | Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+        required_features |= Features::TIMESTAMP_QUERY | Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
     } else {
         tracing::warn!("{}", timestamp_diagnostic);
     }
+    let adapter_limits = adapter.limits();
 
-    (pollster::block_on(adapter.request_device(&DeviceDescriptor {
-        label: Some("Rusty Skylines GPU Device"),
-        required_features,
-        required_limits: Limits::default(),
-        experimental_features: ExperimentalFeatures::disabled(),
-        memory_hints: MemoryHints::default(),
-        trace: Trace::Off,
-    })).unwrap_or_else(|error| {
-        panic!(
-            "\n\
+    assert!(
+        adapter_limits.max_binding_array_elements_per_shader_stage
+            >= TEXTURE_BINDING_ARRAY_CAPACITY,
+        "GPU does not support the requested texture binding array capacity"
+    );
+
+    let mut required_limits = Limits::default();
+
+    required_limits.max_binding_array_elements_per_shader_stage = TEXTURE_BINDING_ARRAY_CAPACITY;
+    (
+        pollster::block_on(adapter.request_device(&DeviceDescriptor {
+            label: Some("Rusty Skylines GPU Device"),
+            required_features,
+            required_limits,
+            experimental_features: ExperimentalFeatures::disabled(),
+            memory_hints: MemoryHints::default(),
+            trace: Trace::Off,
+        }))
+        .unwrap_or_else(|error| {
+            panic!(
+                "\n\
             RUSTY SKYLINES: GPU DEVICE CREATION FAILED :: Everything is FUCKED!!
             All required GPU features were reported as supported,\n\
             but wgpu failed to create the logical device.\n\
@@ -2164,13 +2231,11 @@ pub fn create_device(adapter: &Adapter) -> ((Device, Queue), bool) {
             WGPU ERROR:\n\
               {}\n\
               ",
-            info.name,
-            info.device_type,
-            info.backend,
-            info.driver,
-            error,
-        )
-    }), gpu_timestamps_enabled)
+                info.name, info.device_type, info.backend, info.driver, error,
+            )
+        }),
+        gpu_timestamps_enabled,
+    )
 }
 
 fn pick_present_mode(surface: &Surface, adapter: &Adapter, user_mode: PresentMode) -> PresentMode {

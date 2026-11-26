@@ -1,6 +1,8 @@
 use crate::helpers::modpack::ModManager;
 use crate::renderer::gizmo::gizmo::Gizmo;
-use crate::renderer::textures::material_keys::{terrain_material_keys, OPAQUE_TEXTURE_COMPRESSION_MODE, ALPHA_TEXTURE_COMPRESSION_MODE};
+use crate::renderer::textures::material_keys::{
+    ALPHA_TEXTURE_COMPRESSION_MODE, OPAQUE_TEXTURE_COMPRESSION_MODE, terrain_material_keys,
+};
 use crate::world::buildings::buildings::{BuildingId, Buildings, MiscBuildingParams, RoofType};
 use crate::world::buildings::zoning::{Lot, LotEntrance, LotId, Tile, TilePos, TileType, Zoning};
 use crate::world::cars::parking::ParkingStorage;
@@ -131,7 +133,7 @@ impl BuildingMeshManager {
                 .with_roughness(0.4),
             512,
             MipmapMode::Generate,
-            OPAQUE_TEXTURE_COMPRESSION_MODE
+            OPAQUE_TEXTURE_COMPRESSION_MODE,
         );
         let roof_key = level.roof_material.texture_key(mod_manager);
         let window_key = level
@@ -141,14 +143,12 @@ impl BuildingMeshManager {
         let driveway_key = level.driveway_material.texture_key(mod_manager);
 
         let mut grass_key = terrain_material_keys(mod_manager).remove(0);
-        grass_key.resolution = 512;
         grass_key.params.scale = 20.0;
 
         let mut garden_key = grass_key.clone();
         garden_key.params.color_primary[1] *= 1.2;
 
-        let mut notex_key = TextureKey::notex();
-        notex_key.resolution = 512;
+        let notex_key = TextureKey::notex();
 
         let mat_ids = render_manager.ensure_textures(&[
             wall_key,
@@ -678,7 +678,7 @@ impl TexturedMaterial for WallMaterial {
                         .with_secondary_color([0.0, 0.0, 0.0, 1.0]),
                     512,
                     MipmapMode::Generate,
-                    OPAQUE_TEXTURE_COMPRESSION_MODE
+                    OPAQUE_TEXTURE_COMPRESSION_MODE,
                 )
             }
             WallMaterial::Stucco(color) => {
@@ -694,7 +694,7 @@ impl TexturedMaterial for WallMaterial {
                         .with_scale(2.0),
                     512,
                     MipmapMode::Generate,
-                    OPAQUE_TEXTURE_COMPRESSION_MODE
+                    OPAQUE_TEXTURE_COMPRESSION_MODE,
                 )
             }
             WallMaterial::WoodSiding(color) => {
@@ -710,7 +710,7 @@ impl TexturedMaterial for WallMaterial {
                         .with_scale(1.5),
                     512,
                     MipmapMode::Generate,
-                    OPAQUE_TEXTURE_COMPRESSION_MODE
+                    OPAQUE_TEXTURE_COMPRESSION_MODE,
                 )
             }
             WallMaterial::Glass(color) => {
@@ -725,7 +725,7 @@ impl TexturedMaterial for WallMaterial {
                         .with_roughness(0.05),
                     512,
                     MipmapMode::Generate,
-                    ALPHA_TEXTURE_COMPRESSION_MODE
+                    ALPHA_TEXTURE_COMPRESSION_MODE,
                 )
             }
             WallMaterial::Custom(key) => key.clone(),
@@ -746,7 +746,7 @@ impl TexturedMaterial for RoofMaterial {
                     TextureParams::default().with_primary_color([0.4, 0.15, 0.05, 1.0]),
                     512,
                     MipmapMode::Generate,
-                    OPAQUE_TEXTURE_COMPRESSION_MODE
+                    OPAQUE_TEXTURE_COMPRESSION_MODE,
                 )
             }
             RoofMaterial::Metal => {
@@ -759,7 +759,7 @@ impl TexturedMaterial for RoofMaterial {
                     TextureParams::default().with_primary_color([0.2, 0.2, 0.2, 1.0]),
                     512,
                     MipmapMode::Generate,
-                    OPAQUE_TEXTURE_COMPRESSION_MODE
+                    OPAQUE_TEXTURE_COMPRESSION_MODE,
                 )
             }
             RoofMaterial::Tile => {
@@ -774,7 +774,7 @@ impl TexturedMaterial for RoofMaterial {
                         .with_scale(1.2),
                     512,
                     MipmapMode::Generate,
-                    OPAQUE_TEXTURE_COMPRESSION_MODE
+                    OPAQUE_TEXTURE_COMPRESSION_MODE,
                 )
             }
             RoofMaterial::Slate => {
@@ -789,7 +789,7 @@ impl TexturedMaterial for RoofMaterial {
                         .with_roughness(0.3),
                     512,
                     MipmapMode::Generate,
-                    OPAQUE_TEXTURE_COMPRESSION_MODE
+                    OPAQUE_TEXTURE_COMPRESSION_MODE,
                 )
             }
             RoofMaterial::Custom(key) => key.clone(),
@@ -814,7 +814,7 @@ impl TexturedMaterial for DrivewayMaterial {
                         .with_scale(5.0),
                     512,
                     MipmapMode::Generate,
-                    OPAQUE_TEXTURE_COMPRESSION_MODE
+                    OPAQUE_TEXTURE_COMPRESSION_MODE,
                 )
             }
             DrivewayMaterial::Concrete => {
@@ -830,7 +830,7 @@ impl TexturedMaterial for DrivewayMaterial {
                         .with_scale(3.0),
                     512,
                     MipmapMode::Generate,
-                    OPAQUE_TEXTURE_COMPRESSION_MODE
+                    OPAQUE_TEXTURE_COMPRESSION_MODE,
                 )
             }
             DrivewayMaterial::Gravel => {
@@ -846,7 +846,7 @@ impl TexturedMaterial for DrivewayMaterial {
                         .with_scale(8.0),
                     512,
                     MipmapMode::Generate,
-                    OPAQUE_TEXTURE_COMPRESSION_MODE
+                    OPAQUE_TEXTURE_COMPRESSION_MODE,
                 )
             }
             DrivewayMaterial::Custom(key) => key.clone(),

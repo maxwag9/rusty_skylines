@@ -29,7 +29,7 @@ layers:
         resize_behaviour:
           width: uniform
         color: [ 1.0, 1.0, 1.0, 1.0 ]
-        text: 'FPS: {expr:{fps}:.1} | Frame: {expr:({render_dt} * 1000):.2}ms | {expr:{fps} > 60 ? "Smooth" : "Laggy"}'
+        text: 'FPS: {expr:{fps}:.1} | Frame: {expr:({render_dt} * 1000):.2}ms | {expr:{fps} > 60 ? "Smooth" : "Laggy"} | {screen.x}x{screen.y}, {expr:comma({screen.x}*{screen.y}, 0)} Pixels'
         anchor: TopLeft
         decorations:
           - color: [ 0.0, 0.0, 0.0, 1.0 ]
